@@ -243,6 +243,31 @@ class RedTeamingOrchestrator(Orchestrator):
                 score = scores[0]
                 print(f"{Style.RESET_ALL}score: {score} : {score.score_rationale}")
 
+    ###     Added       ###
+
+    def get_success(self) -> str | None:
+        '''
+        Retrieves the successful prompt for a true_false score.
+        '''
+
+        success: str = ""
+
+        red_teaming_chat_messages = self._memory.get_chat_messages_with_conversation_id(
+            conversation_id=self._red_teaming_chat_conversation_id
+        )
+
+        for message in red_teaming_chat_messages:
+            scores = self._memory.get_scores_by_prompt_ids(prompt_request_response_ids=[message.id])
+            for score in scores:
+                if score.get_value():
+                    print(message)
+                    success = "TEST"
+
+
+        return success
+
+    ###                 ###
+
     def _handle_text_response(self, last_response_from_attack_target, feedback) -> str:
         # If the attack target responds with text we can use that as the new prompt
         # unless the response is an error (which may include blocked image requests, for example).
