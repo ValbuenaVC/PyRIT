@@ -35,20 +35,14 @@ def make_request_and_raise_if_error(
     request_body = request_body or {}
 
     with get_httpx_client(debug=debug) as client:
-        # TODO: Use a match statement or something like that to simplify this
-        if request_body:
-            if params:
-                if post_type == "json":
-                    response = client.request(method=method, params=params, url=endpoint_uri, json=request_body, headers=headers)
-                else:
-                    response = client.request(method=method, params=params, url=endpoint_uri, data=request_body, headers=headers)
-            else:
-                if post_type == "json":
-                    response = client.request(method=method, url=endpoint_uri, json=request_body, headers=headers)
-                else:
-                    response = client.request(method=method, url=endpoint_uri, data=request_body, headers=headers)
-        else:
-            response = client.request(method=method, url=endpoint_uri, headers=headers)
+
+        response = client.request(
+            method=method if method else None,
+            params=params if params else None,
+            url=endpoint_uri if endpoint_uri else None,
+            json=request_body if request_body else None,
+            headers=headers if headers else None
+        )
 
         response.raise_for_status()  # This will automatically raise an exception for 4xx and 5xx responses
 
