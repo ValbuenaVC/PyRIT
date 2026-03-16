@@ -7,11 +7,8 @@ Tests for metadata components related to SeedDatasetProvider.
 
 from pyrit.datasets.seed_datasets.seed_metadata import (
     SeedDatasetFilter,
-    SeedDatasetLoadingRank,
+    SeedDatasetLoadTime,
     SeedDatasetMetadata,
-    SeedDatasetModality,
-    SeedDatasetSize,
-    SeedDatasetSourceType,
 )
 
 
@@ -27,32 +24,32 @@ class TestMetadataLifecycle:
         assert metadata.size is None
         assert metadata.modalities is None
         assert metadata.source_type is None
-        assert metadata.rank == SeedDatasetLoadingRank.UNKNOWN
+        assert metadata.load_time == SeedDatasetLoadTime.UNINITIALIZED
         assert metadata.harm_categories is None
 
     def test_has_some_values(self):
-        metadata = SeedDatasetMetadata(tags={"safety"}, size=SeedDatasetSize.LARGE)
+        metadata = SeedDatasetMetadata(tags={"safety"}, size="large")
         assert metadata.tags == {"safety"}
-        assert metadata.size == SeedDatasetSize.LARGE
+        assert metadata.size == "large"
         assert metadata.modalities is None
         assert metadata.source_type is None
-        assert metadata.rank == SeedDatasetLoadingRank.UNKNOWN
+        assert metadata.load_time == SeedDatasetLoadTime.UNINITIALIZED
         assert metadata.harm_categories is None
 
     def test_has_all_values(self):
         metadata = SeedDatasetMetadata(
             tags={"default", "safety"},
-            size=SeedDatasetSize.MEDIUM,
-            modalities=[SeedDatasetModality.TEXT, SeedDatasetModality.IMAGE],
-            source_type=SeedDatasetSourceType.REMOTE,
-            rank=SeedDatasetLoadingRank.DEFAULT,
+            size="medium",
+            modalities=["text", "image"],
+            source_type="remote",
+            load_time=SeedDatasetLoadTime.FAST,
             harm_categories=["violence", "illegal"],
         )
         assert metadata.tags == {"default", "safety"}
-        assert metadata.size == SeedDatasetSize.MEDIUM
+        assert metadata.size == "medium"
         assert len(metadata.modalities) == 2
-        assert metadata.source_type == SeedDatasetSourceType.REMOTE
-        assert metadata.rank == SeedDatasetLoadingRank.DEFAULT
+        assert metadata.source_type == "remote"
+        assert metadata.load_time == SeedDatasetLoadTime.FAST
         assert metadata.harm_categories == ["violence", "illegal"]
 
 
@@ -68,29 +65,29 @@ class TestFilterLifecycle:
         assert f.sizes is None
         assert f.modalities is None
         assert f.source_types is None
-        assert f.ranks is None
+        assert f.load_times is None
         assert f.harm_categories is None
 
     def test_has_some_values(self):
-        f = SeedDatasetFilter(sizes=[SeedDatasetSize.LARGE])
-        assert f.sizes == [SeedDatasetSize.LARGE]
+        f = SeedDatasetFilter(sizes=["large"])
+        assert f.sizes == ["large"]
         assert f.tags is None
         assert f.modalities is None
 
     def test_has_all_values(self):
         f = SeedDatasetFilter(
             tags={"default"},
-            sizes=[SeedDatasetSize.SMALL, SeedDatasetSize.MEDIUM],
-            modalities=[SeedDatasetModality.TEXT],
-            source_types=[SeedDatasetSourceType.REMOTE],
-            ranks=[SeedDatasetLoadingRank.DEFAULT],
+            sizes=["small", "medium"],
+            modalities=["text"],
+            source_types=["remote"],
+            load_times=[SeedDatasetLoadTime.FAST],
             harm_categories=["violence"],
         )
         assert f.tags == {"default"}
         assert len(f.sizes) == 2
-        assert f.modalities == [SeedDatasetModality.TEXT]
-        assert f.source_types == [SeedDatasetSourceType.REMOTE]
-        assert f.ranks == [SeedDatasetLoadingRank.DEFAULT]
+        assert f.modalities == ["text"]
+        assert f.source_types == ["remote"]
+        assert f.load_times == [SeedDatasetLoadTime.FAST]
         assert f.harm_categories == ["violence"]
 
 
@@ -100,22 +97,22 @@ class TestMetadataProperties:
     """
 
     def test_size_value(self):
-        for size in SeedDatasetSize:
+        for size in ["tiny", "small", "medium", "large", "huge"]:
             metadata = SeedDatasetMetadata(size=size)
             assert metadata.size == size
 
-    def test_loading_rank_value(self):
-        for rank in SeedDatasetLoadingRank:
-            metadata = SeedDatasetMetadata(rank=rank)
-            assert metadata.rank == rank
+    def test_load_time_value(self):
+        for lt in SeedDatasetLoadTime:
+            metadata = SeedDatasetMetadata(load_time=lt)
+            assert metadata.load_time == lt
 
     def test_source_value(self):
-        for source_type in SeedDatasetSourceType:
+        for source_type in ["remote", "local"]:
             metadata = SeedDatasetMetadata(source_type=source_type)
             assert metadata.source_type == source_type
 
     def test_modality_value(self):
-        for modality in SeedDatasetModality:
+        for modality in ["text", "image", "video", "audio"]:
             metadata = SeedDatasetMetadata(modalities=[modality])
             assert modality in metadata.modalities
 
@@ -137,24 +134,24 @@ class TestFilterProperties:
     """
 
     def test_sizes_values(self):
-        f = SeedDatasetFilter(sizes=[SeedDatasetSize.SMALL, SeedDatasetSize.LARGE])
-        assert SeedDatasetSize.SMALL in f.sizes
-        assert SeedDatasetSize.LARGE in f.sizes
+        f = SeedDatasetFilter(sizes=["small", "large"])
+        assert "small" in f.sizes
+        assert "large" in f.sizes
 
-    def test_loading_ranks_values(self):
-        f = SeedDatasetFilter(ranks=[SeedDatasetLoadingRank.DEFAULT, SeedDatasetLoadingRank.TERTIARY])
-        assert SeedDatasetLoadingRank.DEFAULT in f.ranks
-        assert SeedDatasetLoadingRank.TERTIARY in f.ranks
+    def test_load_times_values(self):
+        f = SeedDatasetFilter(load_times=[SeedDatasetLoadTime.FAST, SeedDatasetLoadTime.SLOW])
+        assert SeedDatasetLoadTime.FAST in f.load_times
+        assert SeedDatasetLoadTime.SLOW in f.load_times
 
     def test_sources_values(self):
-        f = SeedDatasetFilter(source_types=[SeedDatasetSourceType.LOCAL, SeedDatasetSourceType.REMOTE])
-        assert SeedDatasetSourceType.LOCAL in f.source_types
-        assert SeedDatasetSourceType.REMOTE in f.source_types
+        f = SeedDatasetFilter(source_types=["local", "remote"])
+        assert "local" in f.source_types
+        assert "remote" in f.source_types
 
     def test_modalities_values(self):
-        f = SeedDatasetFilter(modalities=[SeedDatasetModality.TEXT, SeedDatasetModality.IMAGE])
-        assert SeedDatasetModality.TEXT in f.modalities
-        assert SeedDatasetModality.IMAGE in f.modalities
+        f = SeedDatasetFilter(modalities=["text", "image"])
+        assert "text" in f.modalities
+        assert "image" in f.modalities
 
     def test_tags_values(self):
         f = SeedDatasetFilter(tags={"safety", "default"})

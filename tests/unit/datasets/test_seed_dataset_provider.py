@@ -15,11 +15,8 @@ from pyrit.datasets.seed_datasets.remote.darkbench_dataset import _DarkBenchData
 from pyrit.datasets.seed_datasets.remote.harmbench_dataset import _HarmBenchDataset
 from pyrit.datasets.seed_datasets.seed_metadata import (
     SeedDatasetFilter,
-    SeedDatasetLoadingRank,
+    SeedDatasetLoadTime,
     SeedDatasetMetadata,
-    SeedDatasetModality,
-    SeedDatasetSize,
-    SeedDatasetSourceType,
 )
 from pyrit.models import SeedDataset, SeedObjective, SeedPrompt
 
@@ -260,13 +257,13 @@ class TestMetadataParsingRemote:
         metadata = loader._parse_metadata()
         assert metadata is not None
         assert metadata.tags == {"default", "safety"}
-        assert metadata.size == SeedDatasetSize.LARGE
-        assert metadata.modalities == [SeedDatasetModality.TEXT]
+        assert metadata.size == "large"
+        assert metadata.modalities == ["text"]
         assert metadata.harm_categories == ["cybercrime", "illegal", "harmful", "chemical_biological", "harassment"]
         # source_type is not declared as a class attribute on HarmBench;
-        # rank inherits the UNKNOWN default from SeedDatasetProvider base class
+        # load_time inherits the UNINITIALIZED default from SeedDatasetProvider base class
         assert metadata.source_type is None
-        assert metadata.rank == SeedDatasetLoadingRank.UNKNOWN
+        assert metadata.load_time == SeedDatasetLoadTime.UNINITIALIZED
 
     def test_all_tag(self):
         """Filter with tags={'all'} matches any metadata."""
@@ -282,50 +279,50 @@ class TestMetadataParsingRemote:
 
     def test_sizes(self):
         """Size filter checks membership in the sizes list."""
-        metadata = SeedDatasetMetadata(size=SeedDatasetSize.LARGE)
+        metadata = SeedDatasetMetadata(size="large")
         assert SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(sizes=[SeedDatasetSize.LARGE, SeedDatasetSize.HUGE]),
+            filters=SeedDatasetFilter(sizes=["large", "huge"]),
         )
         assert not SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(sizes=[SeedDatasetSize.SMALL]),
+            filters=SeedDatasetFilter(sizes=["small"]),
         )
 
     def test_modalities(self):
         """Modality filter uses set intersection."""
-        metadata = SeedDatasetMetadata(modalities=[SeedDatasetModality.TEXT, SeedDatasetModality.IMAGE])
+        metadata = SeedDatasetMetadata(modalities=["text", "image"])
         assert SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(modalities=[SeedDatasetModality.TEXT]),
+            filters=SeedDatasetFilter(modalities=["text"]),
         )
         assert not SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(modalities=[SeedDatasetModality.AUDIO]),
+            filters=SeedDatasetFilter(modalities=["audio"]),
         )
 
     def test_sources(self):
         """Source filter checks membership."""
-        metadata = SeedDatasetMetadata(source_type=SeedDatasetSourceType.REMOTE)
+        metadata = SeedDatasetMetadata(source_type="remote")
         assert SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(source_types=[SeedDatasetSourceType.REMOTE]),
+            filters=SeedDatasetFilter(source_types=["remote"]),
         )
         assert not SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(source_types=[SeedDatasetSourceType.LOCAL]),
+            filters=SeedDatasetFilter(source_types=["local"]),
         )
 
     def test_ranks(self):
-        """Rank filter checks membership."""
-        metadata = SeedDatasetMetadata(rank=SeedDatasetLoadingRank.DEFAULT)
+        """Load time filter checks membership."""
+        metadata = SeedDatasetMetadata(load_time=SeedDatasetLoadTime.FAST)
         assert SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(ranks=[SeedDatasetLoadingRank.DEFAULT]),
+            filters=SeedDatasetFilter(load_times=[SeedDatasetLoadTime.FAST]),
         )
         assert not SeedDatasetProvider._match_filter(
             metadata=metadata,
-            filters=SeedDatasetFilter(ranks=[SeedDatasetLoadingRank.TERTIARY]),
+            filters=SeedDatasetFilter(load_times=[SeedDatasetLoadTime.SLOW]),
         )
 
     def test_harm_categories(self):
@@ -342,7 +339,7 @@ class TestMetadataParsingRemote:
 
     def test_empty_filter(self):
         """Empty filter (all None) matches any metadata."""
-        metadata = SeedDatasetMetadata(tags={"safety"}, size=SeedDatasetSize.LARGE)
+        metadata = SeedDatasetMetadata(tags={"safety"}, size="large")
         filters = SeedDatasetFilter()
         assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
 
@@ -452,7 +449,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(sizes=[SeedDatasetSize.LARGE])
+        filters = SeedDatasetFilter(sizes=["large"])
         assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
 
     def test_modalities(self, tmp_path):
@@ -472,7 +469,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(modalities=[SeedDatasetModality.TEXT])
+        filters = SeedDatasetFilter(modalities=["text"])
         assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
 
     def test_sources(self, tmp_path):
@@ -491,17 +488,17 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(source_types=[SeedDatasetSourceType.REMOTE])
+        filters = SeedDatasetFilter(source_types=["remote"])
         assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
 
     def test_ranks(self, tmp_path):
-        """YAML produces rank as string; _match_filter compares against enum values."""
+        """YAML produces load_time as string; _match_filter compares against enum values."""
         yaml_path = self._write_yaml(
             tmp_path,
             "test",
             textwrap.dedent("""\
                 dataset_name: test
-                rank: default
+                load_time: fast
                 seeds:
                   - value: test prompt
                     data_type: text
@@ -510,7 +507,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(ranks=[SeedDatasetLoadingRank.DEFAULT])
+        filters = SeedDatasetFilter(load_times=[SeedDatasetLoadTime.FAST])
         assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
 
     def test_harm_categories(self, tmp_path):
@@ -633,10 +630,10 @@ class TestLocalDatasetMetadataCollisions:
         # Verify coerced types match expectations
         expected_types = {
             "tags": (set, type(None)),
-            "size": (SeedDatasetSize, type(None)),
+            "size": (str, type(None)),
             "modalities": (list, type(None)),
-            "source_type": (SeedDatasetSourceType, type(None)),
-            "rank": (SeedDatasetLoadingRank, type(None)),
+            "source_type": (str, type(None)),
+            "load_time": (SeedDatasetLoadTime, type(None)),
             "harm_categories": (list, type(None)),
         }
         for key in overlapping_keys:

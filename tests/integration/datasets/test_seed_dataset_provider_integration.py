@@ -13,8 +13,6 @@ from pyrit.datasets.seed_datasets.local.local_dataset_loader import _LocalDatase
 from pyrit.datasets.seed_datasets.remote import _VLSUMultimodalDataset
 from pyrit.datasets.seed_datasets.seed_metadata import (
     SeedDatasetFilter,
-    SeedDatasetModality,
-    SeedDatasetSize,
 )
 from pyrit.models import SeedDataset, SeedPrompt
 
@@ -80,7 +78,7 @@ class TestRemoteFilteringIntegration:
         *,
         name: str,
         tags: set,
-        size: SeedDatasetSize,
+        size: str,
         modalities: list,
         harm_categories: list,
     ) -> type:
@@ -115,15 +113,15 @@ class TestRemoteFilteringIntegration:
         large_cls = self._make_remote_provider_cls(
             name="large_ds",
             tags={"default"},
-            size=SeedDatasetSize.LARGE,
-            modalities=[SeedDatasetModality.TEXT],
+            size="large",
+            modalities=["text"],
             harm_categories=["violence"],
         )
         small_cls = self._make_remote_provider_cls(
             name="small_ds",
             tags={"default"},
-            size=SeedDatasetSize.SMALL,
-            modalities=[SeedDatasetModality.TEXT],
+            size="small",
+            modalities=["text"],
             harm_categories=["cybercrime"],
         )
 
@@ -133,7 +131,7 @@ class TestRemoteFilteringIntegration:
             clear=True,
         ):
             names = SeedDatasetProvider.get_all_dataset_names(
-                filters=SeedDatasetFilter(sizes=[SeedDatasetSize.LARGE]),
+                filters=SeedDatasetFilter(sizes=["large"]),
             )
             assert names == ["large_ds"]
 
@@ -142,15 +140,15 @@ class TestRemoteFilteringIntegration:
         cls1 = self._make_remote_provider_cls(
             name="ds_a",
             tags={"safety"},
-            size=SeedDatasetSize.TINY,
-            modalities=[SeedDatasetModality.TEXT],
+            size="tiny",
+            modalities=["text"],
             harm_categories=[],
         )
         cls2 = self._make_remote_provider_cls(
             name="ds_b",
             tags={"custom"},
-            size=SeedDatasetSize.HUGE,
-            modalities=[SeedDatasetModality.IMAGE],
+            size="huge",
+            modalities=["image"],
             harm_categories=["violence"],
         )
 
@@ -169,15 +167,15 @@ class TestRemoteFilteringIntegration:
         cls1 = self._make_remote_provider_cls(
             name="text_large",
             tags={"default"},
-            size=SeedDatasetSize.LARGE,
-            modalities=[SeedDatasetModality.TEXT],
+            size="large",
+            modalities=["text"],
             harm_categories=["violence"],
         )
         cls2 = self._make_remote_provider_cls(
             name="image_large",
             tags={"default"},
-            size=SeedDatasetSize.LARGE,
-            modalities=[SeedDatasetModality.IMAGE],
+            size="large",
+            modalities=["image"],
             harm_categories=["violence"],
         )
 
@@ -188,8 +186,8 @@ class TestRemoteFilteringIntegration:
         ):
             names = SeedDatasetProvider.get_all_dataset_names(
                 filters=SeedDatasetFilter(
-                    sizes=[SeedDatasetSize.LARGE],
-                    modalities=[SeedDatasetModality.TEXT],
+                    sizes=["large"],
+                    modalities=["text"],
                 ),
             )
             assert names == ["text_large"]
@@ -255,7 +253,7 @@ class TestLocalFilteringIntegration:
             clear=True,
         ):
             names = SeedDatasetProvider.get_all_dataset_names(
-                filters=SeedDatasetFilter(sizes=[SeedDatasetSize.LARGE]),
+                filters=SeedDatasetFilter(sizes=["large"]),
             )
             # dataset_name falls back to file stem when SeedDataset.from_yaml_file
             # rejects extra keys like "size" during __init__ pre-loading
@@ -541,13 +539,13 @@ class TestAllTagBypassIntegration:
         ):
             # Size filter alone would exclude it
             size_filtered = SeedDatasetProvider.get_all_dataset_names(
-                filters=SeedDatasetFilter(sizes=[SeedDatasetSize.LARGE]),
+                filters=SeedDatasetFilter(sizes=["large"]),
             )
             assert size_filtered == []
 
             # 'all' tag overrides the size filter
             all_names = SeedDatasetProvider.get_all_dataset_names(
-                filters=SeedDatasetFilter(tags={"all"}, sizes=[SeedDatasetSize.LARGE]),
+                filters=SeedDatasetFilter(tags={"all"}, sizes=["large"]),
             )
             assert "small" in all_names
 
