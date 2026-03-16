@@ -46,7 +46,8 @@ class _LocalDatasetLoader(SeedDatasetProvider):
             dataset = SeedDataset.from_yaml_file(file_path)
             # Use the dataset_name from the YAML if available, otherwise use filename
             self._dataset_name = (
-                getattr(dataset, "dataset_name", None) or getattr(dataset, "name", None) or file_path.stem
+                getattr(dataset, "dataset_name", None) or getattr(
+                    dataset, "name", None) or file_path.stem
             )
         except Exception as e:
             logger.warning(f"Could not pre-load dataset from {file_path}: {e}")
@@ -77,7 +78,8 @@ class _LocalDatasetLoader(SeedDatasetProvider):
                 dataset.dataset_name = self.dataset_name
             return dataset
         except Exception as e:
-            logger.error(f"Failed to load local dataset from {self.file_path}: {e}")
+            logger.error(
+                f"Failed to load local dataset from {self.file_path}: {e}")
             raise
 
     def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
@@ -98,11 +100,11 @@ class _LocalDatasetLoader(SeedDatasetProvider):
             with open(self.file_path, encoding="utf-8") as f:
                 dataset = yaml.safe_load(f)
         except Exception as e:
-            logger.error(f"Failed to load local dataset from {self.file_path}: {e}")
+            logger.error(
+                f"Failed to load local dataset from {self.file_path}: {e}")
             raise
 
-        if not isinstance(dataset, dict):
-            return None
+        dataset = self.
 
         raw = {k: v for k, v in dataset.items() if k in valid_fields}
         if not raw:
@@ -165,21 +167,26 @@ def _register_local_datasets() -> None:
 
                     def make_init(path: Path) -> Callable[[Any], None]:
                         def __init__(self: Any) -> None:  # noqa: N807
-                            super(self.__class__, self).__init__(file_path=path)
+                            super(self.__class__, self).__init__(
+                                file_path=path)
 
                         return __init__
 
                     type(
                         class_name,
                         (_LocalDatasetLoader,),
-                        {"__init__": make_init(yaml_file), "should_register": True, "__module__": __name__},
+                        {"__init__": make_init(
+                            yaml_file), "should_register": True, "__module__": __name__},
                     )
 
-                    logger.debug(f"Registered local dataset loader: {class_name} for {yaml_file.name}")
+                    logger.debug(
+                        f"Registered local dataset loader: {class_name} for {yaml_file.name}")
                 except Exception as e:
-                    logger.warning(f"Failed to register local dataset {yaml_file}: {e}")
+                    logger.warning(
+                        f"Failed to register local dataset {yaml_file}: {e}")
     else:
-        logger.warning(f"Seed datasets directory not found: {seed_datasets_path}")
+        logger.warning(
+            f"Seed datasets directory not found: {seed_datasets_path}")
 
 
 # Execute registration
