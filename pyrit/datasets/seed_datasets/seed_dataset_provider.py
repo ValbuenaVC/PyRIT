@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from tqdm import tqdm
 
-from pyrit.datasets.seed_datasets.seed_metadata import SeedDatasetFilter, SeedDatasetLoadingRank, SeedDatasetMetadata
+from pyrit.datasets.seed_datasets.seed_metadata import SeedDatasetFilter, SeedDatasetLoadTime, SeedDatasetMetadata
 from pyrit.models.seeds import SeedDataset
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class SeedDatasetProvider(ABC):
     """
 
     _registry: dict[str, type["SeedDatasetProvider"]] = {}
-    rank: SeedDatasetLoadingRank = SeedDatasetLoadingRank.UNKNOWN
+    load_time: SeedDatasetLoadTime = SeedDatasetLoadTime.UNINITIALIZED
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """
@@ -138,18 +138,21 @@ class SeedDatasetProvider(ABC):
 
                 dataset_names.add(provider.dataset_name)
             except Exception as e:
-                raise ValueError(
-                    f"Could not get dataset name from {provider_class.__name__}: {e}") from e
+                raise ValueError(f"Could not get dataset name from {provider_class.__name__}: {e}") from e
         return sorted(dataset_names)
 
     @classmethod
     def _match_filter(cls, metadata: SeedDatasetMetadata, filters: SeedDatasetFilter) -> bool:
         """
+        Match filters against provider metadata.
 
-        Match the filter(s) with the metadata provided by the SeedDatasetProvider subclass.
-        By default, filters across dimensions (e.g. size, harm categories) are treated as AND
-        requirements. Filters within a dimension (e.g. SeedDatasetSize.SMALL,
-        SeedDatasetSize.LARGE) are treated as OR requirements.
+        Across dimensions (e.g. size + harm_categories): AND — all specified conditions must match.
+        Within a dimension (e.g. sizes=["small", "large"]): OR — metadata needs to overlap with
+        at least one value.
+
+        Special tags:
+        - "all": bypasses all filtering, returns every dataset.
+        - "default": matches datasets that have tagged themselves as part of the curated set.
 
         Args:
             metadata (SeedDatasetMetadata): The metadata object extracted from the SeedDatasetProvider
@@ -157,7 +160,7 @@ class SeedDatasetProvider(ABC):
             filters (SeedDatasetFilter): The filter object provided by the user to get_all_dataset_names.
 
         Returns:
-            bool: Whether or not the filters match.
+            bool: Whether the filters match.
         """
         # Tags
         if filters.tags and "all" in filters.tags:
@@ -189,8 +192,8 @@ class SeedDatasetProvider(ABC):
         if metadata.modalities and filters.modalities and not set(metadata.modalities) & set(filters.modalities):  # noqa: SIM103
             return False
 
-        # Rank
-        if metadata.rank and filters.ranks and metadata.rank not in filters.ranks:  # noqa: SIM103
+        # Load Time
+        if metadata.load_time and filters.load_times and metadata.load_time not in filters.load_times:  # noqa: SIM103
             return False
 
         return True
@@ -235,11 +238,9 @@ class SeedDatasetProvider(ABC):
         # Validate dataset names if specified
         if dataset_names is not None:
             available_names = cls.get_all_dataset_names()
-            invalid_names = [
-                name for name in dataset_names if name not in available_names]
+            invalid_names = [name for name in dataset_names if name not in available_names]
             if invalid_names:
-                raise ValueError(
-                    f"Dataset(s) not found: {invalid_names}. Available datasets: {available_names}")
+                raise ValueError(f"Dataset(s) not found: {invalid_names}. Available datasets: {available_names}")
 
         async def fetch_single_dataset(
             provider_name: str, provider_class: type["SeedDatasetProvider"]
@@ -265,8 +266,7 @@ class SeedDatasetProvider(ABC):
 
         # Progress tracking
         total_count = len(cls._registry)
-        pbar = tqdm(total=total_count,
-                    desc="Loading datasets - this can take a few minutes", unit="dataset")
+        pbar = tqdm(total=total_count, desc="Loading datasets - this can take a few minutes", unit="dataset")
 
         async def fetch_with_semaphore(
             provider_name: str, provider_class: type["SeedDatasetProvider"]
@@ -304,12 +304,10 @@ class SeedDatasetProvider(ABC):
                 logger.info(f"Merging multiple sources for {dataset_name}.")
 
                 existing_dataset = datasets[dataset_name]
-                combined_seeds = list(
-                    existing_dataset.seeds) + list(dataset.seeds)
+                combined_seeds = list(existing_dataset.seeds) + list(dataset.seeds)
                 existing_dataset.seeds = combined_seeds
             else:
                 datasets[dataset_name] = dataset
 
-        logger.info(
-            f"Successfully fetched {len(datasets)} unique datasets from {len(cls._registry)} providers")
+        logger.info(f"Successfully fetched {len(datasets)} unique datasets from {len(cls._registry)} providers")
         return list(datasets.values())
