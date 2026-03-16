@@ -123,18 +123,19 @@ class SeedDatasetProvider(ABC):
                 # Parser ensures a standard metadata format
                 metadata = provider._parse_metadata()
 
-                # "all" bypasses metadata filtering and returns every dataset.
-                if filters and filters.tags and "all" in filters.tags:
-                    dataset_names.add(provider.dataset_name)
-                    continue
+                if filters:
+                    # "all" bypasses metadata filtering and returns every dataset
+                    if filters.tags and "all" in filters.tags:
+                        dataset_names.add(provider.dataset_name)
+                        continue
 
-                if filters and not metadata:
-                    # Datasets without metadata are skipped unless we want "all"
-                    continue
+                    # Datasets without metadata are skipped for all other filters
+                    if not metadata:
+                        continue
 
-                # Filters detected but no match -> don't add this dataset
-                if filters and metadata and not cls._match_filter(metadata=metadata, filters=filters):
-                    continue
+                    # Filters detected but no match -> don't add this dataset
+                    if not cls._match_filter(metadata=metadata, filters=filters):
+                        continue
 
                 dataset_names.add(provider.dataset_name)
             except Exception as e:
@@ -163,7 +164,15 @@ class SeedDatasetProvider(ABC):
             bool: Whether the filters match.
         """
         # Tags
+        # "all" defaults to all discovered datasets.
         if filters.tags and "all" in filters.tags:
+            return True
+
+        # "default" checks for an initialized loading rank or the "default" curation tag.
+        if filters.tags and "default" in filters.tags and metadata.tags and "default" in metadata.tags:
+            return True
+
+        if filters.tags and "default" in filters.tags and metadata.load_time != SeedDatasetLoadTime.UNINITIALIZED:
             return True
 
         # These lines all disable SIM103 because metadata and filters tags can be optional, so
