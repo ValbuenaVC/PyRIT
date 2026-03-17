@@ -130,7 +130,7 @@ class TestRemoteFilteringIntegration:
             {"Large": large_cls, "Small": small_cls},
             clear=True,
         ):
-            names = SeedDatasetProvider.get_all_dataset_names(
+            names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(sizes=["large"]),
             )
             assert names == ["large_ds"]
@@ -157,7 +157,7 @@ class TestRemoteFilteringIntegration:
             {"A": cls1, "B": cls2},
             clear=True,
         ):
-            names = SeedDatasetProvider.get_all_dataset_names(
+            names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"all"}),
             )
             assert sorted(names) == ["ds_a", "ds_b"]
@@ -184,7 +184,7 @@ class TestRemoteFilteringIntegration:
             {"TL": cls1, "IL": cls2},
             clear=True,
         ):
-            names = SeedDatasetProvider.get_all_dataset_names(
+            names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(
                     sizes=["large"],
                     modalities=["text"],
@@ -252,7 +252,7 @@ class TestLocalFilteringIntegration:
             {"Large": large_cls, "Small": small_cls},
             clear=True,
         ):
-            names = SeedDatasetProvider.get_all_dataset_names(
+            names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(sizes=["large"]),
             )
             # dataset_name falls back to file stem when SeedDataset.from_yaml_file
@@ -284,12 +284,12 @@ class TestLocalFilteringIntegration:
         ):
             # dataset_name falls back to file stem ("tagged") when
             # SeedDataset.from_yaml_file rejects extra keys like "tags"
-            matched = SeedDatasetProvider.get_all_dataset_names(
+            matched = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"safety"}),
             )
             assert matched == ["tagged"]
 
-            not_matched = SeedDatasetProvider.get_all_dataset_names(
+            not_matched = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"unrelated"}),
             )
             assert not_matched == []
@@ -313,11 +313,11 @@ class TestLocalFilteringIntegration:
             clear=True,
         ):
             # Without filters, the dataset is included
-            all_names = SeedDatasetProvider.get_all_dataset_names()
+            all_names = SeedDatasetProvider.get_all_dataset_names_async()
             assert "bare_local" in all_names
 
             # With filters, it's skipped (no metadata to match against)
-            filtered = SeedDatasetProvider.get_all_dataset_names(
+            filtered = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"safety"}),
             )
             assert filtered == []
@@ -392,7 +392,7 @@ class TestEndToEndLocalDatasetWorkflow:
             clear=True,
         ):
             # --- Step 1: User filters by harm_categories ---
-            names = SeedDatasetProvider.get_all_dataset_names(
+            names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(harm_categories=["cybercrime"]),
             )
             assert len(names) == 1
@@ -447,7 +447,7 @@ class TestEndToEndLocalDatasetWorkflow:
             {"One": cls1, "Two": cls2},
             clear=True,
         ):
-            names = SeedDatasetProvider.get_all_dataset_names()
+            names = SeedDatasetProvider.get_all_dataset_names_async()
             assert len(names) == 2
 
             datasets = await SeedDatasetProvider.fetch_datasets_async()
@@ -502,13 +502,13 @@ class TestAllTagBypassIntegration:
             clear=True,
         ):
             # Normal filter skips it
-            filtered = SeedDatasetProvider.get_all_dataset_names(
+            filtered = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"safety"}),
             )
             assert filtered == []
 
             # 'all' includes it
-            all_names = SeedDatasetProvider.get_all_dataset_names(
+            all_names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"all"}),
             )
             assert "bare_dataset" in all_names
@@ -538,13 +538,13 @@ class TestAllTagBypassIntegration:
             clear=True,
         ):
             # Size filter alone would exclude it
-            size_filtered = SeedDatasetProvider.get_all_dataset_names(
+            size_filtered = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(sizes=["large"]),
             )
             assert size_filtered == []
 
             # 'all' tag overrides the size filter
-            all_names = SeedDatasetProvider.get_all_dataset_names(
+            all_names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"all"}, sizes=["large"]),
             )
             assert "small" in all_names
@@ -585,7 +585,7 @@ class TestAllTagBypassIntegration:
             {"Rich": rich_cls, "Bare": bare_cls},
             clear=True,
         ):
-            all_names = SeedDatasetProvider.get_all_dataset_names(
+            all_names = SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"all"}),
             )
             assert len(all_names) == 2

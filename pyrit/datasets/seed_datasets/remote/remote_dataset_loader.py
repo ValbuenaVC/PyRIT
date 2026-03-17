@@ -288,7 +288,7 @@ class _RemoteDatasetLoader(SeedDatasetProvider, ABC):
             logger.error(f"Failed to load HuggingFace dataset {dataset_name}: {e}")
             raise
 
-    def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
+    async def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
         """
         Extract metadata from class attributes and format into SeedDatasetMetadata schema.
 

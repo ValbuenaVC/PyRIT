@@ -128,6 +128,67 @@ class TestMetadataProperties:
         assert "cybercrime" in metadata.harm_categories
 
 
+class TestMetadataCoercion:
+    """
+    Test that _coerce_metadata_values correctly normalizes raw YAML
+    values into the types expected by SeedDatasetMetadata.
+    """
+
+    def test_tags_list_coerced_to_set(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"tags": ["safety", "default"]})
+        assert result["tags"] == {"safety", "default"}
+        assert isinstance(result["tags"], set)
+
+    def test_tags_string_coerced_to_set(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"tags": "safety"})
+        assert result["tags"] == {"safety"}
+        assert isinstance(result["tags"], set)
+
+    def test_tags_normalized_lower_strip(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"tags": ["  Safety ", " DEFAULT"]})
+        assert result["tags"] == {"safety", "default"}
+
+    def test_size_coerced_to_lowercase_string(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"size": " Large "})
+        assert result["size"] == "large"
+
+    def test_source_type_coerced_to_lowercase_string(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"source_type": " Remote "})
+        assert result["source_type"] == "remote"
+
+    def test_load_time_coerced_to_enum(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"load_time": "fast"})
+        assert result["load_time"] == SeedDatasetLoadTime.FAST
+
+    def test_load_time_normalized_strip_lower(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"load_time": " Slow "})
+        assert result["load_time"] == SeedDatasetLoadTime.SLOW
+
+    def test_modalities_list_coerced_lowercase(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"modalities": ["Text", " IMAGE "]})
+        assert result["modalities"] == ["text", "image"]
+
+    def test_modalities_string_coerced_to_list(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"modalities": "text"})
+        assert result["modalities"] == ["text"]
+
+    def test_harm_categories_list_coerced_lowercase(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(
+            raw_metadata={"harm_categories": ["Violence", " Cybercrime "]}
+        )
+        assert result["harm_categories"] == ["violence", "cybercrime"]
+
+    def test_harm_categories_string_coerced_to_list(self):
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"harm_categories": "violence"})
+        assert result["harm_categories"] == ["violence"]
+
+    def test_unknown_type_skipped_with_warning(self, caplog):
+        """Unexpected types are dropped and logged, not passed through."""
+        result = SeedDatasetMetadata._coerce_metadata_values(raw_metadata={"tags": 12345})
+        assert "tags" not in result
+        assert "Skipping metadata field" in caplog.text
+
+
 class TestFilterProperties:
     """
     Test that the filter fields populate correctly.

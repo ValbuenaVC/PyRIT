@@ -73,7 +73,7 @@ class SeedDatasetProvider(ABC):
             Exception: If the dataset cannot be fetched or processed.
         """
 
-    def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
+    async def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
         """
         Parse provider-specific metadata into the shared schema.
 
@@ -97,7 +97,7 @@ class SeedDatasetProvider(ABC):
         return cls._registry.copy()
 
     @classmethod
-    def get_all_dataset_names(cls, filters: Optional[SeedDatasetFilter] = None) -> list[str]:
+    async def get_all_dataset_names_async(cls, filters: Optional[SeedDatasetFilter] = None) -> list[str]:
         """
         Get the names of all registered datasets.
 
@@ -111,7 +111,7 @@ class SeedDatasetProvider(ABC):
             ValueError: If no providers are registered or if providers cannot be instantiated.
 
         Example:
-            >>> names = SeedDatasetProvider.get_all_dataset_names()
+            >>> names = await SeedDatasetProvider.get_all_dataset_names_async()
             >>> print(f"Available datasets: {', '.join(names)}")
         """
         dataset_names = set()
@@ -121,7 +121,7 @@ class SeedDatasetProvider(ABC):
                 provider = provider_class()
 
                 # Parser ensures a standard metadata format
-                metadata = provider._parse_metadata()
+                metadata = await provider._parse_metadata()
 
                 if filters:
                     # "all" bypasses metadata filtering and returns every dataset
@@ -158,7 +158,7 @@ class SeedDatasetProvider(ABC):
         Args:
             metadata (SeedDatasetMetadata): The metadata object extracted from the SeedDatasetProvider
                 subclass.
-            filters (SeedDatasetFilter): The filter object provided by the user to get_all_dataset_names.
+            filters (SeedDatasetFilter): The filter object provided by the user to get_all_dataset_names_async.
 
         Returns:
             bool: Whether the filters match.
@@ -246,7 +246,7 @@ class SeedDatasetProvider(ABC):
         """
         # Validate dataset names if specified
         if dataset_names is not None:
-            available_names = cls.get_all_dataset_names()
+            available_names = await cls.get_all_dataset_names_async()
             invalid_names = [name for name in dataset_names if name not in available_names]
             if invalid_names:
                 raise ValueError(f"Dataset(s) not found: {invalid_names}. Available datasets: {available_names}")

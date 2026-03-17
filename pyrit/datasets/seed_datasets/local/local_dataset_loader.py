@@ -11,7 +11,6 @@ import yaml
 
 from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
 from pyrit.datasets.seed_datasets.seed_metadata import (
-    SeedDatasetLoadTime,
     SeedDatasetMetadata,
 )
 from pyrit.models import SeedDataset
@@ -77,7 +76,7 @@ class _LocalDatasetLoader(SeedDatasetProvider):
             logger.error(f"Failed to load local dataset from {self.file_path}: {e}")
             raise
 
-    def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
+    async def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
         """
         Extract metadata from a local YAML file and coerce raw values into typed schema fields.
 
@@ -105,48 +104,8 @@ class _LocalDatasetLoader(SeedDatasetProvider):
         if not raw:
             return None
 
-        coerced = self._coerce_metadata_values(raw_metadata=raw)
+        coerced = SeedDatasetMetadata._coerce_metadata_values(raw_metadata=raw)
         return SeedDatasetMetadata(**coerced)
-
-    @staticmethod
-    def _coerce_metadata_values(*, raw_metadata: dict[str, Any]) -> dict[str, Any]:
-        """
-        Convert YAML primitive values into the types expected by SeedDatasetMetadata.
-
-        Applies .lower().strip() normalization to string values for size, modalities,
-        source_type, and harm_categories to prevent case/whitespace mismatches.
-
-        Args:
-            raw_metadata (dict[str, Any]): Dictionary of field names to raw YAML-parsed values.
-
-        Returns:
-            dict[str, Any]: Dictionary with values coerced to the correct types.
-        """
-        coerced: dict[str, Any] = {}
-        for key, value in raw_metadata.items():
-            if key == "tags" and isinstance(value, list):
-                coerced[key] = {v.strip().lower() if isinstance(v, str) else v for v in value}
-            elif key == "tags" and isinstance(value, str):
-                coerced[key] = {value.strip().lower()}
-            elif key == "size" and isinstance(value, str) or key == "source_type" and isinstance(value, str):
-                coerced[key] = value.strip().lower()
-            elif key == "load_time" and isinstance(value, str):
-                coerced[key] = SeedDatasetLoadTime(value.strip().lower())
-            elif key == "modalities" and isinstance(value, list):
-                coerced[key] = [v.strip().lower() if isinstance(v, str) else v for v in value]
-            elif key == "modalities" and isinstance(value, str):
-                coerced[key] = [value.strip().lower()]
-            elif key == "harm_categories" and isinstance(value, list):
-                coerced[key] = [v.strip().lower() if isinstance(v, str) else v for v in value]
-            elif key == "harm_categories" and isinstance(value, str):
-                coerced[key] = [value.strip().lower()]
-            else:
-                # Unexpected type for a metadata field — skip it with a warning
-                # rather than passing garbage into SeedDatasetMetadata.
-                logger.warning(
-                    f"Skipping metadata field '{key}' with unexpected type {type(value).__name__} (value: {value!r})"
-                )
-        return coerced
 
 
 def _register_local_datasets() -> None:
