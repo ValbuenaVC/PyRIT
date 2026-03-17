@@ -147,9 +147,16 @@ class SeedDatasetProvider(ABC):
         """
         Match filters against provider metadata.
 
-        Across dimensions (e.g. size + harm_categories): AND — all specified conditions must match.
-        Within a dimension (e.g. sizes=["small", "large"]): OR — metadata needs to overlap with
-        at least one value.
+        When strict_match is False (default):
+        - Across dimensions (e.g. size + harm_categories): AND — all specified conditions must match.
+        - Within a dimension (e.g. sizes=["small", "large"]): OR — metadata needs to overlap with
+          at least one value.
+
+        When strict_match is True:
+        - Across dimensions: AND (same as default).
+        - Within set-like dimensions (tags, harm_categories, modalities): AND — metadata must
+          contain ALL requested values, not just one.
+        - Within scalar dimensions (size, source_type, load_time): unchanged (membership check).
 
         Special tags:
         - "all": bypasses all filtering, returns every dataset.
@@ -164,42 +171,53 @@ class SeedDatasetProvider(ABC):
             bool: Whether the filters match.
         """
         # Tags
-        # "all" defaults to all discovered datasets.
+        # "all" always bypasses all filtering, regardless of strict_match.
         if filters.tags and "all" in filters.tags:
             return True
 
-        # "default" checks for an initialized loading rank or the "default" curation tag.
-        if filters.tags and "default" in filters.tags and metadata.tags and "default" in metadata.tags:
-            return True
+        # "default" tag handling depends on strict_match:
+        # - Without strict_match: "default" alone is enough to match if the dataset
+        #   has a "default" tag or an initialized load_time.
+        # - With strict_match: "default" is treated like any other tag — ALL
+        #   requested tags (including "default") must be present in the dataset.
+        if not filters.strict_match:
+            if filters.tags and "default" in filters.tags and metadata.tags and "default" in metadata.tags:
+                return True
 
-        if filters.tags and "default" in filters.tags and metadata.load_time != SeedDatasetLoadTime.UNINITIALIZED:
-            return True
+            if filters.tags and "default" in filters.tags and metadata.load_time != SeedDatasetLoadTime.UNINITIALIZED:
+                return True
 
-        # These lines all disable SIM103 because metadata and filters tags can be optional, so
-        # directly checking for membership breaks type checking.
-
-        if metadata.tags and filters.tags and not (filters.tags & metadata.tags):  # noqa: SIM103
-            return False
+        if metadata.tags and filters.tags:
+            if filters.strict_match:
+                # All requested tags must be present in the dataset
+                if not filters.tags <= metadata.tags:
+                    return False
+            elif not (filters.tags & metadata.tags):
+                return False
 
         # Size
-        if metadata.size and filters.sizes and metadata.size not in filters.sizes:  # noqa: SIM103
+        if metadata.size and filters.sizes and metadata.size not in filters.sizes:
             return False
 
         # Harm Categories
-        if (
-            metadata.harm_categories
-            and filters.harm_categories
-            and not set(metadata.harm_categories) & set(filters.harm_categories)
-        ):  # noqa: SIM103
-            return False
+        if metadata.harm_categories and filters.harm_categories:
+            if filters.strict_match:
+                if not set(filters.harm_categories) <= set(metadata.harm_categories):
+                    return False
+            elif not set(metadata.harm_categories) & set(filters.harm_categories):
+                return False
 
         # Source Type
-        if metadata.source_type and filters.source_types and metadata.source_type not in filters.source_types:  # noqa: SIM103
+        if metadata.source_type and filters.source_types and metadata.source_type not in filters.source_types:
             return False
 
         # Modalities
-        if metadata.modalities and filters.modalities and not set(metadata.modalities) & set(filters.modalities):  # noqa: SIM103
-            return False
+        if metadata.modalities and filters.modalities:
+            if filters.strict_match:
+                if not set(filters.modalities) <= set(metadata.modalities):
+                    return False
+            elif not set(metadata.modalities) & set(filters.modalities):
+                return False
 
         # Load Time
         if metadata.load_time and filters.load_times and metadata.load_time not in filters.load_times:  # noqa: SIM103

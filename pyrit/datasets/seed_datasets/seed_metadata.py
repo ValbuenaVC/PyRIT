@@ -55,23 +55,57 @@ class SeedDatasetFilter:
 
     Most fields are optional. None means "don't filter on this axis."
 
-    Exception for load_times, which defaults to UNINITIALIZED.
+    By default, filtering is AND across categories (all must match) and
+    OR within categories (any overlap is sufficient).
 
-    By default, filtering is OR-wise across filter categories and OR-wise within
-    filter categories.
+    Setting strict_match=True changes within-category behavior to AND
+    for set-like fields (tags, harm_categories, modalities).
+
+    Special tag behavior:
+    - "all": A magic bypass that returns every discoverable dataset. When "all"
+      is present, ALL other filter fields and strict_match are ignored. This
+      operates at the get_all_dataset_names_async level — _match_filter is not
+      even called for datasets without metadata.
+    - "default": Matches datasets that have "default" in their tags or have an
+      initialized load_time. With strict_match=True, "default" loses its
+      special shortcut behavior and is treated as a normal tag.
     """
 
-    # Tags are a top-level set of labels that assist with filtering.
-    # The tag "all" will return every discoverable dataset.
-    # The tag "default" will return every dataset with an initialized
-    # load_time (i.e., SeedDatasetLoadTime != UNINITIALIZED.) or an explicit
-    # "default" tag (think of this like a pinned or starred item).
     tags: Optional[set[str]] = None
     sizes: Optional[list[str]] = None
     modalities: Optional[list[PromptDataType]] = None
     source_types: Optional[list[SeedDatasetSourceType]] = None
     load_times: Optional[list[SeedDatasetLoadTime]] = None
     harm_categories: Optional[list[str]] = None
+
+    # Setting this to True forces AND-wise filtering within set-like categories.
+    # "all" tag still bypasses everything regardless of this flag.
+    strict_match: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate filter configuration."""
+        if self.tags and "all" in self.tags and len(self.tags) > 1:
+            logger.warning(
+                "Filter has 'all' combined with other tags %s. "
+                "'all' bypasses all filtering — other tags will be ignored.",
+                self.tags - {"all"},
+            )
+        if self.tags and "all" in self.tags and self.strict_match:
+            logger.warning(
+                "Filter has 'all' with strict_match=True. 'all' bypasses all filtering — strict_match has no effect."
+            )
+        if (
+            self.tags
+            and "all" in self.tags
+            and any(
+                f is not None
+                for f in [self.sizes, self.modalities, self.source_types, self.load_times, self.harm_categories]
+            )
+        ):
+            logger.warning(
+                "Filter has 'all' combined with other filter fields. "
+                "'all' bypasses all filtering — other fields will be ignored."
+            )
 
 
 @dataclass(frozen=True)

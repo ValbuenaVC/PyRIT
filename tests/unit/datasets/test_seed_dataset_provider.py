@@ -365,6 +365,212 @@ class TestMetadataParsingRemote:
             assert names == []
 
 
+class TestStrictMatchFiltering:
+    """Test strict_match behavior in SeedDatasetFilter."""
+
+    def test_strict_tags_all_present_matches(self):
+        """strict_match requires ALL filter tags to be present in metadata."""
+        metadata = SeedDatasetMetadata(tags={"safety", "default", "curated"})
+        filters = SeedDatasetFilter(tags={"safety", "default"}, strict_match=True)
+        assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_tags_partial_overlap_fails(self):
+        """strict_match rejects if metadata is missing any requested tag."""
+        metadata = SeedDatasetMetadata(tags={"safety"})
+        filters = SeedDatasetFilter(tags={"safety", "default"}, strict_match=True)
+        assert not SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_nonstrict_tags_partial_overlap_passes(self):
+        """Without strict_match, any tag overlap is sufficient."""
+        metadata = SeedDatasetMetadata(tags={"safety"})
+        filters = SeedDatasetFilter(tags={"safety", "default"}, strict_match=False)
+        assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_harm_categories_all_present_matches(self):
+        """strict_match requires ALL filter harm_categories present in metadata."""
+        metadata = SeedDatasetMetadata(harm_categories=["violence", "cybercrime", "illegal"])
+        filters = SeedDatasetFilter(harm_categories=["violence", "cybercrime"], strict_match=True)
+        assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_harm_categories_partial_fails(self):
+        """strict_match rejects if metadata is missing any requested harm category."""
+        metadata = SeedDatasetMetadata(harm_categories=["violence"])
+        filters = SeedDatasetFilter(harm_categories=["violence", "cybercrime"], strict_match=True)
+        assert not SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_modalities_all_present_matches(self):
+        """strict_match requires ALL filter modalities present in metadata."""
+        metadata = SeedDatasetMetadata(modalities=["text", "image", "audio"])
+        filters = SeedDatasetFilter(modalities=["text", "image"], strict_match=True)
+        assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_modalities_partial_fails(self):
+        """strict_match rejects if metadata is missing any requested modality."""
+        metadata = SeedDatasetMetadata(modalities=["text"])
+        filters = SeedDatasetFilter(modalities=["text", "image"], strict_match=True)
+        assert not SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_size_unchanged(self):
+        """strict_match doesn't change size behavior — still membership check."""
+        metadata = SeedDatasetMetadata(size="large")
+        assert SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(sizes=["large"], strict_match=True),
+        )
+        assert not SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(sizes=["small"], strict_match=True),
+        )
+
+    def test_strict_cross_axis_and(self):
+        """strict_match with multiple axes: all must match."""
+        metadata = SeedDatasetMetadata(
+            tags={"safety", "default"},
+            size="large",
+            harm_categories=["violence", "cybercrime"],
+        )
+        # Both axes satisfied
+        assert SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(
+                tags={"safety"},
+                harm_categories=["violence"],
+                strict_match=True,
+            ),
+        )
+        # harm_categories axis fails (missing "illegal")
+        assert not SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(
+                tags={"safety"},
+                harm_categories=["violence", "illegal"],
+                strict_match=True,
+            ),
+        )
+
+    def test_strict_all_tag_still_bypasses(self):
+        """tags={'all'} still bypasses everything even with strict_match."""
+        metadata = SeedDatasetMetadata(tags={"safety"})
+        filters = SeedDatasetFilter(tags={"all"}, strict_match=True)
+        assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    def test_strict_default_plus_other_tags_requires_both(self):
+        """With strict_match, 'default' is a normal tag — all must be present."""
+        metadata = SeedDatasetMetadata(tags={"default", "safety"})
+        # Both present → match
+        assert SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(tags={"default", "safety"}, strict_match=True),
+        )
+        # Missing "curated" → reject
+        assert not SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(tags={"default", "safety", "curated"}, strict_match=True),
+        )
+
+    def test_nonstrict_default_is_shortcut(self):
+        """Without strict_match, 'default' in filter tags is a shortcut match."""
+        # Dataset has "default" tag → matches even without other filter tags present
+        metadata = SeedDatasetMetadata(tags={"default"})
+        assert SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(tags={"default", "nonexistent"}),
+        )
+
+    def test_strict_default_without_tag_on_dataset_fails(self):
+        """With strict_match, dataset must actually have 'default' in tags."""
+        metadata = SeedDatasetMetadata(tags={"safety"}, load_time=SeedDatasetLoadTime.FAST)
+        # Without strict, "default" would match via initialized load_time
+        assert SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(tags={"default"}),
+        )
+        # With strict, "default" must be in metadata.tags
+        assert not SeedDatasetProvider._match_filter(
+            metadata=metadata,
+            filters=SeedDatasetFilter(tags={"default"}, strict_match=True),
+        )
+
+
+class TestFilterValidation:
+    """Test that invalid or contradictory filter configurations are caught early."""
+
+    def test_all_with_strict_match_warns(self, caplog):
+        """'all' + strict_match logs a warning since strict has no effect."""
+        SeedDatasetFilter(tags={"all"}, strict_match=True)
+        assert "strict_match has no effect" in caplog.text
+
+    def test_all_with_other_tags_warns(self, caplog):
+        """'all' combined with other tags logs a warning."""
+        SeedDatasetFilter(tags={"all", "safety"})
+        assert "other tags will be ignored" in caplog.text
+
+    def test_all_with_other_fields_warns(self, caplog):
+        """'all' combined with size/modality/etc logs a warning."""
+        SeedDatasetFilter(tags={"all"}, sizes=["large"])
+        assert "other fields will be ignored" in caplog.text
+
+    def test_all_alone_no_warning(self, caplog):
+        """'all' by itself does not warn."""
+        SeedDatasetFilter(tags={"all"})
+        assert caplog.text == ""
+
+    def test_all_bypasses_match_filter_entirely(self):
+        """'all' returns True from _match_filter regardless of metadata content."""
+        # Metadata with no overlap to any filter field
+        metadata = SeedDatasetMetadata(
+            tags={"unrelated"},
+            size="tiny",
+            modalities=["audio"],
+            harm_categories=["nothing"],
+        )
+        # Filter that would normally reject everything about this metadata
+        filters = SeedDatasetFilter(
+            tags={"all"},
+            sizes=["huge"],
+            modalities=["text"],
+            harm_categories=["violence"],
+            strict_match=True,
+        )
+        assert SeedDatasetProvider._match_filter(metadata=metadata, filters=filters)
+
+    @pytest.mark.asyncio
+    async def test_all_includes_datasets_without_metadata(self):
+        """'all' in get_all_dataset_names_async includes providers with no metadata."""
+        mock_cls = MagicMock(__name__="BareProv")
+        mock_cls.return_value.dataset_name = "bare"
+        mock_cls.return_value._parse_metadata = AsyncMock(return_value=None)
+
+        with patch.dict(SeedDatasetProvider._registry, {"Bare": mock_cls}, clear=True):
+            # Without 'all', bare datasets are skipped
+            names = await SeedDatasetProvider.get_all_dataset_names_async(
+                filters=SeedDatasetFilter(tags={"safety"}),
+            )
+            assert names == []
+
+            # With 'all', bare datasets are included
+            names = await SeedDatasetProvider.get_all_dataset_names_async(
+                filters=SeedDatasetFilter(tags={"all"}),
+            )
+            assert names == ["bare"]
+
+    @pytest.mark.asyncio
+    async def test_all_skips_match_filter_call(self):
+        """'all' in get_all_dataset_names_async doesn't call _match_filter at all."""
+        mock_cls = MagicMock(__name__="Prov")
+        mock_cls.return_value.dataset_name = "test"
+        mock_cls.return_value._parse_metadata = AsyncMock(return_value=None)
+
+        with (
+            patch.dict(SeedDatasetProvider._registry, {"P": mock_cls}, clear=True),
+            patch.object(SeedDatasetProvider, "_match_filter") as mock_match,
+        ):
+            await SeedDatasetProvider.get_all_dataset_names_async(
+                filters=SeedDatasetFilter(tags={"all"}),
+            )
+            mock_match.assert_not_called()
+
+
 class TestMetadataParsingLocal:
     """Test metadata parsing and filter matching for local YAML providers."""
 
