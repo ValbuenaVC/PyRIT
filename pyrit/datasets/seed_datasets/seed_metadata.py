@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Optional
 
+from pyrit.models.literals import PromptDataType
+
 """
 Contains metadata objects for datasets (i.e. subclasses of SeedDatasetProvider).
 
@@ -22,12 +24,10 @@ don't need to import extra types to construct a filter.
 
 # Documented expected values for string-typed metadata fields.
 # These are not enforced at runtime but serve as documentation.
-SeedDatasetSizeLiteral = Literal["tiny", "small", "medium", "large", "huge"]
+SeedDatasetSizeCategory = Literal["tiny", "small", "medium", "large", "huge"]
 """tiny (<10), small (10-99), medium (100-499), large (500-4999), huge (5000+)"""
 
-SeedDatasetModalityLiteral = Literal["text", "image", "video", "audio"]
-
-SeedDatasetSourceTypeLiteral = Literal["remote", "local"]
+SeedDatasetSourceType = Literal["remote", "local"]
 
 
 class SeedDatasetLoadTime(Enum):
@@ -64,8 +64,8 @@ class SeedDatasetFilter:
     # "default" tag (think of this like a pinned or starred item).
     tags: Optional[set[str]] = None
     sizes: Optional[list[str]] = None
-    modalities: Optional[list[str]] = None
-    source_types: Optional[list[str]] = None
+    modalities: Optional[list[PromptDataType]] = None
+    source_types: Optional[list[SeedDatasetSourceType]] = None
     load_times: Optional[list[SeedDatasetLoadTime]] = None
     harm_categories: Optional[list[str]] = None
 
@@ -78,8 +78,8 @@ class SeedDatasetMetadata:
     """
 
     tags: Optional[set[str]] = None
-    size: Optional[str] = None
-    modalities: Optional[list[str]] = None
-    source_type: Optional[str] = None
+    size: Optional[SeedDatasetSizeCategory] = None
+    modalities: Optional[list[PromptDataType]] = None
+    source_type: Optional[SeedDatasetSourceType] = None
     load_time: SeedDatasetLoadTime = SeedDatasetLoadTime.UNINITIALIZED
     harm_categories: Optional[list[str]] = None
