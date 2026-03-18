@@ -127,7 +127,7 @@ class SeedDatasetMetadata:
         """
         Convert YAML primitive values into the types expected by SeedDatasetMetadata.
 
-        Applies .lower().strip() normalization to string values for size, modalities,
+        Applies .lower().strip() normalization to string values for tags, load_time, size, modalities,
         source_type, and harm_categories to prevent case/whitespace mismatches.
 
         Args:
