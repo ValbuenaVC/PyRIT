@@ -29,7 +29,7 @@ don't need to import extra types to construct a filter.
 # Documented expected values for string-typed metadata fields.
 # These are not enforced at runtime but serve as documentation.
 SeedDatasetSizeCategory = Literal["tiny", "small", "medium", "large", "huge"]
-"""tiny (<10), small (10-99), medium (100-499), large (500-4999), huge (5000+)"""
+# tiny (<10), small (10-99), medium (100-499), large (500-4999), huge (5000+)
 
 SeedDatasetSourceType = Literal["remote", "local"]
 
