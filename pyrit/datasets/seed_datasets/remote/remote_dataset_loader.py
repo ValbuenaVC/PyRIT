@@ -290,7 +290,10 @@ class _RemoteDatasetLoader(SeedDatasetProvider, ABC):
 
     async def _parse_metadata(self) -> Optional[SeedDatasetMetadata]:
         """
-        Extract metadata from class attributes and format into SeedDatasetMetadata schema.
+        Extract metadata from class attributes, wrap in sets, and format into SeedDatasetMetadata.
+
+        Class attributes may be singular values (str, enum), lists, or sets.
+        All are normalized into sets for the unified SeedDatasetMetadata schema.
 
         Returns:
             Optional[SeedDatasetMetadata]: Parsed metadata if available, otherwise None.
@@ -298,10 +301,19 @@ class _RemoteDatasetLoader(SeedDatasetProvider, ABC):
         valid_fields = [f.name for f in fields(SeedDatasetMetadata)]
 
         provider_class = type(self)
-        self_metadata = {
-            key: getattr(provider_class, key) for key in valid_fields if getattr(provider_class, key, None) is not None
-        }
+        raw = {}
+        for key in valid_fields:
+            value = getattr(provider_class, key, None)
+            if value is None:
+                continue
+            raw[key] = value
 
-        if not self_metadata:
+        if not raw:
             return None
-        return SeedDatasetMetadata(**self_metadata)
+
+        coerced = SeedDatasetMetadata._coerce_metadata_values(raw_metadata=raw)
+        # Validation must happen after coercion because raw values are strings/lists,
+        # not sets. _validate_singular_fields checks set cardinality (len > 1).
+        result = SeedDatasetMetadata(**coerced)
+        SeedDatasetMetadata._validate_singular_fields(metadata=result)
+        return result

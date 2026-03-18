@@ -105,7 +105,11 @@ class _LocalDatasetLoader(SeedDatasetProvider):
             return None
 
         coerced = SeedDatasetMetadata._coerce_metadata_values(raw_metadata=raw)
-        return SeedDatasetMetadata(**coerced)
+        result = SeedDatasetMetadata(**coerced)
+        # Validation after coercion: raw values are strings/lists, not sets.
+        # _validate_singular_fields needs sets to check cardinality.
+        SeedDatasetMetadata._validate_singular_fields(metadata=result)
+        return result
 
 
 def _register_local_datasets() -> None:

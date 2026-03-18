@@ -266,13 +266,13 @@ class TestMetadataParsingRemote:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         assert metadata.tags == {"default", "safety"}
-        assert metadata.size == "large"
-        assert metadata.modalities == ["text"]
-        assert metadata.harm_categories == ["cybercrime", "illegal", "harmful", "chemical_biological", "harassment"]
+        assert metadata.size == {"large"}
+        assert metadata.modalities == {"text"}
+        assert metadata.harm_categories == {"cybercrime", "illegal", "harmful", "chemical_biological", "harassment"}
         # source_type is not declared as a class attribute on HarmBench;
         # load_time inherits the UNINITIALIZED default from SeedDatasetProvider base class
         assert metadata.source_type is None
-        assert metadata.load_time == SeedDatasetLoadTime.UNINITIALIZED
+        assert metadata.load_time == {SeedDatasetLoadTime.UNINITIALIZED}
 
     def test_all_tag(self):
         """Filter with tags={'all'} matches any metadata."""
@@ -292,62 +292,62 @@ class TestMetadataParsingRemote:
 
     def test_sizes(self):
         """Size filter checks membership in the sizes list."""
-        metadata = SeedDatasetMetadata(size="large")
+        metadata = SeedDatasetMetadata(size={"large"})
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(sizes=["large", "huge"]),
+            filters=SeedDatasetFilter(size={"large", "huge"}),
         )
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(sizes=["small"]),
+            filters=SeedDatasetFilter(size={"small"}),
         )
 
     def test_modalities(self):
         """Modality filter uses set intersection."""
-        metadata = SeedDatasetMetadata(modalities=["text", "image"])
+        metadata = SeedDatasetMetadata(modalities={"text", "image"})
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(modalities=["text"]),
+            filters=SeedDatasetFilter(modalities={"text"}),
         )
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(modalities=["audio"]),
+            filters=SeedDatasetFilter(modalities={"audio"}),
         )
 
     def test_sources(self):
         """Source filter checks membership."""
-        metadata = SeedDatasetMetadata(source_type="remote")
+        metadata = SeedDatasetMetadata(source_type={"remote"})
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(source_types=["remote"]),
+            filters=SeedDatasetFilter(source_type={"remote"}),
         )
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(source_types=["local"]),
+            filters=SeedDatasetFilter(source_type={"local"}),
         )
 
     def test_ranks(self):
         """Load time filter checks membership."""
-        metadata = SeedDatasetMetadata(load_time=SeedDatasetLoadTime.FAST)
+        metadata = SeedDatasetMetadata(load_time={SeedDatasetLoadTime.FAST})
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(load_times=[SeedDatasetLoadTime.FAST]),
+            filters=SeedDatasetFilter(load_time={SeedDatasetLoadTime.FAST}),
         )
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(load_times=[SeedDatasetLoadTime.SLOW]),
+            filters=SeedDatasetFilter(load_time={SeedDatasetLoadTime.SLOW}),
         )
 
     def test_harm_categories(self):
         """Harm category filter uses set intersection."""
-        metadata = SeedDatasetMetadata(harm_categories=["violence", "cybercrime"])
+        metadata = SeedDatasetMetadata(harm_categories={"violence", "cybercrime"})
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(harm_categories=["violence"]),
+            filters=SeedDatasetFilter(harm_categories={"violence"}),
         )
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(harm_categories=["unrelated"]),
+            filters=SeedDatasetFilter(harm_categories={"unrelated"}),
         )
 
     def test_empty_filter(self):
@@ -392,38 +392,38 @@ class TestStrictMatchFiltering:
 
     def test_strict_harm_categories_all_present_matches(self):
         """strict_match requires ALL filter harm_categories present in metadata."""
-        metadata = SeedDatasetMetadata(harm_categories=["violence", "cybercrime", "illegal"])
-        filters = SeedDatasetFilter(harm_categories=["violence", "cybercrime"], strict_match=True)
+        metadata = SeedDatasetMetadata(harm_categories={"violence", "cybercrime", "illegal"})
+        filters = SeedDatasetFilter(harm_categories={"violence", "cybercrime"}, strict_match=True)
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_harm_categories_partial_fails(self):
         """strict_match rejects if metadata is missing any requested harm category."""
-        metadata = SeedDatasetMetadata(harm_categories=["violence"])
-        filters = SeedDatasetFilter(harm_categories=["violence", "cybercrime"], strict_match=True)
+        metadata = SeedDatasetMetadata(harm_categories={"violence"})
+        filters = SeedDatasetFilter(harm_categories={"violence", "cybercrime"}, strict_match=True)
         assert not SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_modalities_all_present_matches(self):
         """strict_match requires ALL filter modalities present in metadata."""
-        metadata = SeedDatasetMetadata(modalities=["text", "image", "audio"])
-        filters = SeedDatasetFilter(modalities=["text", "image"], strict_match=True)
+        metadata = SeedDatasetMetadata(modalities={"text", "image", "audio"})
+        filters = SeedDatasetFilter(modalities={"text", "image"}, strict_match=True)
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_modalities_partial_fails(self):
         """strict_match rejects if metadata is missing any requested modality."""
-        metadata = SeedDatasetMetadata(modalities=["text"])
-        filters = SeedDatasetFilter(modalities=["text", "image"], strict_match=True)
+        metadata = SeedDatasetMetadata(modalities={"text"})
+        filters = SeedDatasetFilter(modalities={"text", "image"}, strict_match=True)
         assert not SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_size_unchanged(self):
         """strict_match doesn't change size behavior — still membership check."""
-        metadata = SeedDatasetMetadata(size="large")
+        metadata = SeedDatasetMetadata(size={"large"})
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(sizes=["large"], strict_match=True),
+            filters=SeedDatasetFilter(size={"large"}, strict_match=True),
         )
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(sizes=["small"], strict_match=True),
+            filters=SeedDatasetFilter(size={"small"}, strict_match=True),
         )
 
     def test_strict_cross_axis_and(self):
@@ -431,14 +431,14 @@ class TestStrictMatchFiltering:
         metadata = SeedDatasetMetadata(
             tags={"safety", "default"},
             size="large",
-            harm_categories=["violence", "cybercrime"],
+            harm_categories={"violence", "cybercrime"},
         )
         # Both axes satisfied
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
             filters=SeedDatasetFilter(
                 tags={"safety"},
-                harm_categories=["violence"],
+                harm_categories={"violence"},
                 strict_match=True,
             ),
         )
@@ -447,7 +447,7 @@ class TestStrictMatchFiltering:
             metadata=metadata,
             filters=SeedDatasetFilter(
                 tags={"safety"},
-                harm_categories=["violence", "illegal"],
+                harm_categories={"violence", "illegal"},
                 strict_match=True,
             ),
         )
@@ -511,7 +511,7 @@ class TestFilterValidation:
 
     def test_all_with_other_fields_warns(self, caplog):
         """'all' combined with size/modality/etc logs a warning."""
-        SeedDatasetFilter(tags={"all"}, sizes=["large"])
+        SeedDatasetFilter(tags={"all"}, size={"large"})
         assert "other fields will be ignored" in caplog.text
 
     def test_all_alone_no_warning(self, caplog):
@@ -525,15 +525,15 @@ class TestFilterValidation:
         metadata = SeedDatasetMetadata(
             tags={"unrelated"},
             size="tiny",
-            modalities=["audio"],
-            harm_categories=["nothing"],
+            modalities={"audio"},
+            harm_categories={"nothing"},
         )
         # Filter that would normally reject everything about this metadata
         filters = SeedDatasetFilter(
             tags={"all"},
-            sizes=["huge"],
-            modalities=["text"],
-            harm_categories=["violence"],
+            size={"huge"},
+            modalities={"text"},
+            harm_categories={"violence"},
             strict_match=True,
         )
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
@@ -609,7 +609,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = await loader._parse_metadata()
         assert metadata is not None
-        assert metadata.harm_categories == ["violence"]
+        assert metadata.harm_categories == {"violence"}
 
     @pytest.mark.asyncio
     async def test_all_tag(self, tmp_path):
@@ -673,7 +673,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = await loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(sizes=["large"])
+        filters = SeedDatasetFilter(size={"large"})
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
@@ -694,7 +694,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = await loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(modalities=["text"])
+        filters = SeedDatasetFilter(modalities={"text"})
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
@@ -714,7 +714,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = await loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(source_types=["remote"])
+        filters = SeedDatasetFilter(source_type={"remote"})
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
@@ -734,7 +734,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = await loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(load_times=[SeedDatasetLoadTime.FAST])
+        filters = SeedDatasetFilter(load_time={SeedDatasetLoadTime.FAST})
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
@@ -756,7 +756,7 @@ class TestMetadataParsingLocal:
         loader = self._make_loader(yaml_path)
         metadata = await loader._parse_metadata()
         assert metadata is not None
-        filters = SeedDatasetFilter(harm_categories=["violence"])
+        filters = SeedDatasetFilter(harm_categories={"violence"})
         assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
@@ -858,11 +858,11 @@ class TestLocalDatasetMetadataCollisions:
         # Verify coerced types match expectations
         expected_types = {
             "tags": (set, type(None)),
-            "size": (str, type(None)),
-            "modalities": (list, type(None)),
-            "source_type": (str, type(None)),
-            "load_time": (SeedDatasetLoadTime, type(None)),
-            "harm_categories": (list, type(None)),
+            "size": (set, type(None)),
+            "modalities": (set, type(None)),
+            "source_type": (set, type(None)),
+            "load_time": (set, type(None)),
+            "harm_categories": (set, type(None)),
         }
         for key in overlapping_keys:
             value = getattr(metadata, key)

@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import fields as dc_fields
 from typing import Any, Optional
 
 from tqdm import tqdm
@@ -125,7 +126,7 @@ class SeedDatasetProvider(ABC):
 
                 if filters:
                     # "all" bypasses metadata filtering and returns every dataset
-                    if filters.tags and "all" in filters.tags:
+                    if filters.has_all_tag:
                         dataset_names.add(provider.dataset_name)
                         continue
 
@@ -145,87 +146,80 @@ class SeedDatasetProvider(ABC):
     @classmethod
     def _match_filter_to_metadata(cls, metadata: SeedDatasetMetadata, filters: SeedDatasetFilter) -> bool:
         """
-        Match filters against provider metadata. The filter is used to determine whether a match is found
-        against the metadat object.
+        Match a dataset's metadata against filter criteria.
 
-        When strict_match is False (default):
-        - Across dimensions (e.g. size + harm_categories): AND — all specified conditions must match.
-        - Within a dimension (e.g. sizes=["small", "large"]): OR — metadata needs to overlap with
-          at least one value.
-
-        When strict_match is True:
-        - Across dimensions: AND (same as default).
-        - Within set-like dimensions (tags, harm_categories, modalities): AND — metadata must
-          contain ALL requested values, not just one.
-        - Within scalar dimensions (size, source_type, load_time): unchanged (membership check).
+        A dataset matches if ANY criterion in filters.criteria matches (OR across
+        criteria). Within each criterion, ALL specified fields must match (AND
+        across fields). Within each field:
+        - strict_match=False: any overlap suffices (set intersection)
+        - strict_match=True: all filter values must be present (filter is subset)
 
         Special tags:
-        - "all": bypasses all filtering, returns every dataset.
-        - "default": matches datasets that have tagged themselves as part of the curated set.
+        - "all": bypasses all filtering, returns True immediately.
+        - "default": without strict_match, matches if the dataset has "default" tag.
 
         Args:
-            metadata (SeedDatasetMetadata): The metadata object extracted from the SeedDatasetProvider
-                subclass.
-            filters (SeedDatasetFilter): The filter object provided by the user to get_all_dataset_names_async.
+            metadata: The dataset's metadata.
+            filters: The user-provided filter.
 
         Returns:
-            bool: Whether the filters match.
+            Whether the metadata matches any criterion.
         """
-        # Tags
-        # "all" always bypasses all filtering, regardless of strict_match.
-        if filters.tags and "all" in filters.tags:
+        # "all" always bypasses
+        if filters.has_all_tag:
             return True
 
-        # "default" tag handling depends on strict_match:
-        # - Without strict_match: "default" alone is enough to match if the dataset
-        #   has a "default" tag or an initialized load_time.
-        # - With strict_match: "default" is treated like any other tag. Every
-        #   requested tag (including "default") must be present in the dataset
-        #   to count as a match.
+        return any(
+            cls._match_single_criterion(metadata=metadata, criterion=c, strict_match=filters.strict_match)
+            for c in filters.criteria
+        )
+
+    @classmethod
+    def _match_single_criterion(
+        cls,
+        *,
+        metadata: SeedDatasetMetadata,
+        criterion: SeedDatasetMetadata,
+        strict_match: bool,
+    ) -> bool:
+        """
+        Match a single SeedDatasetMetadata criterion against dataset metadata.
+
+        Args:
+            metadata: The dataset's real metadata.
+            criterion: A single filter criterion.
+            strict_match: Whether to require all filter values (AND) vs any overlap (OR).
+
+        Returns:
+            Whether the metadata satisfies this criterion.
+        """
+        # "default" shortcut (only without strict_match):
+        # When the filter asks for "default" and the dataset has "default" in its
+        # tags, match immediately. This lets "default" act as a curated-set marker
+        # that bypasses other filter axes. With strict_match, "default" is treated
+        # as a normal tag and must satisfy the full subset check.
         if (
-            not filters.strict_match
-            and filters.tags
-            and "default" in filters.tags
+            not strict_match
+            and criterion.tags
+            and "default" in criterion.tags
             and metadata.tags
             and "default" in metadata.tags
         ):
             return True
 
-        if metadata.tags and filters.tags:
-            if filters.strict_match:
-                # Reject if any requested tag is missing from the dataset
-                if filters.tags - metadata.tags:
+        for field in dc_fields(SeedDatasetMetadata):
+            filter_vals = getattr(criterion, field.name)
+            meta_vals = getattr(metadata, field.name)
+
+            if filter_vals is None or meta_vals is None:
+                continue
+
+            if strict_match:
+                if filter_vals - meta_vals:
                     return False
-            elif not (filters.tags & metadata.tags):
-                return False
-
-        # Size
-        if metadata.size and filters.sizes and metadata.size not in filters.sizes:
-            return False
-
-        # Harm Categories
-        if metadata.harm_categories and filters.harm_categories:
-            if filters.strict_match:
-                if not set(filters.harm_categories) <= set(metadata.harm_categories):
+            else:
+                if not (filter_vals & meta_vals):
                     return False
-            elif not set(metadata.harm_categories) & set(filters.harm_categories):
-                return False
-
-        # Source Type
-        if metadata.source_type and filters.source_types and metadata.source_type not in filters.source_types:
-            return False
-
-        # Modalities
-        if metadata.modalities and filters.modalities:
-            if filters.strict_match:
-                if not set(filters.modalities) <= set(metadata.modalities):
-                    return False
-            elif not set(metadata.modalities) & set(filters.modalities):
-                return False
-
-        # Load Time
-        if metadata.load_time and filters.load_times and metadata.load_time not in filters.load_times:  # noqa: SIM103
-            return False
 
         return True
 
