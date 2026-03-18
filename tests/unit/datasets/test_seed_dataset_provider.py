@@ -89,20 +89,16 @@ class TestSeedDatasetProvider:
         # Mock providers
         mock_provider1 = MagicMock(__name__="P1")
         mock_provider1.return_value.dataset_name = "d1"
-        mock_provider1.return_value._parse_metadata = AsyncMock(
-            return_value=None)
+        mock_provider1.return_value._parse_metadata = AsyncMock(return_value=None)
         mock_provider1.return_value.fetch_dataset = AsyncMock(
-            return_value=SeedDataset(
-                seeds=[SeedPrompt(value="p1", data_type="text")], dataset_name="d1")
+            return_value=SeedDataset(seeds=[SeedPrompt(value="p1", data_type="text")], dataset_name="d1")
         )
 
         mock_provider2 = MagicMock(__name__="P2")
         mock_provider2.return_value.dataset_name = "d2"
-        mock_provider2.return_value._parse_metadata = AsyncMock(
-            return_value=None)
+        mock_provider2.return_value._parse_metadata = AsyncMock(return_value=None)
         mock_provider2.return_value.fetch_dataset = AsyncMock(
-            return_value=SeedDataset(
-                seeds=[SeedPrompt(value="p2", data_type="text")], dataset_name="d2")
+            return_value=SeedDataset(seeds=[SeedPrompt(value="p2", data_type="text")], dataset_name="d2")
         )
 
         with patch.dict(SeedDatasetProvider._registry, {"P1": mock_provider1, "P2": mock_provider2}, clear=True):
@@ -114,19 +110,15 @@ class TestSeedDatasetProvider:
         """Test fetching datasets with filter."""
         mock_provider1 = MagicMock(__name__="P1")
         mock_provider1.return_value.dataset_name = "d1"
-        mock_provider1.return_value._parse_metadata = AsyncMock(
-            return_value=None)
+        mock_provider1.return_value._parse_metadata = AsyncMock(return_value=None)
         mock_provider1.return_value.fetch_dataset = AsyncMock(
-            return_value=SeedDataset(
-                seeds=[SeedPrompt(value="p1", data_type="text")], dataset_name="d1")
+            return_value=SeedDataset(seeds=[SeedPrompt(value="p1", data_type="text")], dataset_name="d1")
         )
 
         mock_provider2 = MagicMock(__name__="P2")
         mock_provider2.return_value.dataset_name = "d2"
-        mock_provider2.return_value._parse_metadata = AsyncMock(
-            return_value=None)
-        mock_provider2.return_value.fetch_dataset = AsyncMock(
-            side_effect=Exception("Should not be called"))
+        mock_provider2.return_value._parse_metadata = AsyncMock(return_value=None)
+        mock_provider2.return_value.fetch_dataset = AsyncMock(side_effect=Exception("Should not be called"))
 
         with patch.dict(SeedDatasetProvider._registry, {"P1": mock_provider1, "P2": mock_provider2}, clear=True):
             datasets = await SeedDatasetProvider.fetch_datasets_async(dataset_names=["d1"])
@@ -138,20 +130,16 @@ class TestSeedDatasetProvider:
         """Test that fetch_datasets_async raises ValueError for invalid dataset names."""
         mock_provider1 = MagicMock(__name__="P1")
         mock_provider1.return_value.dataset_name = "d1"
-        mock_provider1.return_value._parse_metadata = AsyncMock(
-            return_value=None)
+        mock_provider1.return_value._parse_metadata = AsyncMock(return_value=None)
         mock_provider1.return_value.fetch_dataset = AsyncMock(
-            return_value=SeedDataset(
-                seeds=[SeedPrompt(value="p1", data_type="text")], dataset_name="d1")
+            return_value=SeedDataset(seeds=[SeedPrompt(value="p1", data_type="text")], dataset_name="d1")
         )
 
         mock_provider2 = MagicMock(__name__="P2")
         mock_provider2.return_value.dataset_name = "d2"
-        mock_provider2.return_value._parse_metadata = AsyncMock(
-            return_value=None)
+        mock_provider2.return_value._parse_metadata = AsyncMock(return_value=None)
         mock_provider2.return_value.fetch_dataset = AsyncMock(
-            return_value=SeedDataset(
-                seeds=[SeedPrompt(value="p2", data_type="text")], dataset_name="d2")
+            return_value=SeedDataset(seeds=[SeedPrompt(value="p2", data_type="text")], dataset_name="d2")
         )
 
         with patch.dict(SeedDatasetProvider._registry, {"P1": mock_provider1, "P2": mock_provider2}, clear=True):
@@ -280,8 +268,7 @@ class TestMetadataParsingRemote:
         assert metadata.tags == {"default", "safety"}
         assert metadata.size == "large"
         assert metadata.modalities == ["text"]
-        assert metadata.harm_categories == [
-            "cybercrime", "illegal", "harmful", "chemical_biological", "harassment"]
+        assert metadata.harm_categories == ["cybercrime", "illegal", "harmful", "chemical_biological", "harassment"]
         # source_type is not declared as a class attribute on HarmBench;
         # load_time inherits the UNINITIALIZED default from SeedDatasetProvider base class
         assert metadata.source_type is None
@@ -291,16 +278,17 @@ class TestMetadataParsingRemote:
         """Filter with tags={'all'} matches any metadata."""
         metadata = SeedDatasetMetadata(tags={"safety"})
         filters = SeedDatasetFilter(tags={"all"})
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_tags(self):
         """Tag filter uses set intersection."""
         metadata = SeedDatasetMetadata(tags={"safety", "default"})
         assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=SeedDatasetFilter(tags={"safety"}))
+            metadata=metadata, filters=SeedDatasetFilter(tags={"safety"})
+        )
         assert not SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=SeedDatasetFilter(tags={"unrelated"}))
+            metadata=metadata, filters=SeedDatasetFilter(tags={"unrelated"})
+        )
 
     def test_sizes(self):
         """Size filter checks membership in the sizes list."""
@@ -352,8 +340,7 @@ class TestMetadataParsingRemote:
 
     def test_harm_categories(self):
         """Harm category filter uses set intersection."""
-        metadata = SeedDatasetMetadata(
-            harm_categories=["violence", "cybercrime"])
+        metadata = SeedDatasetMetadata(harm_categories=["violence", "cybercrime"])
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
             filters=SeedDatasetFilter(harm_categories=["violence"]),
@@ -367,8 +354,7 @@ class TestMetadataParsingRemote:
         """Empty filter (all None) matches any metadata."""
         metadata = SeedDatasetMetadata(tags={"safety"}, size="large")
         filters = SeedDatasetFilter()
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_no_metadata(self):
@@ -389,59 +375,44 @@ class TestStrictMatchFiltering:
     def test_strict_tags_all_present_matches(self):
         """strict_match requires ALL filter tags to be present in metadata."""
         metadata = SeedDatasetMetadata(tags={"safety", "default", "curated"})
-        filters = SeedDatasetFilter(
-            tags={"safety", "default"}, strict_match=True)
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        filters = SeedDatasetFilter(tags={"safety", "default"}, strict_match=True)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_tags_partial_overlap_fails(self):
         """strict_match rejects if metadata is missing any requested tag."""
         metadata = SeedDatasetMetadata(tags={"safety"})
-        filters = SeedDatasetFilter(
-            tags={"safety", "default"}, strict_match=True)
-        assert not SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        filters = SeedDatasetFilter(tags={"safety", "default"}, strict_match=True)
+        assert not SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_nonstrict_tags_partial_overlap_passes(self):
         """Without strict_match, any tag overlap is sufficient."""
         metadata = SeedDatasetMetadata(tags={"safety"})
-        filters = SeedDatasetFilter(
-            tags={"safety", "default"}, strict_match=False)
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        filters = SeedDatasetFilter(tags={"safety", "default"}, strict_match=False)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_harm_categories_all_present_matches(self):
         """strict_match requires ALL filter harm_categories present in metadata."""
-        metadata = SeedDatasetMetadata(
-            harm_categories=["violence", "cybercrime", "illegal"])
-        filters = SeedDatasetFilter(
-            harm_categories=["violence", "cybercrime"], strict_match=True)
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        metadata = SeedDatasetMetadata(harm_categories=["violence", "cybercrime", "illegal"])
+        filters = SeedDatasetFilter(harm_categories=["violence", "cybercrime"], strict_match=True)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_harm_categories_partial_fails(self):
         """strict_match rejects if metadata is missing any requested harm category."""
         metadata = SeedDatasetMetadata(harm_categories=["violence"])
-        filters = SeedDatasetFilter(
-            harm_categories=["violence", "cybercrime"], strict_match=True)
-        assert not SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        filters = SeedDatasetFilter(harm_categories=["violence", "cybercrime"], strict_match=True)
+        assert not SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_modalities_all_present_matches(self):
         """strict_match requires ALL filter modalities present in metadata."""
         metadata = SeedDatasetMetadata(modalities=["text", "image", "audio"])
-        filters = SeedDatasetFilter(
-            modalities=["text", "image"], strict_match=True)
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        filters = SeedDatasetFilter(modalities=["text", "image"], strict_match=True)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_modalities_partial_fails(self):
         """strict_match rejects if metadata is missing any requested modality."""
         metadata = SeedDatasetMetadata(modalities=["text"])
-        filters = SeedDatasetFilter(
-            modalities=["text", "image"], strict_match=True)
-        assert not SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        filters = SeedDatasetFilter(modalities=["text", "image"], strict_match=True)
+        assert not SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_size_unchanged(self):
         """strict_match doesn't change size behavior — still membership check."""
@@ -485,8 +456,7 @@ class TestStrictMatchFiltering:
         """tags={'all'} still bypasses everything even with strict_match."""
         metadata = SeedDatasetMetadata(tags={"safety"})
         filters = SeedDatasetFilter(tags={"all"}, strict_match=True)
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     def test_strict_default_plus_other_tags_requires_both(self):
         """With strict_match, 'default' is a normal tag — all must be present."""
@@ -494,14 +464,12 @@ class TestStrictMatchFiltering:
         # Both present → match
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(
-                tags={"default", "safety"}, strict_match=True),
+            filters=SeedDatasetFilter(tags={"default", "safety"}, strict_match=True),
         )
         # Missing "curated" → reject
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(
-                tags={"default", "safety", "curated"}, strict_match=True),
+            filters=SeedDatasetFilter(tags={"default", "safety", "curated"}, strict_match=True),
         )
 
     def test_nonstrict_default_is_shortcut(self):
@@ -515,8 +483,7 @@ class TestStrictMatchFiltering:
 
     def test_strict_default_without_tag_on_dataset_fails(self):
         """With strict_match, dataset must actually have 'default' in tags."""
-        metadata = SeedDatasetMetadata(
-            tags={"safety"}, load_time=SeedDatasetLoadTime.FAST)
+        metadata = SeedDatasetMetadata(tags={"safety"}, load_time=SeedDatasetLoadTime.FAST)
         # Without strict, "default" would match via initialized load_time
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
@@ -569,8 +536,7 @@ class TestFilterValidation:
             harm_categories=["violence"],
             strict_match=True,
         )
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_all_includes_datasets_without_metadata(self):
@@ -600,8 +566,7 @@ class TestFilterValidation:
         mock_cls.return_value._parse_metadata = AsyncMock(return_value=None)
 
         with (
-            patch.dict(SeedDatasetProvider._registry,
-                       {"P": mock_cls}, clear=True),
+            patch.dict(SeedDatasetProvider._registry, {"P": mock_cls}, clear=True),
             patch.object(SeedDatasetProvider, "_match_filter") as mock_match,
         ):
             await SeedDatasetProvider.get_all_dataset_names_async(
@@ -667,8 +632,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(tags={"all"})
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_tags(self, tmp_path):
@@ -690,8 +654,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(tags={"safety"})
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_sizes(self, tmp_path):
@@ -711,8 +674,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(sizes=["large"])
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_modalities(self, tmp_path):
@@ -733,8 +695,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(modalities=["text"])
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_sources(self, tmp_path):
@@ -754,8 +715,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(source_types=["remote"])
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_ranks(self, tmp_path):
@@ -775,8 +735,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(load_times=[SeedDatasetLoadTime.FAST])
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_harm_categories(self, tmp_path):
@@ -798,8 +757,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter(harm_categories=["violence"])
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_empty_filter(self, tmp_path):
@@ -820,8 +778,7 @@ class TestMetadataParsingLocal:
         metadata = await loader._parse_metadata()
         assert metadata is not None
         filters = SeedDatasetFilter()
-        assert SeedDatasetProvider._match_filter_to_metadata(
-            metadata=metadata, filters=filters)
+        assert SeedDatasetProvider._match_filter_to_metadata(metadata=metadata, filters=filters)
 
     @pytest.mark.asyncio
     async def test_no_metadata(self, tmp_path):
@@ -854,8 +811,7 @@ class TestLocalDatasetMetadataCollisions:
     @staticmethod
     def _get_local_prompt_files() -> list:
         """Collect all .prompt and .yaml files under the local datasets directory."""
-        local_dir = Path(__file__).resolve(
-        ).parents[3] / "pyrit" / "datasets" / "seed_datasets" / "local"
+        local_dir = Path(__file__).resolve().parents[3] / "pyrit" / "datasets" / "seed_datasets" / "local"
         return sorted(local_dir.glob("**/*.prompt")) + sorted(local_dir.glob("**/*.yaml"))
 
     @pytest.mark.parametrize("prompt_file", _get_local_prompt_files.__func__(), ids=lambda p: p.stem)
@@ -884,8 +840,7 @@ class TestLocalDatasetMetadataCollisions:
         if not isinstance(data, dict):
             return
 
-        metadata_field_names = {
-            fld.name for fld in dc_fields(SeedDatasetMetadata)}
+        metadata_field_names = {fld.name for fld in dc_fields(SeedDatasetMetadata)}
         overlapping_keys = metadata_field_names & data.keys()
 
         if not overlapping_keys:

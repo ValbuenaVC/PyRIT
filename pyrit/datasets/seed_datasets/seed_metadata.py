@@ -140,8 +140,7 @@ class SeedDatasetMetadata:
         coerced: dict[str, Any] = {}
         for key, value in raw_metadata.items():
             if key == "tags" and isinstance(value, list):
-                coerced[key] = {v.strip().lower() if isinstance(
-                    v, str) else v for v in value}
+                coerced[key] = {v.strip().lower() if isinstance(v, str) else v for v in value}
             elif key == "tags" and isinstance(value, str):
                 coerced[key] = {value.strip().lower()}
             elif key == "size" and isinstance(value, str) or key == "source_type" and isinstance(value, str):
@@ -149,13 +148,11 @@ class SeedDatasetMetadata:
             elif key == "load_time" and isinstance(value, str):
                 coerced[key] = SeedDatasetLoadTime(value.strip().lower())
             elif key == "modalities" and isinstance(value, list):
-                coerced[key] = [v.strip().lower() if isinstance(v, str)
-                                else v for v in value]
+                coerced[key] = [v.strip().lower() if isinstance(v, str) else v for v in value]
             elif key == "modalities" and isinstance(value, str):
                 coerced[key] = [value.strip().lower()]
             elif key == "harm_categories" and isinstance(value, list):
-                coerced[key] = [v.strip().lower() if isinstance(v, str)
-                                else v for v in value]
+                coerced[key] = [v.strip().lower() if isinstance(v, str) else v for v in value]
             elif key == "harm_categories" and isinstance(value, str):
                 coerced[key] = [value.strip().lower()]
             else:
