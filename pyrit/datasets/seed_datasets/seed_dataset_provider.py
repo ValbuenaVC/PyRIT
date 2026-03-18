@@ -193,8 +193,8 @@ class SeedDatasetProvider(ABC):
 
         if metadata.tags and filters.tags:
             if filters.strict_match:
-                # All requested tags must be present in the dataset
-                if filters.tags > metadata.tags:
+                # Reject if any requested tag is missing from the dataset
+                if filters.tags - metadata.tags:
                     return False
             elif not (filters.tags & metadata.tags):
                 return False

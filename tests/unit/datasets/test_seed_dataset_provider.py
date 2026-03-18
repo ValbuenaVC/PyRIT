@@ -483,16 +483,16 @@ class TestStrictMatchFiltering:
 
     def test_strict_default_without_tag_on_dataset_fails(self):
         """With strict_match, dataset must actually have 'default' in tags."""
-        metadata = SeedDatasetMetadata(tags={"safety"}, load_time=SeedDatasetLoadTime.FAST)
-        # Without strict, "default" would match via initialized load_time
+        metadata = SeedDatasetMetadata(tags={"default", "safety"}, load_time=SeedDatasetLoadTime.FAST)
+        # Without strict, "default" shortcut matches because metadata has "default" tag
         assert SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(tags={"default"}),
+            filters=SeedDatasetFilter(tags={"default", "curated"}),
         )
-        # With strict, "default" must be in metadata.tags
+        # With strict, ALL filter tags must be in metadata — "curated" is missing
         assert not SeedDatasetProvider._match_filter_to_metadata(
             metadata=metadata,
-            filters=SeedDatasetFilter(tags={"default"}, strict_match=True),
+            filters=SeedDatasetFilter(tags={"default", "curated"}, strict_match=True),
         )
 
 
@@ -567,7 +567,7 @@ class TestFilterValidation:
 
         with (
             patch.dict(SeedDatasetProvider._registry, {"P": mock_cls}, clear=True),
-            patch.object(SeedDatasetProvider, "_match_filter") as mock_match,
+            patch.object(SeedDatasetProvider, "_match_filter_to_metadata") as mock_match,
         ):
             await SeedDatasetProvider.get_all_dataset_names_async(
                 filters=SeedDatasetFilter(tags={"all"}),
