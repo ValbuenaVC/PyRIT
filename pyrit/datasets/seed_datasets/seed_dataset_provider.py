@@ -134,18 +134,20 @@ class SeedDatasetProvider(ABC):
                         continue
 
                     # Filters detected but no match -> don't add this dataset
-                    if not cls._match_filter(metadata=metadata, filters=filters):
+                    if not cls._match_filter_to_metadata(metadata=metadata, filters=filters):
                         continue
 
                 dataset_names.add(provider.dataset_name)
             except Exception as e:
-                raise ValueError(f"Could not get dataset name from {provider_class.__name__}: {e}") from e
+                raise ValueError(
+                    f"Could not get dataset name from {provider_class.__name__}: {e}") from e
         return sorted(dataset_names)
 
     @classmethod
-    def _match_filter(cls, metadata: SeedDatasetMetadata, filters: SeedDatasetFilter) -> bool:
+    def _match_filter_to_metadata(cls, metadata: SeedDatasetMetadata, filters: SeedDatasetFilter) -> bool:
         """
-        Match filters against provider metadata.
+        Match filters against provider metadata. The filter is used to determine whether a match is found
+        against the metadat object.
 
         When strict_match is False (default):
         - Across dimensions (e.g. size + harm_categories): AND — all specified conditions must match.
@@ -178,14 +180,12 @@ class SeedDatasetProvider(ABC):
         # "default" tag handling depends on strict_match:
         # - Without strict_match: "default" alone is enough to match if the dataset
         #   has a "default" tag or an initialized load_time.
-        # - With strict_match: "default" is treated like any other tag — ALL
-        #   requested tags (including "default") must be present in the dataset.
-        if not filters.strict_match:
-            if filters.tags and "default" in filters.tags and metadata.tags and "default" in metadata.tags:
-                return True
-
-            if filters.tags and "default" in filters.tags and metadata.load_time != SeedDatasetLoadTime.UNINITIALIZED:
-                return True
+        # - With strict_match: "default" is treated like any other tag. Every
+        #   requested tag (including "default") must be present in the dataset
+        #   to count as a match.
+        if not filters.strict_match and filters.tags and "default" in filters.tags and \
+                metadata.tags and "default" in metadata.tags:
+            return True
 
         if metadata.tags and filters.tags:
             if filters.strict_match:
@@ -265,9 +265,11 @@ class SeedDatasetProvider(ABC):
         # Validate dataset names if specified
         if dataset_names is not None:
             available_names = await cls.get_all_dataset_names_async()
-            invalid_names = [name for name in dataset_names if name not in available_names]
+            invalid_names = [
+                name for name in dataset_names if name not in available_names]
             if invalid_names:
-                raise ValueError(f"Dataset(s) not found: {invalid_names}. Available datasets: {available_names}")
+                raise ValueError(
+                    f"Dataset(s) not found: {invalid_names}. Available datasets: {available_names}")
 
         async def fetch_single_dataset(
             provider_name: str, provider_class: type["SeedDatasetProvider"]
@@ -293,7 +295,8 @@ class SeedDatasetProvider(ABC):
 
         # Progress tracking
         total_count = len(cls._registry)
-        pbar = tqdm(total=total_count, desc="Loading datasets - this can take a few minutes", unit="dataset")
+        pbar = tqdm(total=total_count,
+                    desc="Loading datasets - this can take a few minutes", unit="dataset")
 
         async def fetch_with_semaphore(
             provider_name: str, provider_class: type["SeedDatasetProvider"]
@@ -331,10 +334,12 @@ class SeedDatasetProvider(ABC):
                 logger.info(f"Merging multiple sources for {dataset_name}.")
 
                 existing_dataset = datasets[dataset_name]
-                combined_seeds = list(existing_dataset.seeds) + list(dataset.seeds)
+                combined_seeds = list(
+                    existing_dataset.seeds) + list(dataset.seeds)
                 existing_dataset.seeds = combined_seeds
             else:
                 datasets[dataset_name] = dataset
 
-        logger.info(f"Successfully fetched {len(datasets)} unique datasets from {len(cls._registry)} providers")
+        logger.info(
+            f"Successfully fetched {len(datasets)} unique datasets from {len(cls._registry)} providers")
         return list(datasets.values())
