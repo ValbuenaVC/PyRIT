@@ -135,7 +135,7 @@ class SeedDatasetProvider(ABC):
                         continue
 
                     # Filters detected but no match -> don't add this dataset
-                    if not cls._match_filter_to_metadata(metadata=metadata, filters=filters):
+                    if not cls._match_filter_to_metadata(metadata=metadata, dataset_filter=filters):
                         continue
 
                 dataset_names.add(provider.dataset_name)

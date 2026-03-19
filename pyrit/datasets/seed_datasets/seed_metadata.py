@@ -135,7 +135,8 @@ class SeedDatasetFilter:
     Passing both flat kwargs and criteria raises ValueError.
 
     Special tags:
-    - "all": Magic bypass. Returns every dataset, ignores all other fields.
+    - "all": Returns every dataset, ignores all other fields. This tag will
+       override anything else you pass to the filter object.
     - "default": Matches datasets with "default" in their tags. With
       strict_match=True, loses its shortcut and is treated as a normal tag.
 
@@ -185,6 +186,21 @@ class SeedDatasetFilter:
         else:
             self.criteria = [SeedDatasetMetadata()]
 
+        # Normalize tags: strip whitespace and lowercase so "ALL", " All ", etc. work
+        self.criteria = [
+            SeedDatasetMetadata(
+                **{
+                    f.name: (
+                        {t.strip().lower() for t in getattr(c, f.name)}
+                        if f.name == "tags" and getattr(c, f.name) is not None
+                        else getattr(c, f.name)
+                    )
+                    for f in fields(c)
+                }
+            )
+            for c in self.criteria
+        ]
+
         self.strict_match = strict_match
         self._validate()
 
@@ -194,14 +210,6 @@ class SeedDatasetFilter:
             return
 
         all_criterion = next(c for c in self.criteria if c.tags and "all" in c.tags)
-
-        # Only lowercase "all" is accepted; reject "All", "ALL", etc.
-        non_lowercase = {t for t in all_criterion.tags if t != "all" and t.lower() == "all"}
-        if non_lowercase:
-            logger.warning(
-                "Filter has non-lowercase 'all' variants %s. Only lowercase 'all' is recognized as the bypass tag.",
-                non_lowercase,
-            )
 
         if all_criterion.tags and len(all_criterion.tags) > 1:
             logger.warning(
