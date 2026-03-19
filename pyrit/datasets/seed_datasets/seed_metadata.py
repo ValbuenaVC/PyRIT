@@ -187,25 +187,42 @@ class SeedDatasetFilter:
             self.criteria = [SeedDatasetMetadata()]
 
         # Normalize tags: strip whitespace and lowercase so "ALL", " All ", etc. work
-        self.criteria = [
-            SeedDatasetMetadata(
-                **{
-                    f.name: (
-                        {t.strip().lower() for t in getattr(c, f.name)}
-                        if f.name == "tags" and getattr(c, f.name) is not None
-                        else getattr(c, f.name)
-                    )
-                    for f in fields(c)
-                }
-            )
-            for c in self.criteria
-        ]
+        def _normalize_criterion(c: SeedDatasetMetadata) -> SeedDatasetMetadata:
+            normalized = {
+                f.name: ({t.strip().lower() for t in vals} if f.name == "tags" and vals is not None else vals)
+                for f, vals in zip(fields(c), (getattr(c, f.name) for f in fields(c)), strict=True)
+            }
+            return SeedDatasetMetadata(**normalized)
+
+        self.criteria = [_normalize_criterion(c) for c in self.criteria]
 
         self.strict_match = strict_match
         self._validate()
 
     def _validate(self) -> None:
-        """Warn about contradictory filter configurations."""
+        """
+        Warn about contradictory filter configurations.
+
+        Raises:
+            ValueError: If strict_match is True and any criterion has multiple
+                values for a singular field (size, source_type).
+        """
+        # strict_match with multi-valued singular fields is logically impossible.
+        # A dataset can't be both "small" AND "large" — these are mutually exclusive.
+        if self.strict_match:
+            for criterion in self.criteria:
+                for field_name in SeedDatasetMetadata.SINGULAR_FIELDS:
+                    value = getattr(criterion, field_name)
+                    if value is not None and len(value) > 1:
+                        raise ValueError(
+                            f"strict_match=True with multiple values for '{field_name}' "
+                            f"({value}) is logically impossible — a dataset can only have "
+                            f"one {field_name}. Mutually exclusive fields: "
+                            f"{SeedDatasetMetadata.SINGULAR_FIELDS}. "
+                            f"Use strict_match=False for OR matching, "
+                            f"or split into separate criteria."
+                        )
+
         if not self.has_all_tag:
             return
 

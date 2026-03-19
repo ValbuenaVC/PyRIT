@@ -208,6 +208,54 @@ class TestSingularFieldValidation:
         SeedDatasetMetadata._validate_singular_fields(metadata=metadata)
 
 
+class TestStrictMatchSingularFieldValidation:
+    """
+    Test that strict_match rejects multi-valued singular fields.
+
+    A dataset can't be both "small" AND "large" — these are mutually exclusive.
+    strict_match=True with size={"small", "large"} is logically impossible
+    and should raise ValueError at filter construction time.
+    """
+
+    def test_strict_multi_size_raises(self):
+        """strict_match with size={'small', 'large'} is impossible."""
+        with pytest.raises(ValueError, match="logically impossible"):
+            SeedDatasetFilter(size={"small", "large"}, strict_match=True)
+
+    def test_strict_multi_source_type_raises(self):
+        """strict_match with source_type={'remote', 'local'} is impossible."""
+        with pytest.raises(ValueError, match="logically impossible"):
+            SeedDatasetFilter(source_type={"remote", "local"}, strict_match=True)
+
+    def test_strict_single_size_ok(self):
+        """strict_match with single size value is fine."""
+        f = SeedDatasetFilter(size={"large"}, strict_match=True)
+        assert f.criteria[0].size == {"large"}
+
+    def test_nonstrict_multi_size_ok(self):
+        """Without strict_match, multiple sizes is OR and perfectly valid."""
+        f = SeedDatasetFilter(size={"small", "large"}, strict_match=False)
+        assert len(f.criteria[0].size) == 2
+
+    def test_strict_multi_tags_ok(self):
+        """Tags are NOT singular — strict with multiple tags is valid (AND)."""
+        f = SeedDatasetFilter(tags={"safety", "default"}, strict_match=True)
+        assert len(f.criteria[0].tags) == 2
+
+    def test_strict_multi_harm_categories_ok(self):
+        """harm_categories are NOT singular — strict with multiple is valid."""
+        f = SeedDatasetFilter(harm_categories={"violence", "cybercrime"}, strict_match=True)
+        assert len(f.criteria[0].harm_categories) == 2
+
+    def test_strict_criteria_list_multi_size_raises(self):
+        """strict_match validation also applies to criteria=[] construction."""
+        with pytest.raises(ValueError, match="logically impossible"):
+            SeedDatasetFilter(
+                criteria=[SeedDatasetMetadata(size={"small", "large"})],
+                strict_match=True,
+            )
+
+
 class TestFilterProperties:
     """Test that the filter fields populate correctly via flat kwargs."""
 
