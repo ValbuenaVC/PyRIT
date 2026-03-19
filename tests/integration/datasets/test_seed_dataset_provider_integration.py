@@ -590,3 +590,130 @@ class TestAllTagBypassIntegration:
             )
             assert len(all_names) == 2
             assert "bare_dataset" in all_names
+
+
+class TestHarmbenchMetadataInScenario:
+    """
+    Regression tests verifying that metadata changes don't break the dataset
+    loading flow for scenarios that use datasets with explicit metadata.
+
+    RedTeamAgent is the primary scenario that uses harmbench — the only remote
+    dataset with class-level metadata (tags, size, modalities, harm_categories).
+    These tests verify the full pipeline: metadata parsing → dataset loading →
+    memory storage → scenario initialization.
+    """
+
+    @pytest.mark.asyncio
+    async def test_harmbench_metadata_parses_correctly(self):
+        """HarmBench's class-level metadata is correctly parsed into sets."""
+        from pyrit.datasets.seed_datasets.remote.harmbench_dataset import _HarmBenchDataset
+
+        loader = _HarmBenchDataset()
+        metadata = await loader._parse_metadata()
+
+        assert metadata is not None
+        assert isinstance(metadata.tags, set)
+        assert "default" in metadata.tags
+        assert "safety" in metadata.tags
+        assert metadata.size == {"large"}
+        assert metadata.modalities == {"text"}
+        assert isinstance(metadata.harm_categories, set)
+        assert "cybercrime" in metadata.harm_categories
+
+    @pytest.mark.asyncio
+    async def test_harmbench_discoverable_via_filter(self):
+        """HarmBench can be found via tag and harm_category filters."""
+        names_by_safety = await SeedDatasetProvider.get_all_dataset_names_async(
+            filters=SeedDatasetFilter(tags={"safety"}),
+        )
+        assert "harmbench" in names_by_safety
+
+        names_by_harm = await SeedDatasetProvider.get_all_dataset_names_async(
+            filters=SeedDatasetFilter(harm_categories={"cybercrime"}),
+        )
+        assert "harmbench" in names_by_harm
+
+    @pytest.mark.asyncio
+    async def test_harmbench_loads_and_stores_in_memory(self):
+        """HarmBench can be fetched and stored in memory for scenario use."""
+        from pyrit.memory import CentralMemory
+        from pyrit.setup import initialize_pyrit_async
+
+        await initialize_pyrit_async(memory_db_type="InMemory")
+
+        datasets = await SeedDatasetProvider.fetch_datasets_async(
+            dataset_names=["harmbench"],
+        )
+        assert len(datasets) == 1
+        assert datasets[0].dataset_name == "harmbench"
+        assert len(datasets[0].seeds) > 0
+
+        memory = CentralMemory.get_memory_instance()
+        await memory.add_seed_datasets_to_memory_async(
+            datasets=datasets,
+            added_by="test",
+        )
+
+        # Verify seeds are queryable from memory (this is what scenarios do)
+        seed_groups = memory.get_seed_groups(dataset_name="harmbench")
+        assert seed_groups is not None
+        assert len(list(seed_groups)) > 0
+
+    @pytest.mark.asyncio
+    async def test_red_team_agent_initializes_with_harmbench(self):
+        """
+        RedTeamAgent can initialize with harmbench dataset loaded in memory.
+
+        This is the critical regression test: if metadata changes break the
+        parsing/coercion/filtering pipeline, this test will fail during
+        scenario initialization when it tries to load seed groups from memory.
+        """
+        from unittest.mock import MagicMock
+
+        from pyrit.executor.attack.core.attack_config import AttackScoringConfig
+        from pyrit.memory import CentralMemory
+        from pyrit.prompt_target import TextTarget
+        from pyrit.scenario.scenarios.foundry.red_team_agent import (
+            FoundryStrategy,
+            RedTeamAgent,
+        )
+        from pyrit.score.true_false.true_false_scorer import TrueFalseScorer
+        from pyrit.setup import initialize_pyrit_async
+
+        await initialize_pyrit_async(memory_db_type="InMemory")
+
+        # Load harmbench into memory
+        datasets = await SeedDatasetProvider.fetch_datasets_async(
+            dataset_names=["harmbench"],
+        )
+        memory = CentralMemory.get_memory_instance()
+        await memory.add_seed_datasets_to_memory_async(
+            datasets=datasets,
+            added_by="test",
+        )
+
+        # Mock scorer to avoid Azure dependency
+        mock_scorer = MagicMock(spec=TrueFalseScorer)
+        mock_scorer.get_identifier.return_value = {"__type__": "MockScorer"}
+
+        target = TextTarget()
+        rta = RedTeamAgent(
+            adversarial_chat=target,
+            attack_scoring_config=AttackScoringConfig(objective_scorer=mock_scorer),
+            include_baseline=False,
+        )
+
+        # This is the critical call — it loads seed groups from memory
+        # and builds atomic attacks. If metadata broke the pipeline,
+        # this would raise ValueError about missing seed_groups.
+        await rta.initialize_async(
+            objective_target=target,
+            max_concurrency=1,
+            scenario_strategies=[FoundryStrategy.Base64],
+        )
+
+        # Verify the scenario got objectives from harmbench
+        attacks = rta._atomic_attacks
+        assert len(attacks) > 0
+        for attack in attacks:
+            assert len(attack.objectives) > 0
