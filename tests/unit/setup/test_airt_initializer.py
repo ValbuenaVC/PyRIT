@@ -79,8 +79,10 @@ class TestAIRTInitializerInitialize:
         """Test that initialize runs without errors when no API keys are set (Entra auth fallback)."""
         init = AIRTInitializer()
         with (
-            patch("pyrit.setup.initializers.airt.get_azure_openai_auth", return_value="mock_token"),
-            patch("pyrit.setup.initializers.airt.get_azure_token_provider", return_value="mock_token_provider"),
+            patch("pyrit.setup.initializers.airt.get_azure_openai_auth",
+                  return_value="mock_token"),
+            patch("pyrit.setup.initializers.airt.get_azure_token_provider",
+                  return_value="mock_token_provider"),
         ):
             await init.initialize_async()
 
@@ -114,8 +116,10 @@ class TestAIRTInitializerInitialize:
         """Test that get_info_async() returns populated data after initialization."""
         init = AIRTInitializer()
         with (
-            patch("pyrit.setup.initializers.airt.get_azure_openai_auth", return_value="mock_token"),
-            patch("pyrit.setup.initializers.airt.get_azure_token_provider", return_value="mock_token_provider"),
+            patch("pyrit.setup.initializers.airt.get_azure_openai_auth",
+                  return_value="mock_token"),
+            patch("pyrit.setup.initializers.airt.get_azure_token_provider",
+                  return_value="mock_token_provider"),
         ):
             await init.initialize_async()
             # get_info_async re-runs initialize_async internally, so patches must still be active
@@ -129,7 +133,8 @@ class TestAIRTInitializerInitialize:
 
         # Verify default_values list is populated and not empty
         assert isinstance(info["default_values"], list)
-        assert len(info["default_values"]) > 0, "default_values should be populated after initialization"
+        assert len(info["default_values"]
+                   ) > 0, "default_values should be populated after initialization"
 
         # Verify expected default values are present
         default_values_str = str(info["default_values"])
@@ -139,7 +144,8 @@ class TestAIRTInitializerInitialize:
 
         # Verify global_variables list is populated and not empty
         assert isinstance(info["global_variables"], list)
-        assert len(info["global_variables"]) > 0, "global_variables should be populated after initialization"
+        assert len(info["global_variables"]
+                   ) > 0, "global_variables should be populated after initialization"
 
         # Verify expected global variables are present
         assert "default_converter_target" in info["global_variables"]
@@ -173,6 +179,26 @@ class TestAIRTInitializerInitialize:
         error_message = str(exc_info.value)
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT" in error_message
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL" in error_message
+
+    def test_validate_missing_memory_labels_raises_error(self):
+        """Test that GLOBAL_MEMORY_LABELS not being set raises an error."""
+        del os.environ["GLOBAL_MEMORY_LABELS"]
+        init = AIRTInitializer()
+        with pytest.raises(ValueError) as exc_info:
+            init.validate()
+
+        error_message = str(exc_info.value)
+        assert "GLOBAL_MEMORY_LABELS" in error_message
+
+    def test_validate_missing_op_name_raises_error(self):
+        """Test that op_name not being set raises an error."""
+        os.environ["GLOBAL_MEMORY_LABELS"] = "{'test_key': 'test_value'}"
+        init = AIRTInitializer()
+        with pytest.raises(ValueError) as exc_info:
+            init.validate()
+
+        error_message = str(exc_info.value)
+        assert "op_name" in error_message
 
 
 class TestAIRTInitializerGetInfo:

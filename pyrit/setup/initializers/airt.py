@@ -43,12 +43,15 @@ class AIRTInitializer(PyRITInitializer):
     - Converter targets with Azure OpenAI configuration
     - Composite harm and objective scorers
     - Adversarial target configurations for attacks
+    - Use of an Azure SQL database
 
     Required Environment Variables:
     - AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT: Azure OpenAI endpoint for converters and targets
     - AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL: Azure OpenAI model name for converters and targets
     - AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT2: Azure OpenAI endpoint for scoring
     - AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2: Azure OpenAI model name for scoring
+    - AZURE_SQL_DB_CONNECTION_STRING: Azure SQL database connection string
+    - AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL: Azure SQL database location
 
     Optional Environment Variables:
     - AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY: API key for converter endpoint. If not set, Entra ID auth is used.
@@ -90,6 +93,8 @@ class AIRTInitializer(PyRITInitializer):
             "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT2",
             "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2",
             "AZURE_CONTENT_SAFETY_API_ENDPOINT",
+            "AZURE_SQL_DB_CONNECTION_STRING",
+            "AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL"
         ]
 
     async def initialize_async(self) -> None:
@@ -102,9 +107,14 @@ class AIRTInitializer(PyRITInitializer):
         3. Adversarial target configurations
         4. Default values for all attack types
         """
+        # Ensure op_name, username, and email are populated from GLOBAL_MEMORY_LABELS.
+        self._validate_memory_labels()
+
         # Get environment variables (validated by validate() method)
-        converter_endpoint = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT")
-        converter_model_name = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL")
+        converter_endpoint = os.getenv(
+            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT")
+        converter_model_name = os.getenv(
+            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL")
         scorer_endpoint = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT2")
         scorer_model_name = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2")
 
@@ -114,8 +124,10 @@ class AIRTInitializer(PyRITInitializer):
         # model name can be empty in certain cases (e.g., custom model deployments that don't need model name)
 
         # Check for API keys first, fall back to Entra auth if not set
-        converter_api_key = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY") or get_azure_openai_auth(converter_endpoint)
-        scorer_api_key = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY2") or get_azure_openai_auth(scorer_endpoint)
+        converter_api_key = os.getenv(
+            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY") or get_azure_openai_auth(converter_endpoint)
+        scorer_api_key = os.getenv(
+            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY2") or get_azure_openai_auth(scorer_endpoint)
         content_safety_api_key_str = os.getenv("AZURE_CONTENT_SAFETY_API_KEY")
         content_safety_api_key: str | Callable[[], str] = (
             content_safety_api_key_str
@@ -150,7 +162,8 @@ class AIRTInitializer(PyRITInitializer):
             temperature=1.1,
         )
 
-        set_global_variable(name="default_converter_target", value=default_converter_target)
+        set_global_variable(name="default_converter_target",
+                            value=default_converter_target)
         set_default_value(
             class_type=PromptConverter,
             parameter_name="converter_target",
@@ -187,7 +200,8 @@ class AIRTInitializer(PyRITInitializer):
                 TrueFalseInverterScorer(
                     scorer=SelfAskRefusalScorer(chat_target=scorer_target),
                 ),
-                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(chat_target=scorer_target), threshold=0.7),
+                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(
+                    chat_target=scorer_target), threshold=0.7),
             ],
         )
 
@@ -201,16 +215,20 @@ class AIRTInitializer(PyRITInitializer):
                 TrueFalseInverterScorer(
                     scorer=SelfAskRefusalScorer(chat_target=scorer_target),
                 ),
-                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(chat_target=scorer_target), threshold=0.7),
+                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(
+                    chat_target=scorer_target), threshold=0.7),
             ],
         )
 
         # Set global variables
-        set_global_variable(name="default_harm_scorer", value=default_harm_scorer)
-        set_global_variable(name="default_objective_scorer", value=default_objective_scorer)
+        set_global_variable(name="default_harm_scorer",
+                            value=default_harm_scorer)
+        set_global_variable(name="default_objective_scorer",
+                            value=default_objective_scorer)
 
         # Configure default attack scoring configuration
-        default_objective_scorer_config = AttackScoringConfig(objective_scorer=default_objective_scorer)
+        default_objective_scorer_config = AttackScoringConfig(
+            objective_scorer=default_objective_scorer)
 
         # Set default values for various attack types
         attack_classes = [
@@ -239,7 +257,8 @@ class AIRTInitializer(PyRITInitializer):
         )
 
         # Set global variable for easy access
-        set_global_variable(name="adversarial_config", value=adversarial_config)
+        set_global_variable(name="adversarial_config",
+                            value=adversarial_config)
 
         # Set default adversarial configurations for various attack types
         attack_classes = [
@@ -255,3 +274,26 @@ class AIRTInitializer(PyRITInitializer):
                 parameter_name="attack_adversarial_config",
                 value=adversarial_config,
             )
+
+    def _validate_memory_labels(self) -> None:
+        """
+        Check that mandatory global memory labels (username, email, and op_name)
+        are populated. Note that this is a separate path than Initializer.validate
+        since the presence of GLOBAL_MEMORY_LABELS doesn't indicate it has the
+        necessary fields for AIRTInitializer.
+
+        Raises:
+            ValueError: If mandatory global memory labels are missing.
+        """
+        labels = os.environ.get("GLOBAL_MEMORY_LABELS")
+        if not labels:
+            raise ValueError(
+                "Error: GLOBAL_MEMORY_LABELS was not set! Please add it to `.env.local` before running the initializer.")
+
+        missing_fields = list(set(labels) - {"op_name", "username", "email"})
+
+        if missing_fields:
+            raise ValueError(
+                f"Error: AIRTInitializer was called, but the following fields were not found: \
+                    {missing_fields}. Please add these to GLOBAL_MEMORY_LABELS in `.env.local` \
+                    before running the initializer.")
