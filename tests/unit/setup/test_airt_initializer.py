@@ -3,9 +3,10 @@
 
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 import pytest
+import yaml
 
 from pyrit.common.apply_defaults import reset_default_values
 from pyrit.setup.initializers import AIRTInitializer
@@ -85,10 +86,8 @@ class TestAIRTInitializerInitialize:
         """Test that initialize runs without errors when no API keys are set (Entra auth fallback)."""
         init = AIRTInitializer()
         with (
-            patch("pyrit.setup.initializers.airt.get_azure_openai_auth",
-                  return_value="mock_token"),
-            patch("pyrit.setup.initializers.airt.get_azure_token_provider",
-                  return_value="mock_token_provider"),
+            patch("pyrit.setup.initializers.airt.get_azure_openai_auth", return_value="mock_token"),
+            patch("pyrit.setup.initializers.airt.get_azure_token_provider", return_value="mock_token_provider"),
         ):
             await init.initialize_async()
 
@@ -122,10 +121,8 @@ class TestAIRTInitializerInitialize:
         """Test that get_info_async() returns populated data after initialization."""
         init = AIRTInitializer()
         with (
-            patch("pyrit.setup.initializers.airt.get_azure_openai_auth",
-                  return_value="mock_token"),
-            patch("pyrit.setup.initializers.airt.get_azure_token_provider",
-                  return_value="mock_token_provider"),
+            patch("pyrit.setup.initializers.airt.get_azure_openai_auth", return_value="mock_token"),
+            patch("pyrit.setup.initializers.airt.get_azure_token_provider", return_value="mock_token_provider"),
         ):
             await init.initialize_async()
             # get_info_async re-runs initialize_async internally, so patches must still be active
@@ -139,8 +136,7 @@ class TestAIRTInitializerInitialize:
 
         # Verify default_values list is populated and not empty
         assert isinstance(info["default_values"], list)
-        assert len(info["default_values"]
-                   ) > 0, "default_values should be populated after initialization"
+        assert len(info["default_values"]) > 0, "default_values should be populated after initialization"
 
         # Verify expected default values are present
         default_values_str = str(info["default_values"])
@@ -150,8 +146,7 @@ class TestAIRTInitializerInitialize:
 
         # Verify global_variables list is populated and not empty
         assert isinstance(info["global_variables"], list)
-        assert len(info["global_variables"]
-                   ) > 0, "global_variables should be populated after initialization"
+        assert len(info["global_variables"]) > 0, "global_variables should be populated after initialization"
 
         # Verify expected global variables are present
         assert "default_converter_target" in info["global_variables"]
@@ -187,13 +182,34 @@ class TestAIRTInitializerInitialize:
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL" in error_message
 
     def test_validate_missing_operator_raises_error(self):
-        pass
+        """Test that _validate_operation_fields raises error when operator is missing from .pyrit_conf."""
+        conf_data = yaml.dump({"operation": "test_op"})
+        init = AIRTInitializer()
+        with (
+            patch("builtins.open", mock_open(read_data=conf_data)),
+            pytest.raises(ValueError, match="operator"),
+        ):
+            init._validate_operation_fields()
 
     def test_validate_missing_operation_raises_error(self):
-        pass
+        """Test that _validate_operation_fields raises error when operation is missing from .pyrit_conf."""
+        conf_data = yaml.dump({"operator": "test_user"})
+        init = AIRTInitializer()
+        with (
+            patch("builtins.open", mock_open(read_data=conf_data)),
+            pytest.raises(ValueError, match="operation"),
+        ):
+            init._validate_operation_fields()
 
     def test_validate_db_connection_raises_error(self):
-        pass
+        """Test that validate raises error when AZURE_SQL_DB_CONNECTION_STRING is missing."""
+        del os.environ["AZURE_SQL_DB_CONNECTION_STRING"]
+        init = AIRTInitializer()
+        with pytest.raises(ValueError) as exc_info:
+            init.validate()
+
+        error_message = str(exc_info.value)
+        assert "AZURE_SQL_DB_CONNECTION_STRING" in error_message
 
 
 class TestAIRTInitializerGetInfo:
