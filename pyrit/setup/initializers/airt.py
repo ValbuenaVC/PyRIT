@@ -98,7 +98,7 @@ class AIRTInitializer(PyRITInitializer):
             "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2",
             "AZURE_CONTENT_SAFETY_API_ENDPOINT",
             "AZURE_SQL_DB_CONNECTION_STRING",
-            "AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL"
+            "AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL",
         ]
 
     async def initialize_async(self) -> None:
@@ -115,10 +115,8 @@ class AIRTInitializer(PyRITInitializer):
         self._validate_operation_fields()
 
         # Get environment variables (validated by validate() method)
-        converter_endpoint = os.getenv(
-            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT")
-        converter_model_name = os.getenv(
-            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL")
+        converter_endpoint = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT")
+        converter_model_name = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL")
         scorer_endpoint = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT2")
         scorer_model_name = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2")
 
@@ -128,10 +126,8 @@ class AIRTInitializer(PyRITInitializer):
         # model name can be empty in certain cases (e.g., custom model deployments that don't need model name)
 
         # Check for API keys first, fall back to Entra auth if not set
-        converter_api_key = os.getenv(
-            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY") or get_azure_openai_auth(converter_endpoint)
-        scorer_api_key = os.getenv(
-            "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY2") or get_azure_openai_auth(scorer_endpoint)
+        converter_api_key = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY") or get_azure_openai_auth(converter_endpoint)
+        scorer_api_key = os.getenv("AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY2") or get_azure_openai_auth(scorer_endpoint)
         content_safety_api_key_str = os.getenv("AZURE_CONTENT_SAFETY_API_KEY")
         content_safety_api_key: str | Callable[[], str] = (
             content_safety_api_key_str
@@ -166,8 +162,7 @@ class AIRTInitializer(PyRITInitializer):
             temperature=1.1,
         )
 
-        set_global_variable(name="default_converter_target",
-                            value=default_converter_target)
+        set_global_variable(name="default_converter_target", value=default_converter_target)
         set_default_value(
             class_type=PromptConverter,
             parameter_name="converter_target",
@@ -204,8 +199,7 @@ class AIRTInitializer(PyRITInitializer):
                 TrueFalseInverterScorer(
                     scorer=SelfAskRefusalScorer(chat_target=scorer_target),
                 ),
-                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(
-                    chat_target=scorer_target), threshold=0.7),
+                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(chat_target=scorer_target), threshold=0.7),
             ],
         )
 
@@ -219,20 +213,16 @@ class AIRTInitializer(PyRITInitializer):
                 TrueFalseInverterScorer(
                     scorer=SelfAskRefusalScorer(chat_target=scorer_target),
                 ),
-                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(
-                    chat_target=scorer_target), threshold=0.7),
+                FloatScaleThresholdScorer(scorer=SelfAskScaleScorer(chat_target=scorer_target), threshold=0.7),
             ],
         )
 
         # Set global variables
-        set_global_variable(name="default_harm_scorer",
-                            value=default_harm_scorer)
-        set_global_variable(name="default_objective_scorer",
-                            value=default_objective_scorer)
+        set_global_variable(name="default_harm_scorer", value=default_harm_scorer)
+        set_global_variable(name="default_objective_scorer", value=default_objective_scorer)
 
         # Configure default attack scoring configuration
-        default_objective_scorer_config = AttackScoringConfig(
-            objective_scorer=default_objective_scorer)
+        default_objective_scorer_config = AttackScoringConfig(objective_scorer=default_objective_scorer)
 
         # Set default values for various attack types
         attack_classes = [
@@ -261,8 +251,7 @@ class AIRTInitializer(PyRITInitializer):
         )
 
         # Set global variable for easy access
-        set_global_variable(name="adversarial_config",
-                            value=adversarial_config)
+        set_global_variable(name="adversarial_config", value=adversarial_config)
 
         # Set default adversarial configurations for various attack types
         attack_classes = [
@@ -293,14 +282,16 @@ class AIRTInitializer(PyRITInitializer):
 
         if "operator" not in data:
             raise ValueError(
-                "Error: `operator` was not set in .pyrit_conf. This is a required value for the AIRTInitializer.")
+                "Error: `operator` was not set in .pyrit_conf. This is a required value for the AIRTInitializer."
+            )
 
         if "operation" not in data:
             raise ValueError(
-                "Error: `operation` was not set in .pyrit_conf. This is a required value for the AIRTInitializer.")
+                "Error: `operation` was not set in .pyrit_conf. This is a required value for the AIRTInitializer."
+            )
 
-        labels = os.environ.get("GLOBAL_MEMORY_LABELS")
-        labels = json.loads(labels) if labels else {}
+        raw_labels = os.environ.get("GLOBAL_MEMORY_LABELS")
+        labels = dict(json.loads(raw_labels)) if raw_labels else {}
 
         if "username" not in labels:
             labels["username"] = data["operator"]
