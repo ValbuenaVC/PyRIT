@@ -3,6 +3,7 @@
 
 import os
 import sys
+from pathlib import Path
 from unittest.mock import mock_open, patch
 
 import pytest
@@ -10,6 +11,17 @@ import yaml
 
 from pyrit.common.apply_defaults import reset_default_values
 from pyrit.setup.initializers import AIRTInitializer
+
+
+@pytest.fixture
+def patch_pyrit_conf(tmp_path):
+    """Create a temporary .pyrit_conf file and patch _validate_operation_fields to read from it."""
+    conf_file = tmp_path / ".pyrit_conf"
+    conf_file.write_text(yaml.dump({"operator": "test_user", "operation": "test_op"}))
+    with patch.object(Path, "home", return_value=tmp_path):
+        (tmp_path / ".pyrit").mkdir(exist_ok=True)
+        (tmp_path / ".pyrit" / ".pyrit_conf").write_text(yaml.dump({"operator": "test_user", "operation": "test_op"}))
+        yield
 
 
 class TestAIRTInitializer:
@@ -44,7 +56,7 @@ class TestAIRTInitializerInitialize:
         os.environ["AZURE_CONTENT_SAFETY_API_ENDPOINT"] = "https://test-safety.cognitiveservices.azure.com"
         os.environ["AZURE_SQL_DB_CONNECTION_STRING"] = "Server=test.database.windows.net;Database=testdb"
         os.environ["AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL"] = "https://teststorage.blob.core.windows.net/data"
-        os.environ["GLOBAL_MEMORY_LABELS"] = "{'op_name': 'test_op', 'username': 'test_user', 'email': 'test@test.com'}"
+        os.environ["GLOBAL_MEMORY_LABELS"] = '{"op_name": "test_op", "username": "test_user", "email": "test@test.com"}'
         # Clean up globals
         for attr in [
             "default_converter_target",
@@ -82,7 +94,7 @@ class TestAIRTInitializerInitialize:
                 delattr(sys.modules["__main__"], attr)
 
     @pytest.mark.asyncio
-    async def test_initialize_runs_without_error(self):
+    async def test_initialize_runs_without_error(self, patch_pyrit_conf):
         """Test that initialize runs without errors when no API keys are set (Entra auth fallback)."""
         init = AIRTInitializer()
         with (
@@ -92,7 +104,7 @@ class TestAIRTInitializerInitialize:
             await init.initialize_async()
 
     @pytest.mark.asyncio
-    async def test_initialize_uses_api_keys_when_set(self):
+    async def test_initialize_uses_api_keys_when_set(self, patch_pyrit_conf):
         """Test that initialize uses API keys from env vars when they are set."""
         os.environ["AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY"] = "converter-key"
         os.environ["AZURE_OPENAI_GPT4O_UNSAFE_CHAT_KEY2"] = "scorer-key"
@@ -117,7 +129,7 @@ class TestAIRTInitializerInitialize:
                     del os.environ[var]
 
     @pytest.mark.asyncio
-    async def test_get_info_after_initialize_has_populated_data(self):
+    async def test_get_info_after_initialize_has_populated_data(self, patch_pyrit_conf):
         """Test that get_info_async() returns populated data after initialization."""
         init = AIRTInitializer()
         with (
