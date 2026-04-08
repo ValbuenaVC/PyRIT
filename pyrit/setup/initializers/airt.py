@@ -8,8 +8,12 @@ This module provides the AIRTInitializer class that sets up a complete
 AIRT configuration including converters, scorers, and targets using Azure OpenAI.
 """
 
+import json
 import os
 from collections.abc import Callable
+from pathlib import Path
+
+import yaml
 
 from pyrit.auth import get_azure_openai_auth, get_azure_token_provider
 from pyrit.common.apply_defaults import set_default_value, set_global_variable
@@ -108,7 +112,7 @@ class AIRTInitializer(PyRITInitializer):
         4. Default values for all attack types
         """
         # Ensure op_name, username, and email are populated from GLOBAL_MEMORY_LABELS.
-        self._validate_memory_labels()
+        self._validate_operation_fields()
 
         # Get environment variables (validated by validate() method)
         converter_endpoint = os.getenv(
@@ -275,27 +279,33 @@ class AIRTInitializer(PyRITInitializer):
                 value=adversarial_config,
             )
 
-    def _validate_memory_labels(self) -> None:
+    def _validate_operation_fields(self) -> None:
         """
-        Check that mandatory global memory labels (username, email, and op_name)
-        are populated. Note that this is a separate path than Initializer.validate
-        since the presence of GLOBAL_MEMORY_LABELS doesn't indicate it has the
-        necessary fields for AIRTInitializer.
+        Check that mandatory global memory labels (operation, operator)
+        are populated.
 
         Raises:
             ValueError: If mandatory global memory labels are missing.
         """
+        config_path = Path.home() / ".pyrit" / ".pyrit_conf"
+        with open(config_path) as f:
+            data = yaml.load(f, Loader=yaml.SafeLoader)
+
+        if "operator" not in data:
+            raise ValueError(
+                "Error: `operator` was not set in .pyrit_conf. This is a required value for the AIRTInitializer.")
+
+        if "operation" not in data:
+            raise ValueError(
+                "Error: `operation` was not set in .pyrit_conf. This is a required value for the AIRTInitializer.")
+
         labels = os.environ.get("GLOBAL_MEMORY_LABELS")
-        if not labels:
-            raise ValueError(
-                "Error: GLOBAL_MEMORY_LABELS was not set! Please add it to `.env.local` before running the initializer.")
+        labels = json.loads(labels) if labels else {}
 
-        required_fields = ["op_name", "username", "email"]
-        missing_fields = [
-            field for field in required_fields if field not in labels]
+        if "username" not in labels:
+            labels["username"] = data["operator"]
 
-        if missing_fields:
-            raise ValueError(
-                f"Error: AIRTInitializer was called, but the following fields were not found: \
-                    {missing_fields}. Please add these to GLOBAL_MEMORY_LABELS in `.env.local` \
-                    before running the initializer.")
+        if "op_name" not in labels:
+            labels["op_name"] = data["operation"]
+
+        os.environ["GLOBAL_MEMORY_LABELS"] = json.dumps(labels)

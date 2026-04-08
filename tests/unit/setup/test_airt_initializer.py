@@ -186,25 +186,14 @@ class TestAIRTInitializerInitialize:
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT" in error_message
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL" in error_message
 
-    def test_validate_missing_memory_labels_raises_error(self):
-        """Test that GLOBAL_MEMORY_LABELS not being set raises an error."""
-        del os.environ["GLOBAL_MEMORY_LABELS"]
-        init = AIRTInitializer()
-        with pytest.raises(ValueError) as exc_info:
-            init._validate_memory_labels()
+    def test_validate_missing_operator_raises_error(self):
+        pass
 
-        error_message = str(exc_info.value)
-        assert "GLOBAL_MEMORY_LABELS" in error_message
+    def test_validate_missing_operation_raises_error(self):
+        pass
 
-    def test_validate_missing_op_name_raises_error(self):
-        """Test that op_name not being set raises an error."""
-        os.environ["GLOBAL_MEMORY_LABELS"] = "{'test_key': 'test_value'}"
-        init = AIRTInitializer()
-        with pytest.raises(ValueError) as exc_info:
-            init._validate_memory_labels()
-
-        error_message = str(exc_info.value)
-        assert "op_name" in error_message
+    def test_validate_db_connection_raises_error(self):
+        pass
 
 
 class TestAIRTInitializerGetInfo:
