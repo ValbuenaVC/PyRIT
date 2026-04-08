@@ -41,6 +41,9 @@ class TestAIRTInitializerInitialize:
         os.environ["AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT2"] = "https://test-scorer.openai.azure.com"
         os.environ["AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2"] = "gpt-4"
         os.environ["AZURE_CONTENT_SAFETY_API_ENDPOINT"] = "https://test-safety.cognitiveservices.azure.com"
+        os.environ["AZURE_SQL_DB_CONNECTION_STRING"] = "Server=test.database.windows.net;Database=testdb"
+        os.environ["AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL"] = "https://teststorage.blob.core.windows.net/data"
+        os.environ["GLOBAL_MEMORY_LABELS"] = "{'op_name': 'test_op', 'username': 'test_user', 'email': 'test@test.com'}"
         # Clean up globals
         for attr in [
             "default_converter_target",
@@ -61,6 +64,9 @@ class TestAIRTInitializerInitialize:
             "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT2",
             "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL2",
             "AZURE_CONTENT_SAFETY_API_ENDPOINT",
+            "AZURE_SQL_DB_CONNECTION_STRING",
+            "AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL",
+            "GLOBAL_MEMORY_LABELS",
         ]:
             if var in os.environ:
                 del os.environ[var]
@@ -185,7 +191,7 @@ class TestAIRTInitializerInitialize:
         del os.environ["GLOBAL_MEMORY_LABELS"]
         init = AIRTInitializer()
         with pytest.raises(ValueError) as exc_info:
-            init.validate()
+            init._validate_memory_labels()
 
         error_message = str(exc_info.value)
         assert "GLOBAL_MEMORY_LABELS" in error_message
@@ -195,7 +201,7 @@ class TestAIRTInitializerInitialize:
         os.environ["GLOBAL_MEMORY_LABELS"] = "{'test_key': 'test_value'}"
         init = AIRTInitializer()
         with pytest.raises(ValueError) as exc_info:
-            init.validate()
+            init._validate_memory_labels()
 
         error_message = str(exc_info.value)
         assert "op_name" in error_message

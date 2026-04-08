@@ -290,7 +290,9 @@ class AIRTInitializer(PyRITInitializer):
             raise ValueError(
                 "Error: GLOBAL_MEMORY_LABELS was not set! Please add it to `.env.local` before running the initializer.")
 
-        missing_fields = list(set(labels) - {"op_name", "username", "email"})
+        required_fields = ["op_name", "username", "email"]
+        missing_fields = [
+            field for field in required_fields if field not in labels]
 
         if missing_fields:
             raise ValueError(
