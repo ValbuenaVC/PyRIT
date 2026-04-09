@@ -3,8 +3,7 @@
 
 import os
 import sys
-from pathlib import Path
-from unittest.mock import mock_open, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -15,12 +14,10 @@ from pyrit.setup.initializers import AIRTInitializer
 
 @pytest.fixture
 def patch_pyrit_conf(tmp_path):
-    """Create a temporary .pyrit_conf file and patch _validate_operation_fields to read from it."""
+    """Create a temporary .pyrit_conf file and patch DEFAULT_CONFIG_PATH to point to it."""
     conf_file = tmp_path / ".pyrit_conf"
     conf_file.write_text(yaml.dump({"operator": "test_user", "operation": "test_op"}))
-    with patch.object(Path, "home", return_value=tmp_path):
-        (tmp_path / ".pyrit").mkdir(exist_ok=True)
-        (tmp_path / ".pyrit" / ".pyrit_conf").write_text(yaml.dump({"operator": "test_user", "operation": "test_op"}))
+    with patch("pyrit.setup.initializers.airt.DEFAULT_CONFIG_PATH", conf_file):
         yield
 
 
@@ -195,22 +192,24 @@ class TestAIRTInitializerInitialize:
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_ENDPOINT" in error_message
         assert "AZURE_OPENAI_GPT4O_UNSAFE_CHAT_MODEL" in error_message
 
-    def test_validate_missing_operator_raises_error(self):
+    def test_validate_missing_operator_raises_error(self, tmp_path):
         """Test that _validate_operation_fields raises error when operator is missing from .pyrit_conf."""
-        conf_data = yaml.dump({"operation": "test_op"})
+        conf_file = tmp_path / ".pyrit_conf"
+        conf_file.write_text(yaml.dump({"operation": "test_op"}))
         init = AIRTInitializer()
         with (
-            patch("builtins.open", mock_open(read_data=conf_data)),
+            patch("pyrit.setup.initializers.airt.DEFAULT_CONFIG_PATH", conf_file),
             pytest.raises(ValueError, match="operator"),
         ):
             init._validate_operation_fields()
 
-    def test_validate_missing_operation_raises_error(self):
+    def test_validate_missing_operation_raises_error(self, tmp_path):
         """Test that _validate_operation_fields raises error when operation is missing from .pyrit_conf."""
-        conf_data = yaml.dump({"operator": "test_user"})
+        conf_file = tmp_path / ".pyrit_conf"
+        conf_file.write_text(yaml.dump({"operator": "test_user"}))
         init = AIRTInitializer()
         with (
-            patch("builtins.open", mock_open(read_data=conf_data)),
+            patch("pyrit.setup.initializers.airt.DEFAULT_CONFIG_PATH", conf_file),
             pytest.raises(ValueError, match="operation"),
         ):
             init._validate_operation_fields()
