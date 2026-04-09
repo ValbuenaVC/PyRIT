@@ -111,7 +111,7 @@ class AIRTInitializer(PyRITInitializer):
         3. Adversarial target configurations
         4. Default values for all attack types
         """
-        # Ensure op_name, username, and email are populated from GLOBAL_MEMORY_LABELS.
+        # Ensure operator, operation, and email are populated from GLOBAL_MEMORY_LABELS.
         self._validate_operation_fields()
 
         # Get environment variables (validated by validate() method)
@@ -292,10 +292,10 @@ class AIRTInitializer(PyRITInitializer):
         raw_labels = os.environ.get("GLOBAL_MEMORY_LABELS")
         labels = dict(json.loads(raw_labels)) if raw_labels else {}
 
-        if "username" not in labels:
-            labels["username"] = data["operator"]
+        if "operator" not in labels:
+            labels["operator"] = data["operator"]
 
-        if "op_name" not in labels:
-            labels["op_name"] = data["operation"]
+        if "operation" not in labels:
+            labels["operation"] = data["operation"]
 
         os.environ["GLOBAL_MEMORY_LABELS"] = json.dumps(labels)

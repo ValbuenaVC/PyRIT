@@ -56,7 +56,9 @@ class TestAIRTInitializerInitialize:
         os.environ["AZURE_CONTENT_SAFETY_API_ENDPOINT"] = "https://test-safety.cognitiveservices.azure.com"
         os.environ["AZURE_SQL_DB_CONNECTION_STRING"] = "Server=test.database.windows.net;Database=testdb"
         os.environ["AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL"] = "https://teststorage.blob.core.windows.net/data"
-        os.environ["GLOBAL_MEMORY_LABELS"] = '{"op_name": "test_op", "username": "test_user", "email": "test@test.com"}'
+        os.environ["GLOBAL_MEMORY_LABELS"] = (
+            '{"operation": "test_op", "operator": "test_user", "email": "test@test.com"}'
+        )
         # Clean up globals
         for attr in [
             "default_converter_target",
