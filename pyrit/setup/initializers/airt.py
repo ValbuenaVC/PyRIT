@@ -11,12 +11,12 @@ AIRT configuration including converters, scorers, and targets using Azure OpenAI
 import json
 import os
 from collections.abc import Callable
-from pathlib import Path
 
 import yaml
 
 from pyrit.auth import get_azure_openai_auth, get_azure_token_provider
 from pyrit.common.apply_defaults import set_default_value, set_global_variable
+from pyrit.common.path import DEFAULT_CONFIG_PATH
 from pyrit.executor.attack import (
     AttackAdversarialConfig,
     AttackScoringConfig,
@@ -276,8 +276,7 @@ class AIRTInitializer(PyRITInitializer):
         Raises:
             ValueError: If mandatory global memory labels are missing.
         """
-        config_path = Path.home() / ".pyrit" / ".pyrit_conf"
-        with open(config_path) as f:
+        with open(DEFAULT_CONFIG_PATH) as f:
             data = yaml.load(f, Loader=yaml.SafeLoader)
 
         if "operator" not in data:
