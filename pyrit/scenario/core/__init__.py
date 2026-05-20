@@ -23,7 +23,7 @@ __all__ = [
     "AtomicAttack",
     "AttackTechnique",
     "AttackTechniqueFactory",
-    "BaselinePolicy",
+    "BaselineAttackPolicy",
     "DatasetConfiguration",
     "EXPLICIT_SEED_GROUPS_KEY",
     "PolicyAction",
