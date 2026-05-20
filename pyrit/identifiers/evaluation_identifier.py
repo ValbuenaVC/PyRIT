@@ -276,3 +276,36 @@ class AtomicAttackEvaluationIdentifier(EvaluationIdentifier):
         # attack_technique: not listed in rules — fully included in eval hash.
         # technique_seeds (nested inside attack_technique): also not listed — fully included.
     }
+
+
+class StepEvaluationIdentifier(EvaluationIdentifier):
+    """
+    Evaluation identity for ``ScenarioStep`` executions.
+
+    A step identifier wraps one or more ``atomic_attack_identifier`` children
+    under ``attack_executions``; this class reuses
+    ``AtomicAttackEvaluationIdentifier.CHILD_EVAL_RULES`` for those nested
+    attack-execution children so per-attack eval semantics are preserved
+    inside step-level eval grouping.
+
+    The step's own ``params`` (``step_name``, ``outcome``, ``eval_version``)
+    are fully included so two semantically-equivalent step runs with the same
+    name and outcome land in the same eval group, but a schema bump
+    (``eval_version``) splits them — matching the additive contract spelled
+    out at the top of ``pyrit.identifiers.step_identifier``.
+    """
+
+    CHILD_EVAL_RULES: ClassVar[dict[str, ChildEvalRule]] = {
+        # Mirror the per-attack rules so each nested atomic_attack_identifier
+        # is filtered exactly the way AtomicAttackEvaluationIdentifier would
+        # filter it on its own.
+        "objective_target": ChildEvalRule(
+            included_params=frozenset({"temperature"}),
+        ),
+        "adversarial_chat": ChildEvalRule(
+            included_params=frozenset({"underlying_model_name", "temperature", "top_p"}),
+            param_fallbacks={"underlying_model_name": "model_name"},
+        ),
+        "objective_scorer": ChildEvalRule(exclude=True),
+        "seed_identifiers": ChildEvalRule(exclude=True),
+    }

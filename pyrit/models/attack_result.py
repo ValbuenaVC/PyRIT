@@ -63,6 +63,12 @@ class AttackResult(StrategyResult):
     # Contains the attack strategy as children["attack"] plus optional seeds.
     atomic_attack_identifier: Optional[ComponentIdentifier] = None
 
+    # Composite identifier for the ScenarioStep execution that produced this
+    # result. Populated only for scenarios that run through StrategyGraph;
+    # ``None`` for legacy flat scenarios and for any direct attack invocation
+    # outside the scenario layer. Built via ``build_step_identifier``.
+    step_identifier: Optional[ComponentIdentifier] = None
+
     # Evidence
     # Model response generated in the final turn of the attack
     last_response: Optional[MessagePiece] = None
@@ -234,6 +240,7 @@ class AttackResult(StrategyResult):
             "atomic_attack_identifier": (
                 self.atomic_attack_identifier.to_dict() if self.atomic_attack_identifier else None
             ),
+            "step_identifier": (self.step_identifier.to_dict() if self.step_identifier else None),
             "last_response": self.last_response.to_dict() if self.last_response else None,
             "last_score": self.last_score.to_dict() if self.last_score else None,
             "executed_turns": self.executed_turns,
@@ -272,6 +279,11 @@ class AttackResult(StrategyResult):
             atomic_attack_identifier=(
                 ComponentIdentifier.from_dict(data["atomic_attack_identifier"])
                 if data.get("atomic_attack_identifier")
+                else None
+            ),
+            step_identifier=(
+                ComponentIdentifier.from_dict(data["step_identifier"])
+                if data.get("step_identifier")
                 else None
             ),
             last_response=(MessagePiece.from_dict(data["last_response"]) if data.get("last_response") else None),

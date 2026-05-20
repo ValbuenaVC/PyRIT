@@ -406,6 +406,64 @@ class TestAttackResultEntry:
         assert strategy is not None
         assert strategy.class_name == "CorrectAttack"
 
+    # --- step_identifier (Phase 4) ---
+
+    def test_step_identifier_round_trip(self):
+        """An AttackResult carrying a step_identifier survives DB persistence."""
+        from pyrit.identifiers.step_identifier import build_step_identifier
+
+        attack_id = ComponentIdentifier(class_name="PromptSending", class_module="pyrit.executor.attack")
+        atomic_id = build_atomic_attack_identifier(attack_identifier=attack_id)
+        step_id = build_step_identifier(
+            step_name="opening_phase",
+            outcome="safety_violation",
+            attack_execution_identifiers=[atomic_id],
+        )
+        ar = _make_attack_result(atomic_attack_identifier=atomic_id, step_identifier=step_id)
+        entry = AttackResultEntry(entry=ar)
+
+        # Column is populated as a serialized dict (flat params, per ComponentIdentifier.to_dict).
+        assert entry.step_identifier is not None
+        assert entry.step_identifier["class_name"] == "ScenarioStep"
+        assert entry.step_identifier["step_name"] == "opening_phase"
+        assert entry.step_identifier["outcome"] == "safety_violation"
+
+        round_tripped = entry.get_attack_result()
+        assert round_tripped.step_identifier is not None
+        assert round_tripped.step_identifier.class_name == "ScenarioStep"
+        assert round_tripped.step_identifier.params["step_name"] == "opening_phase"
+        assert round_tripped.step_identifier.params["outcome"] == "safety_violation"
+
+    def test_no_step_identifier_stays_none(self):
+        """Legacy results without a step_identifier remain None after round-trip."""
+        ar = _make_attack_result()
+        assert ar.step_identifier is None
+        entry = AttackResultEntry(entry=ar)
+        assert entry.step_identifier is None
+        assert entry.get_attack_result().step_identifier is None
+
+    def test_step_identifier_eval_hash_preserved(self):
+        """The step identifier's eval_hash is stamped on the column dict and survives a round-trip."""
+        from pyrit.identifiers.step_identifier import build_step_identifier
+
+        attack_id = ComponentIdentifier(class_name="PromptSending", class_module="pyrit.executor.attack")
+        atomic_id = build_atomic_attack_identifier(attack_identifier=attack_id)
+        step_id = build_step_identifier(
+            step_name="opening_phase",
+            outcome="done",
+            attack_execution_identifiers=[atomic_id],
+        )
+        ar = _make_attack_result(atomic_attack_identifier=atomic_id, step_identifier=step_id)
+        entry = AttackResultEntry(entry=ar)
+
+        assert entry.step_identifier is not None
+        assert entry.step_identifier.get("eval_hash") is not None
+        assert len(entry.step_identifier["eval_hash"]) == 64
+
+        round_tripped = entry.get_attack_result()
+        assert round_tripped.step_identifier is not None
+        assert round_tripped.step_identifier.eval_hash == entry.step_identifier["eval_hash"]
+
 
 # ---------------------------------------------------------------------------
 # ScenarioResultEntry

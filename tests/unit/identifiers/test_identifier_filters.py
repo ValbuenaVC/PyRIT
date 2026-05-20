@@ -13,10 +13,11 @@ def test_identifier_type_values():
     assert IdentifierType.TARGET.value == "target"
     assert IdentifierType.SCORER.value == "scorer"
     assert IdentifierType.CONVERTER.value == "converter"
+    assert IdentifierType.STEP.value == "step"
 
 
 def test_identifier_type_member_count():
-    assert len(IdentifierType) == 4
+    assert len(IdentifierType) == 5
 
 
 # --- IdentifierFilter creation ---

@@ -435,3 +435,48 @@ def test_to_dict_from_dict_roundtrip():
     )
     roundtripped = AttackResult.from_dict(original.to_dict())
     assert original.to_dict() == roundtripped.to_dict()
+
+
+def test_to_dict_from_dict_roundtrip_with_step_identifier():
+    """AttackResult round-trips its step_identifier (Phase 4)."""
+    from pyrit.identifiers.atomic_attack_identifier import build_atomic_attack_identifier
+    from pyrit.identifiers.step_identifier import build_step_identifier
+
+    attack_id = ComponentIdentifier(class_name="PromptSendingAttack", class_module="pyrit.executor.attack")
+    atomic_id = build_atomic_attack_identifier(attack_identifier=attack_id)
+    step_id = build_step_identifier(
+        step_name="opening_phase",
+        outcome="safety_violation",
+        attack_execution_identifiers=[atomic_id],
+    )
+    original = AttackResult(
+        conversation_id="conv-1",
+        objective="Generate harmful content",
+        atomic_attack_identifier=atomic_id,
+        step_identifier=step_id,
+        executed_turns=1,
+        execution_time_ms=100,
+        outcome=AttackOutcome.SUCCESS,
+        outcome_reason="achieved",
+    )
+    roundtripped = AttackResult.from_dict(original.to_dict())
+    assert original.to_dict() == roundtripped.to_dict()
+    assert roundtripped.step_identifier is not None
+    assert roundtripped.step_identifier.class_name == "ScenarioStep"
+    assert roundtripped.step_identifier.params["step_name"] == "opening_phase"
+    assert roundtripped.step_identifier.params["outcome"] == "safety_violation"
+
+
+def test_to_dict_omits_step_identifier_when_none():
+    """When step_identifier is not set, to_dict carries it as None (additive, never absent)."""
+    original = AttackResult(
+        conversation_id="conv-1",
+        objective="test",
+        executed_turns=1,
+        execution_time_ms=10,
+        outcome=AttackOutcome.SUCCESS,
+    )
+    assert original.step_identifier is None
+    serialized = original.to_dict()
+    assert "step_identifier" in serialized
+    assert serialized["step_identifier"] is None

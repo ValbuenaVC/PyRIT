@@ -1863,7 +1863,10 @@ class MemoryInterface(abc.ABC):
             conditions.extend(
                 self._build_identifier_filter_conditions(
                     identifier_filters=identifier_filters,
-                    identifier_column_map={IdentifierType.ATTACK: AttackResultEntry.atomic_attack_identifier},
+                    identifier_column_map={
+                        IdentifierType.ATTACK: AttackResultEntry.atomic_attack_identifier,
+                        IdentifierType.STEP: AttackResultEntry.step_identifier,
+                    },
                     caller="get_attack_results",
                 )
             )

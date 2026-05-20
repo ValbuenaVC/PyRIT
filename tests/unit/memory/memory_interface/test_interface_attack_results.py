@@ -1696,6 +1696,66 @@ def test_get_attack_results_by_attack_identifier_filter_no_match(sqlite_instance
     assert len(results) == 0
 
 
+def test_get_attack_results_by_step_identifier_filter_step_name(sqlite_instance: MemoryInterface):
+    """Filter attack results by step_identifier step_name (Phase 4)."""
+    from pyrit.identifiers.step_identifier import build_step_identifier
+
+    ar1 = _make_attack_result_with_identifier("conv_1", "CrescendoAttack")
+    ar2 = _make_attack_result_with_identifier("conv_2", "ManualAttack")
+    ar1.step_identifier = build_step_identifier(
+        step_name="opening_phase",
+        outcome="done",
+        attack_execution_identifiers=[ar1.atomic_attack_identifier],
+    )
+    ar2.step_identifier = build_step_identifier(
+        step_name="escalation_phase",
+        outcome="done",
+        attack_execution_identifiers=[ar2.atomic_attack_identifier],
+    )
+    sqlite_instance.add_attack_results_to_memory(attack_results=[ar1, ar2])
+
+    results = sqlite_instance.get_attack_results(
+        identifier_filters=[
+            IdentifierFilter(
+                identifier_type=IdentifierType.STEP,
+                property_path="$.step_name",
+                value="opening_phase",
+                partial_match=False,
+            )
+        ],
+    )
+    assert len(results) == 1
+    assert results[0].conversation_id == "conv_1"
+    assert results[0].step_identifier is not None
+    assert results[0].step_identifier.params["step_name"] == "opening_phase"
+
+
+def test_get_attack_results_by_step_identifier_filter_skips_legacy_rows(sqlite_instance: MemoryInterface):
+    """Attack results without a step_identifier never match a STEP filter."""
+    from pyrit.identifiers.step_identifier import build_step_identifier
+
+    legacy_ar = _make_attack_result_with_identifier("conv_legacy", "CrescendoAttack")
+    new_ar = _make_attack_result_with_identifier("conv_new", "CrescendoAttack")
+    new_ar.step_identifier = build_step_identifier(
+        step_name="opening_phase",
+        outcome="done",
+        attack_execution_identifiers=[new_ar.atomic_attack_identifier],
+    )
+    sqlite_instance.add_attack_results_to_memory(attack_results=[legacy_ar, new_ar])
+
+    results = sqlite_instance.get_attack_results(
+        identifier_filters=[
+            IdentifierFilter(
+                identifier_type=IdentifierType.STEP,
+                property_path="$.step_name",
+                value="opening_phase",
+                partial_match=False,
+            )
+        ],
+    )
+    assert [r.conversation_id for r in results] == ["conv_new"]
+
+
 def test_get_attack_results_targeted_harm_categories_emits_deprecation_warning(sqlite_instance: MemoryInterface):
     """Test that passing targeted_harm_categories emits a DeprecationWarning."""
     import warnings

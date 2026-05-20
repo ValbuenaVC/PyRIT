@@ -19,6 +19,7 @@ from pyrit.identifiers.evaluation_identifier import (
     ChildEvalRule,
     EvaluationIdentifier,
     ScorerEvaluationIdentifier,
+    StepEvaluationIdentifier,
     compute_eval_hash,
 )
 from pyrit.identifiers.identifier_filters import IdentifierFilter, IdentifierType
@@ -39,6 +40,7 @@ __all__ = [
     "ScorerEvaluationIdentifier",
     "snake_case_to_class_name",
     "STEP_EVAL_VERSION",
+    "StepEvaluationIdentifier",
     "validate_registry_name",
     "config_hash",
     "IdentifierFilter",

@@ -35,6 +35,7 @@ from pyrit.identifiers.component_identifier import ComponentIdentifier
 from pyrit.identifiers.evaluation_identifier import (
     AtomicAttackEvaluationIdentifier,
     ScorerEvaluationIdentifier,
+    StepEvaluationIdentifier,
 )
 from pyrit.models import (
     AttackOutcome,
@@ -710,6 +711,7 @@ class AttackResultEntry(Base):
     objective = mapped_column(Unicode, nullable=False)
     attack_identifier: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False)
     atomic_attack_identifier: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    step_identifier: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     objective_sha256 = mapped_column(String, nullable=True)
     last_response_id: Mapped[uuid.UUID | None] = mapped_column(
         CustomUUID, ForeignKey(f"{PromptMemoryEntry.__tablename__}.id"), nullable=True
@@ -776,6 +778,19 @@ class AttackResultEntry(Base):
                 max_value_length=MAX_IDENTIFIER_VALUE_LENGTH,
             )
             if entry.atomic_attack_identifier
+            else None
+        )
+        # Ensure eval_hash is set on the step identifier so it survives the DB
+        # round-trip the same way atomic_attack_identifier does above.
+        if entry.step_identifier and entry.step_identifier.eval_hash is None:
+            entry.step_identifier = entry.step_identifier.with_eval_hash(
+                StepEvaluationIdentifier(entry.step_identifier).eval_hash
+            )
+        self.step_identifier = (
+            entry.step_identifier.to_dict(
+                max_value_length=MAX_IDENTIFIER_VALUE_LENGTH,
+            )
+            if entry.step_identifier
             else None
         )
         self.objective_sha256 = to_sha256(entry.objective)
@@ -900,6 +915,8 @@ class AttackResultEntry(Base):
                 attack_identifier=ComponentIdentifier.from_dict(self.attack_identifier),
             )
 
+        step_id = ComponentIdentifier.from_dict(self.step_identifier) if self.step_identifier else None
+
         # Deserialize retry events from JSON
         retry_events = []
         if self.retry_events_json:
@@ -912,6 +929,7 @@ class AttackResultEntry(Base):
             attack_result_id=str(self.id),
             objective=self.objective,
             atomic_attack_identifier=atomic_id,
+            step_identifier=step_id,
             last_response=self.last_response.get_message_piece() if self.last_response else None,
             last_score=self.last_score.get_score() if self.last_score else None,
             executed_turns=self.executed_turns,

@@ -9,6 +9,7 @@ class IdentifierType(Enum):
     """Enumeration of supported identifier types for filtering."""
 
     ATTACK = "attack"
+    STEP = "step"
     TARGET = "target"
     SCORER = "scorer"
     CONVERTER = "converter"
