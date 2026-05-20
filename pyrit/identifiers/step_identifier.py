@@ -59,6 +59,17 @@ def build_step_identifier(
             the step ran, in execution order. May be empty for steps that
             record outcomes from external signals.
 
+            .. note::
+               This list is stored as a ``list`` (not a set) and the resulting
+               identifier hash IS order-sensitive: ``[A, B]`` and ``[B, A]``
+               produce different identifiers. This is intentional — for
+               adaptive / branching steps, the *trajectory* of attack
+               attempts is a meaningful part of the step's run-time identity
+               (the same techniques applied in different orders are different
+               experiments). Callers that want order-invariant identity
+               (e.g. "set of attacks tried, regardless of order") must sort
+               the list themselves before passing it in.
+
     Returns:
         ComponentIdentifier: Composite identifier with
             ``class_name="ScenarioStep"`` and the attack executions nested
