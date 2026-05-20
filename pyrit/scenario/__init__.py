@@ -24,6 +24,8 @@ from pyrit.scenario.core import (
     BaselineAttackPolicy,
     DatasetConfiguration,
     PolicyAction,
+    RoleDescriptor,
+    RoleTag,
     Scenario,
     ScenarioCompositeStrategy,
     ScenarioCoreState,
@@ -34,6 +36,8 @@ from pyrit.scenario.core import (
     StrategyGraph,
     StrategyPolicy,
     linear_strategy_policy,
+    policy_to_spec,
+    spec_to_enum,
 )
 
 # Import scenario submodules directly and register them as virtual subpackages
@@ -66,6 +70,8 @@ __all__ = [
     "DatasetConfiguration",
     "Parameter",
     "PolicyAction",
+    "RoleDescriptor",
+    "RoleTag",
     "Scenario",
     "ScenarioCompositeStrategy",
     "ScenarioCoreState",
@@ -83,4 +89,6 @@ __all__ = [
     "foundry",
     "garak",
     "linear_strategy_policy",
+    "policy_to_spec",
+    "spec_to_enum",
 ]

@@ -272,6 +272,7 @@ class AttackTechniqueRegistry(BaseInstanceRegistry["AttackTechniqueFactory"]):
             adversarial_config=adversarial_config,
             seed_technique=spec.seed_technique,
             scorer_override_policy=scorer_override_policy,
+            source_spec=spec,
         )
 
     @staticmethod

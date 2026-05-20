@@ -36,6 +36,7 @@ from pyrit.registry import ScorerRegistry
 from pyrit.scenario.core.atomic_attack import AtomicAttack
 from pyrit.scenario.core.attack_technique import AttackTechnique
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
+from pyrit.scenario.core.input_schema import RoleDescriptor
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.scenario_strategy import ScenarioStrategy
 from pyrit.scenario.core.scenario_target_defaults import get_default_scorer_target
@@ -360,6 +361,32 @@ class Scenario(ABC):
 
         Returns:
             list[Parameter]: Declared parameters (default: empty list).
+        """
+        return []
+
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        """
+        Override to declare rich-object ``__init__`` inputs the wizard should elicit.
+
+        Returns a ``list[RoleDescriptor]`` describing arguments that
+        :meth:`__init__` accepts beyond the standard scenario plumbing
+        (``scenario_result_id``, ``params``, ``memory_labels``). Each descriptor
+        carries a :class:`RoleTag` declaring how the role is elicited
+        (scalar, choice, registry reference, factory spec, or opaque instance).
+
+        This is intentionally orthogonal to :meth:`supported_parameters`:
+
+        * :meth:`supported_parameters` declares **scalar** arguments to
+          :meth:`initialize_async` (CLI ``--kebab-flag`` surface, unchanged).
+        * :meth:`input_schema` declares **rich-object** arguments to
+          :meth:`__init__` (wizard / programmatic surface).
+
+        Default returns ``[]``; most scenarios accept no rich-object inputs
+        beyond the standard plumbing.
+
+        Returns:
+            list[RoleDescriptor]: Declared roles (default: empty list).
         """
         return []
 

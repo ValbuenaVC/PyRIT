@@ -30,6 +30,9 @@ if TYPE_CHECKING:
     )
     from pyrit.models import SeedAttackTechniqueGroup
     from pyrit.prompt_target import PromptTarget
+    from pyrit.registry.object_registries.attack_technique_registry import (
+        AttackTechniqueSpec,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,7 @@ class AttackTechniqueFactory(Identifiable):
         adversarial_config: AttackAdversarialConfig | None = None,
         seed_technique: SeedAttackTechniqueGroup | None = None,
         scorer_override_policy: ScorerOverridePolicy = ScorerOverridePolicy.WARN,
+        source_spec: AttackTechniqueSpec | None = None,
     ) -> None:
         """
         Initialize the factory with a technique-specific configuration.
@@ -80,6 +84,10 @@ class AttackTechniqueFactory(Identifiable):
             seed_technique: Optional technique seed group to attach to created techniques.
             scorer_override_policy: What to do when a scenario's scorer is incompatible
                 with the attack's ``attack_scoring_config`` type annotation. Defaults to WARN.
+            source_spec: Optional ``AttackTechniqueSpec`` this factory was built from.
+                Set by :meth:`AttackTechniqueRegistry.build_factory_from_spec` and used
+                by the Phase 8 waterfall to recover the declarative spec layer.
+                ``None`` for factories constructed directly.
 
         Raises:
             TypeError: If any kwarg name is not a valid constructor parameter,
@@ -92,6 +100,7 @@ class AttackTechniqueFactory(Identifiable):
         self._adversarial_config = adversarial_config
         self._seed_technique = seed_technique
         self._scorer_override_policy = scorer_override_policy
+        self._source_spec = source_spec
 
         self._validate_kwargs()
 
@@ -159,6 +168,19 @@ class AttackTechniqueFactory(Identifiable):
     def adversarial_chat(self) -> PromptTarget | None:
         """The adversarial chat target baked into this factory, or None."""
         return self._adversarial_config.target if self._adversarial_config else None
+
+    @property
+    def source_spec(self) -> AttackTechniqueSpec | None:
+        """
+        The ``AttackTechniqueSpec`` this factory was built from, if any.
+
+        Set by :meth:`AttackTechniqueRegistry.build_factory_from_spec`. ``None``
+        for factories constructed directly via ``AttackTechniqueFactory(...)``.
+
+        Used by the Phase 8 waterfall (``policy_to_spec``) to recover the
+        declarative spec layer from a configured scenario.
+        """
+        return self._source_spec
 
     def create(
         self,
