@@ -5,16 +5,18 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from pyrit.identifiers import ComponentIdentifier
-from pyrit.models import SeedAttackGroup, SeedObjective
+from pyrit.models import AttackOutcome, AttackResult, SeedAttackGroup, SeedObjective
 from pyrit.prompt_target import PromptTarget
 from pyrit.registry.object_registries.attack_technique_registry import AttackTechniqueRegistry
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
 from pyrit.scenario.core.scenario import BaselinePolicy
+from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
+from pyrit.scenario.core.strategy_graph import StrategyGraph, StrategyPolicy
 from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
 from pyrit.scenario.scenarios.adaptive.dispatcher import (
     ADAPTIVE_CONTEXT_LABEL,
@@ -509,3 +511,138 @@ class TestTextAdaptiveBaselinePolicy:
                     objective_target=mock_objective_target,
                     include_baseline=True,
                 )
+
+
+def _make_stub_step(*, name: str, outcome: str = "success") -> MagicMock:
+    """Build a ScenarioStep-spec stub whose process_async returns a fixed result."""
+    step = MagicMock(spec=ScenarioStep)
+    step.name = name
+    step.outputs = ["success", "exhausted"]
+    step.process_async = AsyncMock(return_value=ScenarioStepResult(outcome=outcome, attack_results=[], metadata={}))
+    return step
+
+
+@pytest.mark.usefixtures(*FIXTURES)
+class TestAdaptiveLinearPolicy:
+    """The adaptive policy must dispatch via process_async with int states 0..N."""
+
+    def test_empty_steps_raises(self, mock_objective_scorer):
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+        with pytest.raises(ValueError, match="at least one step"):
+            scenario._build_adaptive_linear_policy(steps=[])
+
+    def test_initial_state_zero_and_terminal_state_is_step_count(self, mock_objective_scorer):
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+        steps = [_make_stub_step(name=f"s{i}") for i in range(3)]
+        policy = scenario._build_adaptive_linear_policy(steps=steps)
+
+        assert isinstance(policy, StrategyPolicy)
+        assert policy.initial_state == 0
+        assert policy.terminal_states == frozenset({3})
+        # One action per non-terminal state; terminal state must not have an action.
+        assert set(policy.actions.keys()) == {0, 1, 2}
+
+    def test_execution_graph_wraps_policy(self, mock_objective_scorer):
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+        steps = [_make_stub_step(name="s0"), _make_stub_step(name="s1")]
+        graph = scenario._build_execution_graph(steps=steps)
+
+        assert isinstance(graph, StrategyGraph)
+        assert graph.policy.initial_state == 0
+        assert graph.policy.terminal_states == frozenset({2})
+
+    async def test_event_loop_visits_each_step_exactly_once_and_terminates(self, mock_objective_scorer):
+        # Guards against infinite loops and re-entry: each step's
+        # process_async must fire once and the graph must reach the terminal
+        # state without revisiting any state.
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+        steps = [_make_stub_step(name=f"s{i}", outcome="exhausted") for i in range(4)]
+        graph = scenario._build_execution_graph(steps=steps)
+
+        states_visited: list[int] = []
+        results: list[ScenarioStepResult] = []
+        async for result in graph.event_loop_async():
+            states_visited.append(graph.current_state)
+            results.append(result)
+
+        for step in steps:
+            assert step.process_async.call_count == 1
+        # history records (state_before, result) pairs for the four pre-terminal states.
+        assert [state for state, _ in graph.history] == [0, 1, 2, 3]
+        assert len(results) == 4
+        assert graph.is_terminal
+        assert graph.current_state == 4
+
+    async def test_action_preserves_step_outcome_label(self, mock_objective_scorer):
+        # The adaptive policy intentionally does NOT collapse outcomes to
+        # "completed" the way the default policy's AtomicAttack branch does;
+        # "success" and "exhausted" must propagate verbatim.
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+        success_step = _make_stub_step(name="ok", outcome="success")
+        exhausted_step = _make_stub_step(name="fail", outcome="exhausted")
+        graph = scenario._build_execution_graph(steps=[success_step, exhausted_step])
+
+        outcomes = [r.outcome async for r in graph.event_loop_async()]
+        assert outcomes == ["success", "exhausted"]
+
+    async def test_action_binds_current_step_on_graph(self, mock_objective_scorer):
+        # The adaptive _action wraps process_async with bind_current_step so
+        # external observers (e.g. the Scenario orchestrator) can read which
+        # step is running. Capture graph.current_step from inside the stub.
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+
+        observed: list[ScenarioStep | None] = []
+
+        async def _capture():
+            observed.append(graph.current_step)
+            return ScenarioStepResult(outcome="success")
+
+        spy_step = MagicMock(spec=ScenarioStep)
+        spy_step.name = "spy"
+        spy_step.outputs = ["success", "exhausted"]
+        spy_step.process_async = AsyncMock(side_effect=_capture)
+
+        graph = scenario._build_execution_graph(steps=[spy_step])
+        async for _ in graph.event_loop_async():
+            pass
+
+        assert observed == [spy_step]
+        # The finally block clears the binding after the action returns.
+        assert graph.current_step is None
+
+    async def test_adaptive_step_returning_success_runs_through_policy(
+        self, mock_objective_target, mock_objective_scorer
+    ):
+        # End-to-end-ish integration: a real AdaptiveStep instance plugged
+        # into the adaptive linear policy emits "success" as a real
+        # transition label (regression guard against the default policy's
+        # AtomicAttack-only dispatch path swallowing the outcome).
+        import random
+
+        from pyrit.scenario.scenarios.adaptive.dispatcher import TechniqueBundle
+        from pyrit.scenario.scenarios.adaptive.selector import AdaptiveTechniqueSelector
+
+        bundle_attack = MagicMock(name="bundle-attack")
+        bundle = TechniqueBundle(attack=bundle_attack)
+        seed_group = _make_seed_group(value="obj-x")
+        selector = AdaptiveTechniqueSelector(epsilon=0.0, pool_threshold=1, rng=random.Random(0))
+        step = AdaptiveStep(
+            atomic_attack_name="adaptive_x",
+            objective_target=mock_objective_target,
+            techniques={"a": bundle},
+            selector=selector,
+            seed_group=seed_group,
+        )
+
+        async def _stub_inner(*, bundle, attempt_labels):
+            return AttackResult(conversation_id="c", objective="obj-x", outcome=AttackOutcome.SUCCESS)
+
+        step._run_inner_attack_async = AsyncMock(side_effect=_stub_inner)  # type: ignore[method-assign]
+
+        scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
+        graph = scenario._build_execution_graph(steps=[step])
+        results = [r async for r in graph.event_loop_async()]
+
+        assert len(results) == 1
+        assert results[0].outcome == "success"
+        assert graph.is_terminal

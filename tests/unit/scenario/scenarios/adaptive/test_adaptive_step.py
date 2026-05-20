@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pyrit.models import AttackOutcome, AttackResult, SeedAttackGroup, SeedObjective
-from pyrit.scenario.core.scenario_step import ScenarioStepResult
+from pyrit.scenario.core.atomic_attack import AtomicAttack
+from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
 from pyrit.scenario.scenarios.adaptive.dispatcher import (
     ADAPTIVE_ATTEMPT_LABEL,
@@ -396,6 +397,63 @@ class TestIdentifier:
         nested = identifier.children["techniques"]
         assert isinstance(nested, list)
         assert [child.class_name for child in nested] == ["A", "B"]
+
+    def test_identifier_is_stable_under_reversed_technique_order(self, target, selector, seed_group):
+        # The _build_identifier sort key (`sorted(self._techniques.items())`)
+        # must collapse reversed input dicts to the same identifier, otherwise
+        # step_identifier hashes would drift between runs that pick the same
+        # techniques in different insertion orders.
+        from pyrit.identifiers import ComponentIdentifier
+
+        bundle_a = _make_bundle(name="a", outcomes=[AttackOutcome.SUCCESS])
+        bundle_b = _make_bundle(name="b", outcomes=[AttackOutcome.SUCCESS])
+        bundle_a.attack.get_identifier.return_value = ComponentIdentifier(class_name="A", class_module="test")
+        bundle_b.attack.get_identifier.return_value = ComponentIdentifier(class_name="B", class_module="test")
+
+        def _make(techniques):
+            return AdaptiveStep(
+                atomic_attack_name="step-id",
+                objective_target=target,
+                techniques=techniques,
+                selector=selector,
+                seed_group=seed_group,
+                max_attempts_per_objective=5,
+                adaptive_context="violence",
+            )
+
+        forward = _make({"a": bundle_a, "b": bundle_b}).get_identifier()
+        reversed_ = _make({"b": bundle_b, "a": bundle_a}).get_identifier()
+        assert forward == reversed_
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestScenarioStepIdentity:
+    """Phase 6b invariant: AdaptiveStep is a ScenarioStep, NOT an AtomicAttack."""
+
+    def test_is_scenario_step_not_atomic_attack(self, target, selector, seed_group):
+        step = AdaptiveStep(
+            atomic_attack_name="step",
+            objective_target=target,
+            techniques={"a": _make_bundle(name="a", outcomes=[AttackOutcome.SUCCESS])},
+            selector=selector,
+            seed_group=seed_group,
+        )
+        assert isinstance(step, ScenarioStep)
+        assert not isinstance(step, AtomicAttack)
+
+    def test_name_aliases_atomic_attack_name_for_resume_bookkeeping(self, target, selector, seed_group):
+        # The orchestrator's resume filter reads ``step.name`` uniformly across
+        # step types; AdaptiveStep must alias it to atomic_attack_name without
+        # subclassing AtomicAttack.
+        step = AdaptiveStep(
+            atomic_attack_name="step-resume-key",
+            objective_target=target,
+            techniques={"a": _make_bundle(name="a", outcomes=[AttackOutcome.SUCCESS])},
+            selector=selector,
+            seed_group=seed_group,
+        )
+        assert step.name == "step-resume-key"
+        assert step.name == step.atomic_attack_name
 
 
 @pytest.mark.usefixtures("patch_central_database")
