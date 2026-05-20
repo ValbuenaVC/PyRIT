@@ -353,3 +353,77 @@ class TestOpaqueRoleNotElicitableError:
     def test_is_not_implemented_error(self):
         """Allows callers to use the broader ``NotImplementedError`` catch."""
         assert issubclass(OpaqueRoleNotElicitableError, NotImplementedError)
+
+
+class TestCollectInputsWithRetryPropagation:
+    """Pin that non-``ScenarioInputValidationError`` exceptions propagate immediately.
+
+    The retry loop must only catch :class:`ScenarioInputValidationError`; every other
+    exception type (including :class:`OpaqueRoleNotElicitableError`,
+    :class:`KeyboardInterrupt`, or any unrelated ``Exception``) must escape on the
+    first attempt so the wizard's outer handler can present the correct guidance.
+    Without this guarantee, an over-broad ``except`` in the retry loop would burn
+    the entire ``max_attempts`` budget on an unrecoverable error before raising
+    ``MaxAttemptsExceededError`` — masking the original cause from the wizard.
+    """
+
+    def test_opaque_role_not_elicitable_error_propagates_immediately(self):
+        class _OpaqueRaiser:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def collect(self, *, role: RoleDescriptor, error: Exception | None = None, attempt: int = 0) -> Any:
+                self.call_count += 1
+                raise OpaqueRoleNotElicitableError(role.name)
+
+        collector = _OpaqueRaiser()
+        with pytest.raises(OpaqueRoleNotElicitableError) as exc_info:
+            collect_inputs_with_retry(collector=collector, schema=[_scalar_role(name="atomic")], max_attempts=5)
+        assert exc_info.value.role_name == "atomic"
+        assert collector.call_count == 1, "Opaque error must NOT burn retry budget"
+
+    def test_unrelated_exception_propagates_immediately(self):
+        """A generic ``RuntimeError`` from a collector escapes without retry."""
+
+        class _BoomCollector:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def collect(self, *, role: RoleDescriptor, error: Exception | None = None, attempt: int = 0) -> Any:
+                self.call_count += 1
+                raise RuntimeError("kaboom")
+
+        collector = _BoomCollector()
+        with pytest.raises(RuntimeError, match="kaboom"):
+            collect_inputs_with_retry(collector=collector, schema=[_scalar_role()], max_attempts=5)
+        assert collector.call_count == 1
+
+    def test_keyboard_interrupt_propagates_immediately(self):
+        """``KeyboardInterrupt`` (BaseException) must not be swallowed."""
+
+        class _CtrlC:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def collect(self, *, role: RoleDescriptor, error: Exception | None = None, attempt: int = 0) -> Any:
+                self.call_count += 1
+                raise KeyboardInterrupt
+
+        collector = _CtrlC()
+        with pytest.raises(KeyboardInterrupt):
+            collect_inputs_with_retry(collector=collector, schema=[_scalar_role()], max_attempts=5)
+        assert collector.call_count == 1
+
+    def test_opaque_error_on_later_role_does_not_keep_prior_attempts(self):
+        """Opaque error mid-schema raises cleanly, no MaxAttemptsExceededError swallow."""
+
+        class _MixedCollector:
+            def collect(self, *, role: RoleDescriptor, error: Exception | None = None, attempt: int = 0) -> Any:
+                if role.name == "first":
+                    return "ok"
+                raise OpaqueRoleNotElicitableError(role.name)
+
+        schema = [_scalar_role(name="first"), _opaque_role(name="second")]
+        with pytest.raises(OpaqueRoleNotElicitableError) as exc_info:
+            collect_inputs_with_retry(collector=_MixedCollector(), schema=schema, max_attempts=5)
+        assert exc_info.value.role_name == "second"
