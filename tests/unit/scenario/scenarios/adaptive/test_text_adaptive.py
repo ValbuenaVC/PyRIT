@@ -147,6 +147,38 @@ class TestTextAdaptiveBasics:
         assert scenario._max_attempts_per_objective == 7
         assert scenario._seed == 42
 
+    @patch("pyrit.scenario.core.scenario.Scenario._get_default_objective_scorer")
+    @pytest.mark.parametrize("bad_epsilon", [-0.01, 1.01, 2.0, -1.0])
+    def test_init_rejects_epsilon_out_of_range(self, mock_get_scorer, mock_objective_scorer, bad_epsilon):
+        # The inner ``AdaptiveTechniqueSelector`` already validates this, but
+        # only when ``_get_atomic_attacks_async`` is called from
+        # ``initialize_async`` — i.e. after the wizard / programmatic caller
+        # has already committed inputs. Fail fast at __init__ so the input
+        # is rejected at the elicitation surface declared by ``input_schema``.
+        mock_get_scorer.return_value = mock_objective_scorer
+        with pytest.raises(ValueError, match=r"epsilon must be in \[0.0, 1.0\]"):
+            TextAdaptive(epsilon=bad_epsilon)
+
+    @patch("pyrit.scenario.core.scenario.Scenario._get_default_objective_scorer")
+    @pytest.mark.parametrize("bad_pool_threshold", [0, -1, -100])
+    def test_init_rejects_pool_threshold_below_one(self, mock_get_scorer, mock_objective_scorer, bad_pool_threshold):
+        # Same fail-late pattern: ``AdaptiveTechniqueSelector.__init__`` validates,
+        # but lazily. Surface the rejection at the constructor.
+        mock_get_scorer.return_value = mock_objective_scorer
+        with pytest.raises(ValueError, match="pool_threshold must be >= 1"):
+            TextAdaptive(pool_threshold=bad_pool_threshold)
+
+    @patch("pyrit.scenario.core.scenario.Scenario._get_default_objective_scorer")
+    @pytest.mark.parametrize("bad_max_attempts", [0, -1, -10])
+    def test_init_rejects_max_attempts_below_one(self, mock_get_scorer, mock_objective_scorer, bad_max_attempts):
+        # ``AdaptiveStep.__init__`` validates this, but each step is built only
+        # inside ``_build_step_for_seed_group`` (called by
+        # ``_get_atomic_attacks_async``). Pull the check up to the outer
+        # scenario constructor so the wizard surface fails fast.
+        mock_get_scorer.return_value = mock_objective_scorer
+        with pytest.raises(ValueError, match="max_attempts_per_objective must be >= 1"):
+            TextAdaptive(max_attempts_per_objective=bad_max_attempts)
+
 
 @pytest.mark.usefixtures(*FIXTURES)
 class TestTextAdaptiveAtomicAttacks:

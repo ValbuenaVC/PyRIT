@@ -90,7 +90,25 @@ class AdaptiveScenario(Scenario):
             context_extractor (ContextExtractor): Maps a ``SeedAttackGroup`` to a
                 context key. Defaults to ``global_context``.
             scenario_result_id (str | None): ID of an existing ``ScenarioResult`` to resume.
+
+        Raises:
+            ValueError: If ``epsilon`` is outside [0.0, 1.0], ``pool_threshold`` < 1,
+                or ``max_attempts_per_objective`` < 1.
         """
+        # Validate scalar inputs eagerly. ``AdaptiveTechniqueSelector`` and
+        # ``AdaptiveStep`` perform the same checks, but only when constructed
+        # lazily inside ``_get_atomic_attacks_async`` (called from
+        # ``initialize_async``). Failing fast at __init__ matches the
+        # elicitation surface advertised by ``input_schema`` so wizard /
+        # programmatic callers get the error on the same line they supplied
+        # the input.
+        if not 0.0 <= epsilon <= 1.0:
+            raise ValueError(f"epsilon must be in [0.0, 1.0], got {epsilon}")
+        if pool_threshold < 1:
+            raise ValueError(f"pool_threshold must be >= 1, got {pool_threshold}")
+        if max_attempts_per_objective < 1:
+            raise ValueError(f"max_attempts_per_objective must be >= 1, got {max_attempts_per_objective}")
+
         if not objective_scorer:
             objective_scorer = self._get_default_objective_scorer()
         self._objective_scorer: TrueFalseScorer = objective_scorer
