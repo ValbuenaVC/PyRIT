@@ -140,9 +140,7 @@ class TestAtomicAttackScenarioStepShape:
 class TestAtomicAttackProcessAsync:
     """``process_async`` wraps ``run_async`` into a ``ScenarioStepResult``."""
 
-    async def test_returns_scenario_step_result_with_done_outcome(
-        self, mock_attack, seed_groups, attack_results
-    ):
+    async def test_returns_scenario_step_result_with_done_outcome(self, mock_attack, seed_groups, attack_results):
         atomic = AtomicAttack(
             attack_technique=AttackTechnique(attack=mock_attack),
             seed_groups=seed_groups,
@@ -161,9 +159,7 @@ class TestAtomicAttackProcessAsync:
         assert result.outcome == "done"
         assert result.attack_results == attack_results
 
-    async def test_metadata_carries_incomplete_objectives(
-        self, mock_attack, seed_groups, attack_results
-    ):
+    async def test_metadata_carries_incomplete_objectives(self, mock_attack, seed_groups, attack_results):
         atomic = AtomicAttack(
             attack_technique=AttackTechnique(attack=mock_attack),
             seed_groups=seed_groups,
@@ -213,3 +209,56 @@ class TestAtomicAttackProcessAsync:
         assert result.outcome == "done"
         assert result.attack_results == []
         assert len(result.metadata["incomplete_objectives"]) == 1
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestAtomicAttackFilterSeedGroupsByObjectives:
+    """``filter_seed_groups_by_objectives`` is part of the duck-typed ScenarioStep surface."""
+
+    def test_remaining_objectives_is_keyword_only(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        with pytest.raises(TypeError):
+            atomic.filter_seed_groups_by_objectives(["obj1"])  # type: ignore[misc]
+
+    def test_filter_drops_groups_not_in_remaining(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        atomic.filter_seed_groups_by_objectives(remaining_objectives=["obj2"])
+        assert atomic.objectives == ["obj2"]
+        assert len(atomic.seed_groups) == 1
+
+    def test_filter_keeps_all_when_all_remain(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        atomic.filter_seed_groups_by_objectives(remaining_objectives=["obj1", "obj2"])
+        assert atomic.objectives == ["obj1", "obj2"]
+        assert len(atomic.seed_groups) == 2
+
+    def test_filter_drops_all_when_none_remain(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        atomic.filter_seed_groups_by_objectives(remaining_objectives=[])
+        assert atomic.objectives == []
+        assert atomic.seed_groups == []
+
+    def test_filter_ignores_unknown_objectives(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        atomic.filter_seed_groups_by_objectives(remaining_objectives=["obj1", "does_not_exist"])
+        assert atomic.objectives == ["obj1"]
