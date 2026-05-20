@@ -572,3 +572,94 @@ class TestUnwrapOptional:
         """A non-type annotation (e.g., string forward ref) returns None."""
         result = AttackTechniqueFactory._unwrap_optional("SomeForwardRef")
         assert result is None
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestFactoryAtomicAttackGraphIntegration:
+    """End-to-end wiring: factory → AttackTechnique → AtomicAttack → Scenario graph.
+
+    Pins that an ``AttackTechnique`` produced by ``AttackTechniqueFactory.create()``
+    plugs into ``AtomicAttack`` and is driven through ``Scenario.run_async``'s
+    Phase 5 ``StrategyGraph`` orchestrator without per-component glue.
+    """
+
+    async def test_factory_produced_technique_runs_through_scenario_graph(self):
+        from unittest.mock import AsyncMock, patch
+
+        from pyrit.executor.attack import AttackExecutor
+        from pyrit.executor.attack.core import AttackExecutorResult
+        from pyrit.models import (
+            AttackOutcome,
+            AttackResult,
+            SeedAttackGroup,
+            SeedObjective,
+        )
+        from pyrit.scenario import AtomicAttack, ScenarioResult
+
+        # Local import to keep collection-time light and avoid coupling with the
+        # factory-only test suite.
+        from tests.unit.scenario.test_scenario_graph_execution import _GraphConcreteScenario
+
+        objective_target = MagicMock(spec=PromptTarget)
+        objective_target.get_identifier.return_value = ComponentIdentifier(
+            class_name="MockTarget",
+            class_module="tests.unit",
+        )
+        scoring_config = MagicMock(spec=AttackScoringConfig)
+
+        factory = AttackTechniqueFactory(attack_class=_StubAttack)
+        technique = factory.create(
+            objective_target=objective_target,
+            attack_scoring_config=scoring_config,
+        )
+        assert isinstance(technique, AttackTechnique)
+        assert isinstance(technique.attack, _StubAttack)
+
+        seed_group = SeedAttackGroup(seeds=[SeedObjective(value="integration_obj")])
+        atomic = AtomicAttack(
+            atomic_attack_name="integration_step",
+            attack_technique=technique,
+            seed_groups=[seed_group],
+        )
+
+        canned_result = AttackResult(
+            conversation_id="conv-integration",
+            objective="integration_obj",
+            outcome=AttackOutcome.SUCCESS,
+            executed_turns=1,
+        )
+        scenario = _GraphConcreteScenario(
+            name="FactoryIntegration",
+            version=1,
+            atomic_attacks_to_return=[atomic],
+        )
+        await scenario.initialize_async(objective_target=objective_target)
+
+        # The real AttackExecutor persists each AttackResult before returning. Our patched
+        # executor must do the same so the scenario can rehydrate results from memory at
+        # ``get_scenario_results`` time.
+        async def _fake_execute(*args, **kwargs):
+            from pyrit.memory import CentralMemory
+
+            CentralMemory.get_memory_instance().add_attack_results_to_memory(attack_results=[canned_result])
+            return AttackExecutorResult(
+                completed_results=[canned_result],
+                incomplete_objectives=[],
+                input_indices=[0],
+            )
+
+        with patch.object(AttackExecutor, "execute_attack_from_seed_groups_async", new_callable=AsyncMock) as mock_exec:
+            mock_exec.side_effect = _fake_execute
+            result = await scenario.run_async()
+
+        assert isinstance(result, ScenarioResult)
+        assert "integration_step" in result.attack_results
+        assert len(result.attack_results["integration_step"]) == 1
+        # The orchestrator must have stamped a step_identifier on the factory-produced
+        # technique's result during graph execution.
+        stamped = result.attack_results["integration_step"][0].step_identifier
+        assert stamped is not None
+        assert stamped.class_name == "ScenarioStep"
+        # The executor should have received the very ``_StubAttack`` instance the factory built.
+        forwarded_attack = mock_exec.call_args.kwargs["attack"]
+        assert forwarded_attack is technique.attack

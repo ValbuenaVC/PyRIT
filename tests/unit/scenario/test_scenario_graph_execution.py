@@ -158,7 +158,9 @@ class TestBuildExecutionGraph:
     async def test_default_graph_terminates_at_len_steps(self, mock_objective_target):
         attacks = [_make_atomic_attack_mock(f"a{i}", _sample_result(i)) for i in range(3)]
         scenario = _GraphConcreteScenario(
-            name="Default", version=1, atomic_attacks_to_return=attacks,
+            name="Default",
+            version=1,
+            atomic_attacks_to_return=attacks,
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
@@ -173,7 +175,9 @@ class TestBuildExecutionGraph:
     async def test_explicit_steps_override_atomic_attacks(self, mock_objective_target):
         attacks = [_make_atomic_attack_mock(f"a{i}", _sample_result(i)) for i in range(3)]
         scenario = _GraphConcreteScenario(
-            name="Default", version=1, atomic_attacks_to_return=attacks,
+            name="Default",
+            version=1,
+            atomic_attacks_to_return=attacks,
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
@@ -194,7 +198,9 @@ class TestExecutionGraphPropertyAndHistory:
     async def test_run_async_populates_graph_and_history(self, mock_objective_target):
         attacks = [_make_atomic_attack_mock(f"a{i}", _sample_result(i)) for i in range(2)]
         scenario = _GraphConcreteScenario(
-            name="Populated", version=1, atomic_attacks_to_return=attacks,
+            name="Populated",
+            version=1,
+            atomic_attacks_to_return=attacks,
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
@@ -214,7 +220,9 @@ class TestStepIdentifierStamping:
     async def test_each_result_has_step_identifier(self, mock_objective_target):
         attacks = [_make_atomic_attack_mock(f"a{i}", _sample_result(i)) for i in range(2)]
         scenario = _GraphConcreteScenario(
-            name="Stamping", version=1, atomic_attacks_to_return=attacks,
+            name="Stamping",
+            version=1,
+            atomic_attacks_to_return=attacks,
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
@@ -250,7 +258,9 @@ class TestStepIdentifierStamping:
         attack.run_async = MagicMock(side_effect=_run_returning_stamped)
 
         scenario = _GraphConcreteScenario(
-            name="Pre-stamped", version=1, atomic_attacks_to_return=[attack],
+            name="Pre-stamped",
+            version=1,
+            atomic_attacks_to_return=[attack],
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
@@ -266,13 +276,120 @@ class TestStepIdentifierStamping:
 
 
 @pytest.mark.usefixtures("patch_central_database")
+class TestStepIdentifierStampingNoDuplication:
+    """The orchestrator's per-step ``update_attack_result_by_id`` enrichment must
+    not introduce duplicate ``AttackResultEntry`` rows.
+
+    Phase 5 routes results through ``StrategyGraph`` and enriches each result with
+    a ``step_identifier`` via ``update_attack_result_by_id``. The inner attack is
+    the sole insert site (mirrored here by ``_save_results_to_memory``); the
+    orchestrator only updates. This regression test guards against accidentally
+    flipping the update into an insert.
+    """
+
+    async def test_no_duplicate_attack_results_after_run(self, mock_objective_target):
+        # Two atomic attacks, one result each → memory should hold exactly 2 rows.
+        attacks = [_make_atomic_attack_mock(f"a{i}", _sample_result(i)) for i in range(2)]
+        scenario = _GraphConcreteScenario(
+            name="Dedup",
+            version=1,
+            atomic_attacks_to_return=attacks,
+        )
+        await scenario.initialize_async(objective_target=mock_objective_target)
+
+        await scenario.run_async()
+
+        memory = CentralMemory.get_memory_instance()
+        persisted = memory.get_attack_results()
+        assert len(persisted) == 2
+        # Each persisted row must carry the step_identifier stamped by the orchestrator.
+        for ar in persisted:
+            assert ar.step_identifier is not None
+            assert ar.step_identifier.class_name == "ScenarioStep"
+
+    async def test_no_duplicate_results_for_multi_result_step(self, mock_objective_target):
+        # One atomic attack returning two results — still exactly two rows after stamping.
+        result_a = _sample_result(0)
+        result_b = _sample_result(1)
+        attack = _make_atomic_attack_mock("multi", result_a)
+
+        async def _run_multi(*args, **kwargs):
+            _save_results_to_memory([result_a, result_b])
+            return AttackExecutorResult(completed_results=[result_a, result_b], incomplete_objectives=[])
+
+        attack.run_async = MagicMock(side_effect=_run_multi)
+
+        scenario = _GraphConcreteScenario(
+            name="DedupMulti",
+            version=1,
+            atomic_attacks_to_return=[attack],
+        )
+        await scenario.initialize_async(objective_target=mock_objective_target)
+
+        await scenario.run_async()
+
+        persisted = CentralMemory.get_memory_instance().get_attack_results()
+        assert len(persisted) == 2
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestExecutionGraphRebuildOnRetry:
+    """The execution graph is rebuilt from resume-filtered steps on each attempt.
+
+    After a failed attempt, the next attempt's ``execution_graph`` must reflect
+    only the still-pending steps. This pins the Phase 5 contract that
+    ``_build_execution_graph(steps=remaining_attacks)`` is invoked per attempt.
+    """
+
+    async def test_graph_terminal_states_shrink_after_partial_success(self, mock_objective_target):
+        # Attack 1 always succeeds; attack 2 fails once then succeeds.
+        attack_success = _make_atomic_attack_mock("a_success", _sample_result(0))
+
+        call_count = [0]
+        result_second = _sample_result(1)
+
+        async def _run_flaky(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("first attempt failure")
+            _save_results_to_memory([result_second])
+            return AttackExecutorResult(completed_results=[result_second], incomplete_objectives=[])
+
+        attack_flaky = _make_atomic_attack_mock("a_flaky", result_second)
+        attack_flaky.run_async = MagicMock(side_effect=_run_flaky)
+        # Mock the resume filter; orchestrator drops attacks whose objectives are all done.
+        attack_success.filter_seed_groups_by_objectives = MagicMock()
+        attack_flaky.filter_seed_groups_by_objectives = MagicMock()
+
+        scenario = _GraphConcreteScenario(
+            name="RebuildOnRetry",
+            version=1,
+            atomic_attacks_to_return=[attack_success, attack_flaky],
+        )
+        await scenario.initialize_async(objective_target=mock_objective_target, max_retries=1)
+
+        await scenario.run_async()
+
+        # After retry, the graph should reflect only the one remaining step (attack_flaky).
+        # ``execution_graph`` holds the most-recent attempt's graph.
+        graph = scenario.execution_graph
+        assert graph is not None
+        assert graph.policy.terminal_states == frozenset({1})
+        # Sanity: the flaky attack ran twice (initial + retry); the success attack only once.
+        assert call_count[0] == 2
+        attack_success.run_async.assert_called_once()
+
+
+@pytest.mark.usefixtures("patch_central_database")
 class TestMaxConcurrencyPropagation:
     """``max_concurrency`` flows from the scenario through the default linear policy."""
 
     async def test_atomic_attack_receives_scenario_max_concurrency(self, mock_objective_target):
         attacks = [_make_atomic_attack_mock(f"a{i}", _sample_result(i)) for i in range(2)]
         scenario = _GraphConcreteScenario(
-            name="Concurrency", version=1, atomic_attacks_to_return=attacks,
+            name="Concurrency",
+            version=1,
+            atomic_attacks_to_return=attacks,
         )
         await scenario.initialize_async(objective_target=mock_objective_target, max_concurrency=7)
 
@@ -300,7 +417,9 @@ class TestPartialFailureSurfacing:
         attack.run_async = MagicMock(side_effect=_run_partial)
 
         scenario = _GraphConcreteScenario(
-            name="Partial", version=1, atomic_attacks_to_return=[attack],
+            name="Partial",
+            version=1,
+            atomic_attacks_to_return=[attack],
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
@@ -383,7 +502,9 @@ class TestNonAtomicAttackStepDispatch:
         step_b = _CountingStep(name="custom_b")
 
         scenario = _CustomStepScenario(
-            steps=[step_a, step_b], name="Custom-steps", version=1,
+            steps=[step_a, step_b],
+            name="Custom-steps",
+            version=1,
         )
         await scenario.initialize_async(objective_target=mock_objective_target)
 
