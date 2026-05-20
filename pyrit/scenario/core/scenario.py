@@ -36,8 +36,14 @@ from pyrit.registry import ScorerRegistry
 from pyrit.scenario.core.atomic_attack import AtomicAttack
 from pyrit.scenario.core.attack_technique import AttackTechnique
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
+from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.scenario_strategy import ScenarioStrategy
 from pyrit.scenario.core.scenario_target_defaults import get_default_scorer_target
+from pyrit.scenario.core.strategy_graph import (
+    PolicyAction,
+    StrategyGraph,
+    StrategyPolicy,
+)
 from pyrit.score import (
     Scorer,
     SelfAskRefusalScorer,
@@ -238,6 +244,15 @@ class Scenario(ABC):
         # before _get_atomic_attacks_async is awaited so overrides can read it.
         self._include_baseline: bool = False
 
+        # Phase 5: state-machine view over the scenario's steps. Built lazily in
+        # _execute_scenario_async from self._atomic_attacks after the resume filter
+        # has been applied. Stays None until the first execution attempt.
+        # The default ``_build_execution_graph`` uses ``int`` as the state type; we
+        # store as ``StrategyGraph[ScenarioStep, Any]`` so subclasses that override
+        # the builder with a string/Enum state type can stash their graph here too
+        # without invariance fights.
+        self._execution_graph: Optional[StrategyGraph[ScenarioStep, Any]] = None
+
         # Deprecated constructor-time baseline override. Will be removed in 0.16.0, along
         # with the include_default_baseline kwarg above and the legacy fallback branch in
         # initialize_async. Subclass shims set this attribute directly to avoid double-warning.
@@ -259,6 +274,35 @@ class Scenario(ABC):
     def atomic_attack_count(self) -> int:
         """Get the number of atomic attacks in this scenario."""
         return len(self._atomic_attacks)
+
+    @property
+    def execution_graph(self) -> Optional[StrategyGraph[ScenarioStep, Any]]:
+        """
+        The ``StrategyGraph`` driving this scenario's current execution attempt.
+
+        Built in ``_execute_scenario_async`` from the steps that remain after the
+        resume filter; ``None`` before the first call to ``run_async`` (or any
+        time outside of an active execution attempt).
+
+        Subclasses can override ``_build_execution_graph`` to declare a richer
+        state-machine policy; the default uses ``_build_default_linear_policy``
+        to wrap ``self._atomic_attacks`` in a linear traversal that matches the
+        legacy flat ``_execute_scenario_async`` loop exactly.
+        """
+        return self._execution_graph
+
+    @property
+    def execution_history(self) -> list[ScenarioStepResult]:
+        """
+        Ordered list of step results produced by the current execution attempt.
+
+        Empty when no graph has been built yet, or between retry attempts that
+        reset the graph. Each entry is the ``ScenarioStepResult`` yielded by a
+        step's policy action, in execution order.
+        """
+        if self._execution_graph is None:
+            return []
+        return [result for _, result in self._execution_graph.history]
 
     @classmethod
     @abstractmethod
@@ -1043,28 +1087,161 @@ class Scenario(ABC):
 
         return atomic_attacks
 
-    async def run_async(self) -> ScenarioResult:
+    def _build_execution_graph(
+        self, *, steps: Optional[Sequence[ScenarioStep]] = None
+    ) -> StrategyGraph[ScenarioStep, int]:
         """
-        Execute all atomic attacks in the scenario sequentially.
+        Build the ``StrategyGraph`` that drives this execution attempt.
 
-        Each AtomicAttack is executed in order, and all results are aggregated
-        into a ScenarioResult containing the scenario metadata and all attack results.
-        This method supports resumption - if the scenario raises an exception partway through,
-        calling run_async again will skip already-completed objectives.
+        Default implementation wraps the supplied ``steps`` (or, if omitted,
+        ``self._atomic_attacks``) in a linear policy via
+        ``_build_default_linear_policy``. This produces a graph whose traversal
+        is identical to the legacy flat ``_execute_scenario_async`` loop, so
+        scenarios that haven't opted into a richer policy see no behavior
+        change.
 
-        If max_retries is set, the scenario will automatically retry after an exception up to
-        the specified number of times. Each retry will resume from where it left off,
-        skipping completed objectives.
+        Subclasses with a state-machine flavor (rapid-response, adaptive,
+        branching) override this to author their own ``StrategyPolicy`` and
+        pass it to ``StrategyGraph``. Such overrides should still consume
+        ``self._atomic_attacks`` as the seed of their step inventory so the
+        existing resume-by-name path keeps working through Phase 5.
+
+        Args:
+            steps (Optional[Sequence[ScenarioStep]]): Steps to drive. ``None``
+                falls back to ``self._atomic_attacks``. ``_execute_scenario_async``
+                passes the resume-filtered list explicitly so already-completed
+                steps are not re-executed.
 
         Returns:
-            ScenarioResult: Contains scenario identifier and aggregated list of all
-                attack results from all atomic attacks.
+            StrategyGraph[ScenarioStep, int]: The graph that ``run_async``
+                will iterate.
 
         Raises:
-            ValueError: If the scenario has no atomic attacks configured. If your scenario
-                requires initialization, call await scenario.initialize() first.
-            ValueError: If the scenario raises an exception after exhausting all retry attempts.
-            RuntimeError: If the scenario fails for any other reason while executing.
+            ValueError: If ``steps`` is empty (or unset and there are no
+                atomic attacks).
+        """
+        effective_steps = list(steps) if steps is not None else list(self._atomic_attacks)
+        if not effective_steps:
+            raise ValueError(
+                "Cannot build an execution graph with no steps. Either initialize the "
+                "scenario via ``await scenario.initialize_async(...)`` so atomic attacks are "
+                "populated, or override ``_build_execution_graph`` to supply your own steps."
+            )
+        return StrategyGraph(policy=self._build_default_linear_policy(steps=effective_steps))
+
+    def _build_default_linear_policy(
+        self, *, steps: Sequence[ScenarioStep]
+    ) -> StrategyPolicy[ScenarioStep, int]:
+        """
+        Build a linear-traversal policy that preserves scenario-level execution params.
+
+        Each policy action runs ``steps[i]`` and transitions to state ``i + 1``;
+        state ``len(steps)`` is the sole terminal state. For ``AtomicAttack``
+        steps the action calls ``run_async`` directly so ``max_concurrency`` and
+        ``return_partial_on_failure`` semantics that the legacy flat loop relied
+        on are preserved. Non-``AtomicAttack`` steps fall back to
+        ``process_async`` (so any future custom ``ScenarioStep`` subclass works
+        out of the box). In both paths the step's ``name`` is stamped into
+        ``ScenarioStepResult.metadata['step_name']`` so the orchestrator can
+        identify the step at yield time.
+
+        Args:
+            steps (Sequence[ScenarioStep]): The steps to wrap. Must be non-empty.
+
+        Returns:
+            StrategyPolicy[ScenarioStep, int]: A frozen linear policy.
+
+        Raises:
+            ValueError: If ``steps`` is empty.
+        """
+        if not steps:
+            raise ValueError("_build_default_linear_policy requires at least one step.")
+
+        max_concurrency = self._max_concurrency
+        terminal_state = len(steps)
+        actions: dict[int, PolicyAction[ScenarioStep, int]] = {}
+
+        for index, step in enumerate(steps):
+
+            async def _action(
+                graph: StrategyGraph[ScenarioStep, int],
+                _step: ScenarioStep = step,
+                _next: int = index + 1,
+                _max_concurrency: int = max_concurrency,
+            ) -> tuple[int, ScenarioStepResult | None]:
+                graph.bind_current_step(step=_step)
+                try:
+                    if isinstance(_step, AtomicAttack):
+                        executor_result = await _step.run_async(
+                            max_concurrency=_max_concurrency,
+                            return_partial_on_failure=True,
+                        )
+                        result: ScenarioStepResult | None = ScenarioStepResult(
+                            outcome="done",
+                            attack_results=list(executor_result.completed_results),
+                            metadata={
+                                "step_name": _step.atomic_attack_name,
+                                "incomplete_objectives": list(executor_result.incomplete_objectives),
+                                "input_indices": list(executor_result.input_indices),
+                            },
+                        )
+                    else:
+                        base_result = await _step.process_async()
+                        # Re-stamp metadata with step_name so the orchestrator can route results
+                        # without depending on graph.current_step (which is cleared before yield).
+                        merged_metadata = {"step_name": _step.name, **base_result.metadata}
+                        result = ScenarioStepResult(
+                            outcome=base_result.outcome,
+                            attack_results=base_result.attack_results,
+                            step_identifier=base_result.step_identifier,
+                            metadata=merged_metadata,
+                        )
+                finally:
+                    graph.bind_current_step(step=None)
+                return _next, result
+
+            actions[index] = _action
+
+        return StrategyPolicy(
+            actions=actions,
+            initial_state=0,
+            terminal_states=frozenset({terminal_state}),
+        )
+
+    async def run_async(self) -> ScenarioResult:
+        """
+        Execute the scenario by walking its ``StrategyGraph``.
+
+        Each ``ScenarioStep`` produces a ``ScenarioStepResult`` whose attack
+        results are persisted in order and tagged with a ``step_identifier``
+        so step-level filtering and grouping work alongside the existing
+        ``atomic_attack_identifier`` lineage. The default execution graph
+        produced by ``_build_execution_graph`` is a linear traversal of
+        ``self._atomic_attacks``, so scenarios that have not opted into a
+        richer policy see the same end-to-end behavior as before.
+
+        The graph is rebuilt at the start of every execution attempt from the
+        resume-filtered step list, so calling ``run_async`` after a partial
+        failure skips already-completed work the same way the legacy flat
+        loop did. ``self.execution_graph`` and ``self.execution_history``
+        expose the current attempt's state.
+
+        If ``max_retries`` is set, the scenario will automatically retry after
+        an exception up to the specified number of times. Each retry rebuilds
+        the graph from the current remaining steps.
+
+        Returns:
+            ScenarioResult: Contains scenario identifier and aggregated list of
+                attack results from every step that ran.
+
+        Raises:
+            ValueError: If the scenario has no atomic attacks configured. If your
+                scenario requires initialization, call
+                ``await scenario.initialize_async()`` first.
+            ValueError: If the scenario raises an exception after exhausting all
+                retry attempts.
+            RuntimeError: If the scenario fails for any other reason while
+                executing.
 
         Example:
             >>> result = await scenario.run_async()
@@ -1123,18 +1300,28 @@ class Scenario(ABC):
         """
         Perform a single execution attempt of the scenario.
 
-        This method contains the core execution logic and can be called multiple times
-        for retry attempts. It increments the try counter, executes remaining atomic attacks,
-        and returns the scenario result.
+        Iterates ``self.execution_graph.event_loop_async()`` and applies the
+        same per-step persistence, partial-failure handling, and retry
+        semantics that the legacy flat loop applied per-``AtomicAttack``. The
+        graph is built once per execution attempt from the resume-filtered
+        ``self._atomic_attacks`` so already-completed steps are skipped.
 
         Returns:
             ScenarioResult: The result of this execution attempt.
 
         Raises:
-            Exception: Any exception that occurs during scenario execution.
-            ValueError: If a lookup for a scenario for a given ID fails.
-            ValueError: If atomic attack execution fails.
+            ValueError: If ``self._scenario_result_id`` is missing or any
+                step partially fails.
+            Exception: Any exception raised while executing a step is logged,
+                the scenario is marked ``FAILED``, and the exception is re-raised.
         """
+        # Lazy import to avoid module-level circularity: build_step_identifier
+        # lives in pyrit.identifiers which itself imports several pyrit.models
+        # types that the scenario module re-exports indirectly.
+        from pyrit.identifiers.evaluation_identifier import StepEvaluationIdentifier
+        from pyrit.identifiers.step_identifier import build_step_identifier
+        from pyrit.memory.memory_models import MAX_IDENTIFIER_VALUE_LENGTH
+
         logger.info(f"Starting scenario '{self._name}' execution with {len(self._atomic_attacks)} atomic attacks")
 
         # Type narrowing: _scenario_result_id is guaranteed to be non-None at this point
@@ -1177,105 +1364,147 @@ class Scenario(ABC):
         # Mark scenario as in progress
         self._memory.update_scenario_run_state(scenario_result_id=scenario_result_id, scenario_run_state="IN_PROGRESS")
 
-        # Calculate starting index based on completed attacks
-        completed_count = len(self._atomic_attacks) - len(remaining_attacks)
+        # Build a fresh execution graph from the resume-filtered steps for this attempt.
+        # We always rebuild on retry so the policy reflects the currently-pending work.
+        self._execution_graph = self._build_execution_graph(steps=remaining_attacks)
+
+        # Calculate starting index based on completed attacks (for progress bar continuity).
+        total_steps = len(self._atomic_attacks)
+        completed_count = total_steps - len(remaining_attacks)
+        progress = tqdm(
+            desc=f"Executing {self._name}",
+            unit="attack",
+            total=total_steps,
+            initial=completed_count,
+        )
+        step_position = completed_count
+        # Track the most recent step we attempted so a step-raised exception
+        # can still log the offending step's name. ``graph.current_step`` is
+        # cleared in the policy action's ``finally`` before the exception
+        # propagates, so it's not a reliable post-mortem source.
+        last_attempted_step_name: str = "<unknown_step>"
 
         try:
-            for i, atomic_attack in enumerate(
-                tqdm(
-                    remaining_attacks,
-                    desc=f"Executing {self._name}",
-                    unit="attack",
-                    total=len(self._atomic_attacks),
-                    initial=completed_count,
-                ),
-                start=completed_count + 1,
-            ):
-                logger.info(
-                    f"Executing atomic attack {i}/{len(self._atomic_attacks)} "
-                    f"('{atomic_attack.atomic_attack_name}') in scenario '{self._name}'"
-                )
+            try:
+                async for step_result in self._execution_graph.event_loop_async():
+                    step_position += 1
+                    step_name = step_result.metadata.get("step_name", "<unknown_step>")
+                    last_attempted_step_name = step_name
 
-                try:
-                    atomic_results = await atomic_attack.run_async(
-                        max_concurrency=self._max_concurrency,
-                        return_partial_on_failure=True,
+                    logger.info(
+                        f"Executing atomic attack {step_position}/{total_steps} "
+                        f"('{step_name}') in scenario '{self._name}'"
                     )
 
-                    # Always save completed results, even if some objectives didn't complete
-                    if atomic_results.completed_results:
+                    # Stamp step_identifier on every attack_result that doesn't already carry one.
+                    # Steps may opt into setting it themselves (e.g., adaptive scenarios with
+                    # nested attack executions); otherwise the default linear path stamps a
+                    # one-attack-per-step composite identifier here. We mirror
+                    # ``AtomicAttack._enrich_atomic_attack_identifiers``: populate the eval_hash
+                    # before truncation so it survives the DB round-trip, then push the enriched
+                    # identifier back to the AttackResultEntry row by attack_result_id.
+                    for attack_result in step_result.attack_results:
+                        if (
+                            attack_result.step_identifier is None
+                            and attack_result.atomic_attack_identifier is not None
+                        ):
+                            new_identifier = build_step_identifier(
+                                step_name=step_name,
+                                outcome=step_result.outcome,
+                                attack_execution_identifiers=[attack_result.atomic_attack_identifier],
+                            )
+                            if new_identifier.eval_hash is None:
+                                new_identifier = new_identifier.with_eval_hash(
+                                    StepEvaluationIdentifier(new_identifier).eval_hash
+                                )
+                            attack_result.step_identifier = new_identifier
+
+                        # Push the (newly-stamped or pre-stamped) step_identifier to the existing
+                        # AttackResultEntry so downstream ``get_scenario_results`` rehydrates it.
+                        if attack_result.step_identifier is not None and attack_result.attack_result_id:
+                            self._memory.update_attack_result_by_id(
+                                attack_result_id=attack_result.attack_result_id,
+                                update_fields={
+                                    "step_identifier": attack_result.step_identifier.to_dict(
+                                        max_value_length=MAX_IDENTIFIER_VALUE_LENGTH,
+                                    ),
+                                },
+                            )
+
+                    # Always save completed results, even if some objectives didn't complete.
+                    if step_result.attack_results:
                         await self._update_scenario_result_async(
-                            atomic_attack_name=atomic_attack.atomic_attack_name,
-                            attack_results=atomic_results.completed_results,
+                            atomic_attack_name=step_name,
+                            attack_results=step_result.attack_results,
                         )
 
-                    # Check if there were any incomplete objectives
-                    if atomic_results.has_incomplete:
-                        incomplete_count = len(atomic_results.incomplete_objectives)
-                        completed_count = len(atomic_results.completed_results)
+                    # Partial-failure handling. Only the AtomicAttack adapter path stuffs
+                    # ``incomplete_objectives`` into metadata today; custom ScenarioStep
+                    # subclasses opt in by populating the same key, so the same FAILED-state
+                    # path covers any future step that wants partial-failure semantics.
+                    incomplete_objectives = step_result.metadata.get("incomplete_objectives") or []
+                    if incomplete_objectives:
+                        incomplete_count = len(incomplete_objectives)
+                        completed_in_step = len(step_result.attack_results)
 
                         logger.error(
-                            f"Atomic attack {i}/{len(self._atomic_attacks)} "
-                            f"('{atomic_attack.atomic_attack_name}') partially completed: "
-                            f"{completed_count} completed, {incomplete_count} incomplete"
+                            f"Atomic attack {step_position}/{total_steps} "
+                            f"('{step_name}') partially completed: "
+                            f"{completed_in_step} completed, {incomplete_count} incomplete"
                         )
 
-                        # Log details of each incomplete objective
-                        for obj, exc in atomic_results.incomplete_objectives:
+                        for obj, exc in incomplete_objectives:
                             logger.error(f"  Incomplete objective '{obj[:50]}...': {str(exc)}")
 
-                        # Collect error attack result IDs from the exceptions
                         error_ids = []
-                        for _, exc in atomic_results.incomplete_objectives:
+                        for _, exc in incomplete_objectives:
                             error_id = getattr(exc, "error_attack_result_id", None)
                             if error_id:
                                 error_ids.append(error_id)
 
-                        # Link error attack results to the scenario result
                         if error_ids:
                             self._memory.update_scenario_error_attacks(
                                 scenario_result_id=scenario_result_id,
                                 error_attack_result_ids=error_ids,
                             )
 
-                        # Mark scenario as failed
                         error_msg = (
-                            f"Atomic attack '{atomic_attack.atomic_attack_name}' partially failed: "
-                            f"{incomplete_count} of {incomplete_count + completed_count} objectives incomplete. "
-                            f"See attack results for details."
+                            f"Atomic attack '{step_name}' partially failed: "
+                            f"{incomplete_count} of {incomplete_count + completed_in_step} "
+                            f"objectives incomplete. See attack results for details."
                         )
                         self._memory.update_scenario_run_state(
                             scenario_result_id=scenario_result_id,
                             scenario_run_state="FAILED",
                             error_message=error_msg,
-                            error_type=type(atomic_results.incomplete_objectives[0][1]).__name__,
+                            error_type=type(incomplete_objectives[0][1]).__name__,
                         )
 
-                        # Raise exception with detailed information
-                        raise ValueError(error_msg) from atomic_results.incomplete_objectives[0][1]
+                        raise ValueError(error_msg) from incomplete_objectives[0][1]
+
                     logger.info(
-                        f"Atomic attack {i}/{len(self._atomic_attacks)} completed successfully with "
-                        f"{len(atomic_results.completed_results)} results"
+                        f"Atomic attack {step_position}/{total_steps} completed successfully with "
+                        f"{len(step_result.attack_results)} results"
+                    )
+                    progress.update(1)
+
+            except Exception as e:
+                logger.error(
+                    f"Atomic attack {step_position}/{total_steps} "
+                    f"('{last_attempted_step_name}') failed in scenario '{self._name}': {str(e)}"
+                )
+
+                # Mark scenario as failed if not already done
+                scenario_results = self._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
+                if scenario_results and scenario_results[0].scenario_run_state != "FAILED":
+                    self._memory.update_scenario_run_state(
+                        scenario_result_id=scenario_result_id,
+                        scenario_run_state="FAILED",
+                        error_message=str(e),
+                        error_type=type(e).__name__,
                     )
 
-                except Exception as e:
-                    # Exception was raised either by run_async or by our check above
-                    logger.error(
-                        f"Atomic attack {i}/{len(self._atomic_attacks)} "
-                        f"('{atomic_attack.atomic_attack_name}') failed in scenario '{self._name}': {str(e)}"
-                    )
-
-                    # Mark scenario as failed if not already done
-                    scenario_results = self._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
-                    if scenario_results and scenario_results[0].scenario_run_state != "FAILED":
-                        self._memory.update_scenario_run_state(
-                            scenario_result_id=scenario_result_id,
-                            scenario_run_state="FAILED",
-                            error_message=str(e),
-                            error_type=type(e).__name__,
-                        )
-
-                    raise
+                raise
 
             logger.info(f"Scenario '{self._name}' completed successfully")
 
@@ -1294,3 +1523,5 @@ class Scenario(ABC):
         except Exception as e:
             logger.error(f"Scenario '{self._name}' failed with error: {str(e)}")
             raise
+        finally:
+            progress.close()
