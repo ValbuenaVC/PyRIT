@@ -2,14 +2,22 @@
 # Licensed under the MIT license.
 
 """
-``AdaptiveDispatchAttack`` — picks an inner technique per attempt via an
-``AdaptiveTechniqueSelector``, runs it, records the outcome, and loops up to
-``max_attempts_per_objective`` times. Reads the per-objective context key from
+``AdaptiveDispatchAttack`` — **deprecated** as of 0.15.0; use
+:class:`pyrit.scenario.scenarios.adaptive.AdaptiveStep` instead.
+
+Picks an inner technique per attempt via an ``AdaptiveTechniqueSelector``,
+runs it, records the outcome, and loops up to ``max_attempts_per_objective``
+times. Reads the per-objective context key from
 ``context.memory_labels[ADAPTIVE_CONTEXT_LABEL]`` (falls back to the global context).
 
 The dispatcher is bound to a single ``SeedAttackGroup`` at construction time so
 it can merge each chosen technique's ``seed_technique`` (when present) into the
 seed group before delegating execution to ``AttackExecutor``.
+
+Scheduled for removal in 0.17.0 once existing callers migrate to
+``AdaptiveStep``, which drives the same per-objective loop through the
+``StrategyGraph`` event loop and emits ``"success"`` / ``"exhausted"`` as
+real transition labels.
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from pyrit.common.deprecation import print_deprecation_message
 from pyrit.executor.attack.core.attack_executor import AttackExecutor
 from pyrit.executor.attack.core.attack_parameters import AttackParameters
 from pyrit.executor.attack.core.attack_strategy import AttackContext, AttackStrategy
@@ -124,6 +133,13 @@ class AdaptiveDispatchAttack(AttackStrategy[AdaptiveDispatchContext, AttackResul
             raise ValueError("techniques must contain at least one attack technique")
         if max_attempts_per_objective < 1:
             raise ValueError(f"max_attempts_per_objective must be >= 1, got {max_attempts_per_objective}")
+
+        print_deprecation_message(
+            old_item="AdaptiveDispatchAttack",
+            new_item="pyrit.scenario.scenarios.adaptive.AdaptiveStep (drives the same loop "
+            "through StrategyGraph; emits real success/exhausted transition labels)",
+            removed_in="0.17.0",
+        )
 
         super().__init__(
             objective_target=objective_target,

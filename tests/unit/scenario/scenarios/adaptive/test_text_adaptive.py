@@ -15,9 +15,9 @@ from pyrit.prompt_target import PromptTarget
 from pyrit.registry.object_registries.attack_technique_registry import AttackTechniqueRegistry
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
 from pyrit.scenario.core.scenario import BaselinePolicy
+from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
 from pyrit.scenario.scenarios.adaptive.dispatcher import (
     ADAPTIVE_CONTEXT_LABEL,
-    AdaptiveDispatchAttack,
 )
 from pyrit.scenario.scenarios.adaptive.selector import (
     GLOBAL_CONTEXT,
@@ -201,13 +201,11 @@ class TestTextAdaptiveAtomicAttacks:
             mock_objective_scorer=mock_objective_scorer,
             seed_groups=groups,
         )
-        dispatchers = [atomic._attack_technique.attack for atomic in attacks]
-        # Each objective gets its own dispatcher (bound to its own seed group)...
-        assert len({id(d) for d in dispatchers}) == len(attacks)
-        for d in dispatchers:
-            assert isinstance(d, AdaptiveDispatchAttack)
+        # Each objective is now driven by its own AdaptiveStep instance...
+        assert all(isinstance(step, AdaptiveStep) for step in attacks)
+        assert len({id(step) for step in attacks}) == len(attacks)
         # ...but they all share the same selector so learning is global.
-        selectors = {id(d._selector) for d in dispatchers}
+        selectors = {id(step._selector) for step in attacks}
         assert len(selectors) == 1
 
     async def test_global_context_label_when_using_global_extractor(self, mock_objective_target, mock_objective_scorer):
@@ -302,12 +300,12 @@ class TestTextAdaptiveAtomicAttacks:
                 attacks = scenario._atomic_attacks
 
         assert len(attacks) == 1
-        dispatcher = attacks[0]._attack_technique.attack
-        assert isinstance(dispatcher, AdaptiveDispatchAttack)
+        step = attacks[0]
+        assert isinstance(step, AdaptiveStep)
         # Both factories survive; in particular the seeded one is no longer
         # silently dropped.
-        assert "prompt_sending" in dispatcher._techniques
-        assert "many_shot" in dispatcher._techniques
+        assert "prompt_sending" in step._techniques
+        assert "many_shot" in step._techniques
 
     async def test_incompatible_seed_technique_is_filtered_per_objective(
         self, mock_objective_target, mock_objective_scorer
@@ -336,11 +334,12 @@ class TestTextAdaptiveAtomicAttacks:
                 attacks = scenario._atomic_attacks
 
         assert len(attacks) == 1
-        dispatcher = attacks[0]._attack_technique.attack
+        step = attacks[0]
+        assert isinstance(step, AdaptiveStep)
         # Only the plain technique survives; the seed_technique-bearing one is filtered out
         # because is_compatible_with_technique returned False.
-        assert "prompt_sending" in dispatcher._techniques
-        assert "many_shot" not in dispatcher._techniques
+        assert "prompt_sending" in step._techniques
+        assert "many_shot" not in step._techniques
 
     async def test_objective_skipped_when_no_compatible_techniques(
         self, mock_objective_target, mock_objective_scorer, caplog

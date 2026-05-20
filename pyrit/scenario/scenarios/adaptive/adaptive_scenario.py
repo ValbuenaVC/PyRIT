@@ -19,15 +19,15 @@ from __future__ import annotations
 import logging
 import random
 import uuid
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from pyrit.executor.attack import AttackScoringConfig
-from pyrit.scenario.core.atomic_attack import AtomicAttack
-from pyrit.scenario.core.attack_technique import AttackTechnique
 from pyrit.scenario.core.scenario import BaselinePolicy, Scenario
+from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
+from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy
+from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
 from pyrit.scenario.scenarios.adaptive.dispatcher import (
     ADAPTIVE_CONTEXT_LABEL,
-    AdaptiveDispatchAttack,
     TechniqueBundle,
 )
 from pyrit.scenario.scenarios.adaptive.selector import (
@@ -37,8 +37,11 @@ from pyrit.scenario.scenarios.adaptive.selector import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from pyrit.models import SeedAttackGroup
     from pyrit.prompt_target import PromptTarget
+    from pyrit.scenario.core.atomic_attack import AtomicAttack
     from pyrit.score import TrueFalseScorer
 
 logger = logging.getLogger(__name__)
@@ -96,6 +99,9 @@ class AdaptiveScenario(Scenario):
         self._max_attempts_per_objective = max_attempts_per_objective
         self._seed = seed
         self._context_extractor = context_extractor
+        # Populated by _get_atomic_attacks_async; consumed by _build_execution_graph
+        # only when an override path needs to introspect it externally.
+        self._selector: AdaptiveTechniqueSelector | None = None
 
         super().__init__(
             version=self.VERSION,
@@ -106,18 +112,27 @@ class AdaptiveScenario(Scenario):
 
     async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
         """
-        Build one ``AtomicAttack`` per objective.
+        Build one :class:`AdaptiveStep` per objective.
 
-        Each objective gets a freshly constructed ``AdaptiveDispatchAttack``
-        bound to its seed group, but all dispatchers share the same selector
-        so learning accumulates across objectives. Per-objective, techniques
-        whose ``seed_technique`` is incompatible with the seed group are
-        filtered out; objectives left with no compatible techniques are skipped.
+        Each objective gets a freshly constructed step bound to its seed group,
+        but all steps share the same selector so learning accumulates across
+        objectives. Per-objective, techniques whose ``seed_technique`` is
+        incompatible with the seed group are filtered out; objectives left
+        with no compatible techniques are skipped.
+
+        The return type is :class:`list[AtomicAttack]` for parity with the base
+        ``Scenario._get_atomic_attacks_async`` contract — the orchestrator's
+        resume bookkeeping treats steps via the duck-typed attributes
+        :class:`AdaptiveStep` provides (``atomic_attack_name``, ``objectives``,
+        ``seed_groups``, ``display_group``, ``filter_seed_groups_by_objectives``).
+        Execution dispatch in :meth:`_build_execution_graph` calls
+        ``step.process_async`` directly, bypassing the default linear policy's
+        ``AtomicAttack.run_async`` branch.
 
         Returns:
-            list[AtomicAttack]: One ``AtomicAttack`` per objective with at
-                least one compatible technique. Empty if every seed group
-                is incompatible with every selected technique.
+            list[AtomicAttack]: One step per objective with at least one
+                compatible technique. Empty if every seed group is incompatible
+                with every selected technique.
 
         Raises:
             ValueError: If ``self._objective_target`` is not set, or if
@@ -135,21 +150,23 @@ class AdaptiveScenario(Scenario):
         )
         # On resume, replay prior attempt outcomes from persisted metadata.
         self._rehydrate_selector_from_memory(selector=selector, known_techniques=set(techniques))
+        # Cache the selector so _build_execution_graph reuses the rehydrated state.
+        self._selector = selector
 
         seed_groups_by_dataset = self._dataset_config.get_seed_attack_groups()
-        atomic_attacks: list[AtomicAttack] = []
+        steps: list[AdaptiveStep] = []
         for dataset_name, seed_groups in seed_groups_by_dataset.items():
             for seed_group in seed_groups:
-                atomic = self._build_atomic_for_seed_group(
+                step = self._build_step_for_seed_group(
                     dataset_name=dataset_name,
                     seed_group=seed_group,
                     techniques=techniques,
                     selector=selector,
                 )
-                if atomic is not None:
-                    atomic_attacks.append(atomic)
+                if step is not None:
+                    steps.append(step)
 
-        return atomic_attacks
+        return cast("list[AtomicAttack]", steps)
 
     def _build_techniques_dict(
         self,
@@ -202,24 +219,24 @@ class AdaptiveScenario(Scenario):
 
         return techniques
 
-    def _build_atomic_for_seed_group(
+    def _build_step_for_seed_group(
         self,
         *,
         dataset_name: str,
         seed_group: SeedAttackGroup,
         techniques: dict[str, TechniqueBundle],
         selector: AdaptiveTechniqueSelector,
-    ) -> AtomicAttack | None:
+    ) -> AdaptiveStep | None:
         """
-        Build a single ``AtomicAttack`` for one ``SeedAttackGroup``.
+        Build a single :class:`AdaptiveStep` for one ``SeedAttackGroup``.
 
         Filters the technique pool down to those whose ``seed_technique`` (if
-        any) is compatible with this seed group, then constructs a dedicated
-        ``AdaptiveDispatchAttack`` bound to this seed group.
+        any) is compatible with this seed group, then constructs an
+        :class:`AdaptiveStep` bound to it.
 
         Returns:
-            AtomicAttack | None: The constructed atomic attack, or ``None`` when
-                no techniques are compatible (caller skips the objective).
+            AdaptiveStep | None: The constructed step, or ``None`` when no
+                techniques are compatible (caller skips the objective).
 
         Raises:
             ValueError: If ``self._objective_target`` is not set (defensive
@@ -248,26 +265,104 @@ class AdaptiveScenario(Scenario):
         objective_id = seed_group.objective.id if seed_group.objective.id else uuid.uuid4()
         atomic_attack_name = f"{self._atomic_attack_prefix}_{dataset_name}_{objective_id}"
 
-        dispatcher = AdaptiveDispatchAttack(
+        memory_labels = {
+            **self._memory_labels,
+            ADAPTIVE_CONTEXT_LABEL: adaptive_context,
+        }
+        return AdaptiveStep(
+            atomic_attack_name=atomic_attack_name,
+            display_group=dataset_name,
             objective_target=self._objective_target,
             techniques=compatible,
             selector=selector,
             seed_group=seed_group,
             objective_scorer=self._objective_scorer,
             max_attempts_per_objective=self._max_attempts_per_objective,
+            memory_labels=memory_labels,
+            adaptive_context=adaptive_context,
         )
 
-        memory_labels = {
-            **self._memory_labels,
-            ADAPTIVE_CONTEXT_LABEL: adaptive_context,
-        }
-        return AtomicAttack(
-            atomic_attack_name=atomic_attack_name,
-            attack_technique=AttackTechnique(attack=dispatcher),
-            seed_groups=[seed_group],
-            objective_scorer=self._objective_scorer,
-            memory_labels=memory_labels,
-            display_group=dataset_name,
+    def _build_execution_graph(
+        self,
+        *,
+        steps: Sequence[ScenarioStep] | None = None,
+    ) -> StrategyGraph[ScenarioStep, int]:
+        """
+        Build a linear graph that drives each :class:`AdaptiveStep` via
+        ``process_async`` so the ``"success"`` / ``"exhausted"`` outcome
+        labels survive into the orchestrator (the default policy from the
+        base class would dispatch ``AtomicAttack`` instances through
+        ``run_async`` and lose the outcome distinction).
+
+        Args:
+            steps: Optional explicit step list. Defaults to
+                ``self._atomic_attacks``, mirroring the base class contract.
+
+        Returns:
+            StrategyGraph[ScenarioStep, int]: A linear traversal whose actions
+                always dispatch via ``step.process_async``.
+        """
+        effective_steps = list(steps) if steps is not None else list(self._atomic_attacks)
+        policy = self._build_adaptive_linear_policy(steps=effective_steps)
+        return StrategyGraph(policy=policy)
+
+    def _build_adaptive_linear_policy(
+        self,
+        *,
+        steps: Sequence[ScenarioStep],
+    ) -> StrategyPolicy[ScenarioStep, int]:
+        """
+        Build a linear policy that always dispatches via ``process_async``.
+
+        Each policy action runs ``steps[i].process_async()`` and transitions
+        to state ``i + 1``; state ``len(steps)`` is the sole terminal state.
+        Unlike :meth:`Scenario._build_default_linear_policy` there's no
+        ``isinstance(_step, AtomicAttack)`` branch — adaptive steps always
+        go through their own process_async loop so the
+        ``"success"``/``"exhausted"`` outcome labels propagate unchanged.
+
+        Args:
+            steps: The steps to wrap. Must be non-empty.
+
+        Returns:
+            StrategyPolicy[ScenarioStep, int]: A frozen linear policy.
+
+        Raises:
+            ValueError: If ``steps`` is empty.
+        """
+        if not steps:
+            raise ValueError("_build_adaptive_linear_policy requires at least one step.")
+
+        terminal_state = len(steps)
+        actions: dict[int, PolicyAction[ScenarioStep, int]] = {}
+
+        for index, step in enumerate(steps):
+
+            async def _action(
+                graph: StrategyGraph[ScenarioStep, int],
+                _step: ScenarioStep = step,
+                _next: int = index + 1,
+            ) -> tuple[int, ScenarioStepResult | None]:
+                graph.bind_current_step(step=_step)
+                try:
+                    base_result = await _step.process_async()
+                    merged_metadata = {"step_name": _step.name, **base_result.metadata}
+                    result: ScenarioStepResult | None = ScenarioStepResult(
+                        outcome=base_result.outcome,
+                        attack_results=list(base_result.attack_results),
+                        step_identifier=base_result.step_identifier,
+                        metadata=merged_metadata,
+                    )
+                finally:
+                    graph.bind_current_step(step=None)
+                return _next, result
+
+            actions[index] = _action
+
+        return StrategyPolicy(
+            actions=actions,
+            initial_state=0,
+            terminal_states=frozenset({terminal_state}),
         )
 
     def _rehydrate_selector_from_memory(

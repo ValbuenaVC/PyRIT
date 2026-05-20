@@ -4,6 +4,7 @@
 """Adaptive scenario classes."""
 
 from pyrit.scenario.scenarios.adaptive.adaptive_scenario import AdaptiveScenario
+from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
 from pyrit.scenario.scenarios.adaptive.dispatcher import (
     ADAPTIVE_CONTEXT_LABEL,
     AdaptiveDispatchAttack,
@@ -20,6 +21,7 @@ __all__ = [
     "ADAPTIVE_CONTEXT_LABEL",
     "AdaptiveDispatchAttack",
     "AdaptiveScenario",
+    "AdaptiveStep",
     "AdaptiveTechniqueSelector",
     "ContextExtractor",
     "TextAdaptive",

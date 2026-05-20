@@ -21,6 +21,13 @@ from pyrit.scenario.scenarios.adaptive.selector import (
     AdaptiveTechniqueSelector,
 )
 
+# ``AdaptiveDispatchAttack`` is deprecated as of 0.15.0 in favor of
+# ``AdaptiveStep`` (see ``test_adaptive_step.py``). Suppress the per-instantiation
+# DeprecationWarning here so the regression suite for the dispatcher's existing
+# behavior stays clean during the deprecation window. The warning is asserted
+# explicitly in a dedicated test below.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 
 def _make_bundle(*, name: str, outcomes: list[AttackOutcome], seed_technique=None) -> TechniqueBundle:
     """Build a TechniqueBundle whose attack stub yields the given outcomes in order.
@@ -301,3 +308,16 @@ class TestValidate:
         )
         # Does not raise.
         dispatcher._validate_context(context=_make_context(objective="ok"))
+
+
+@pytest.mark.usefixtures("patch_central_database")
+@pytest.mark.filterwarnings("default::DeprecationWarning")
+class TestDeprecation:
+    def test_instantiation_emits_deprecation_warning(self, target, selector, seed_group):
+        with pytest.warns(DeprecationWarning, match="AdaptiveDispatchAttack.*AdaptiveStep"):
+            AdaptiveDispatchAttack(
+                objective_target=target,
+                techniques={"a": _make_bundle(name="a", outcomes=[AttackOutcome.SUCCESS])},
+                selector=selector,
+                seed_group=seed_group,
+            )
