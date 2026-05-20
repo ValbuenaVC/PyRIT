@@ -130,10 +130,18 @@ def discover_in_package(
             # For non-package modules, find and yield subclasses
             if not is_pkg:
                 for _name, obj in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(obj, base_class) and obj is not base_class and not inspect.isabstract(obj):
-                        # Build the registry name including any prefix
-                        registry_name = name_builder(_prefix, module_name)
-                        yield (registry_name, obj)
+                    # ``inspect.isclass`` returns True for parameterized type aliases
+                    # like ``Callable[[X], Y]`` that are not real classes; guard
+                    # ``issubclass`` so a single such alias doesn't terminate
+                    # discovery for the whole module.
+                    try:
+                        if not (issubclass(obj, base_class) and obj is not base_class and not inspect.isabstract(obj)):
+                            continue
+                    except TypeError:
+                        continue
+                    # Build the registry name including any prefix
+                    registry_name = name_builder(_prefix, module_name)
+                    yield (registry_name, obj)
 
             # Recursively discover in subpackages
             if recursive and is_pkg:
