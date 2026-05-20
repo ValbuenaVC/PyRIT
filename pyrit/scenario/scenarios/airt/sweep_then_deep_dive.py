@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from pyrit.identifiers import ComponentIdentifier
     from pyrit.models import AttackResult
     from pyrit.scenario.core.atomic_attack import AtomicAttack
+    from pyrit.scenario.core.attack_technique_factory import AttackTechniqueFactory
     from pyrit.score import TrueFalseScorer
 
 logger = logging.getLogger(__name__)
@@ -604,6 +605,23 @@ class BroadSweepThenDeepDive(Scenario):
             list[AtomicAttack]: ``[sweep_atomic, *deep_dive_atomics]``.
         """
         return [self._sweep_atomic, *self._deep_dive_atomics]
+
+    def _get_attack_technique_factories(self) -> dict[str, AttackTechniqueFactory]:
+        """
+        Return an empty factory map: this scenario does not use the technique registry.
+
+        The sweep and deep-dive atomics are supplied directly via the constructor,
+        so factory lookup never happens during execution. Overriding the base
+        method (which lazily populates the global ``AttackTechniqueRegistry``
+        singleton via ``register_scenario_techniques``) keeps introspection
+        (e.g. :func:`pyrit.scenario.core.waterfall.policy_to_spec`) side-effect-free
+        and makes the policy-parameterized intent explicit, mirroring the
+        ``BASELINE_ATTACK_POLICY = Forbidden`` declaration above.
+
+        Returns:
+            dict[str, AttackTechniqueFactory]: Always empty.
+        """
+        return {}
 
     def _build_execution_graph(  # ty: ignore[invalid-method-override]
         self,

@@ -516,6 +516,46 @@ class TestBroadSweepThenDeepDive:
         # if a caller passes ``include_baseline=True``.
         assert BroadSweepThenDeepDive.BASELINE_ATTACK_POLICY is BaselineAttackPolicy.Forbidden
 
+    def test_get_attack_technique_factories_returns_empty_dict(self) -> None:
+        # The sweep and deep-dive atomics are supplied directly via the
+        # constructor — no registry lookup ever happens during execution.
+        # Overriding the base method (which would lazily populate the global
+        # AttackTechniqueRegistry singleton via register_scenario_techniques)
+        # keeps introspection by waterfall.policy_to_spec side-effect-free.
+        scenario, _, _ = self._build_scenario(
+            sweep_response_text="safe",
+            scorer_label_for={"safe": _SAFE_LABEL},
+            deep_dive_display_groups=["cat-a"],
+        )
+        assert scenario._get_attack_technique_factories() == {}
+
+    def test_get_attack_technique_factories_does_not_mutate_global_registry(self) -> None:
+        # Removing the BSTDDive override would silently re-introduce the
+        # ``register_scenario_techniques()`` side-effect on the global
+        # ``AttackTechniqueRegistry`` singleton. Pin the absence of mutation
+        # so future refactors that drop the override fail this test.
+        from pyrit.registry.object_registries.attack_technique_registry import AttackTechniqueRegistry
+
+        AttackTechniqueRegistry.reset_instance()
+        try:
+            before = set(AttackTechniqueRegistry.get_registry_singleton().get_factories().keys())
+
+            scenario, _, _ = self._build_scenario(
+                sweep_response_text="safe",
+                scorer_label_for={"safe": _SAFE_LABEL},
+                deep_dive_display_groups=["cat-a"],
+            )
+            scenario._get_attack_technique_factories()
+
+            after = set(AttackTechniqueRegistry.get_registry_singleton().get_factories().keys())
+            assert after == before, (
+                f"BroadSweepThenDeepDive._get_attack_technique_factories() mutated the global "
+                f"AttackTechniqueRegistry singleton (added {sorted(after - before)}). The override "
+                f"must return {{}} without invoking register_scenario_techniques()."
+            )
+        finally:
+            AttackTechniqueRegistry.reset_instance()
+
     async def test_get_atomic_attacks_returns_canonical_order(self) -> None:
         scenario, sweep_atomic, deep_dives = self._build_scenario(
             sweep_response_text="safe",
