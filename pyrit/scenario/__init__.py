@@ -60,6 +60,7 @@ from pyrit.scenario.core import (
     materialize_opaque_inputs,
     policy_to_spec,
     spec_to_enum,
+    validate_init_async_inputs,
     validate_init_inputs,
 )
 
@@ -136,5 +137,6 @@ __all__ = [
     "materialize_opaque_inputs",
     "policy_to_spec",
     "spec_to_enum",
+    "validate_init_async_inputs",
     "validate_init_inputs",
 ]

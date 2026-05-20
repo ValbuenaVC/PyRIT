@@ -18,6 +18,7 @@ collector-agnostic; the CLI driver wires the two together.
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
@@ -129,6 +130,52 @@ def validate_init_inputs(
                 )
 
 
+def validate_init_async_inputs(
+    *,
+    scenario_cls: type[Scenario],
+    init_async_inputs: dict[str, Any],
+) -> None:
+    """
+    Validate ``init_async_inputs`` against the scenario's ``initialize_async`` signature.
+
+    Catches unknown keyword arguments at the wizard layer before they surface as a
+    raw ``TypeError`` from Python's call machinery (the ``@apply_defaults`` wrapper
+    around ``initialize_async`` calls ``inspect.Signature.bind`` and lets a
+    ``TypeError`` propagate for unknown kwargs). The wizard's retry loop in
+    :func:`pyrit.scenario.core.input_collector.collect_inputs_with_retry` catches
+    only :class:`ScenarioInputValidationError`, so an unwrapped ``TypeError`` would
+    crash the wizard rather than re-prompt.
+
+    Type coercion is deliberately not performed here — the collector layer is
+    responsible for upstream coercion of scalars. Scenarios whose
+    ``initialize_async`` accepts ``**kwargs`` opt out of unknown-key validation.
+
+    Args:
+        scenario_cls: Concrete subclass of :class:`Scenario`.
+        init_async_inputs: Caller-supplied ``initialize_async`` arguments.
+
+    Raises:
+        ScenarioInputValidationError: If ``init_async_inputs`` contains a keyword
+            argument that ``initialize_async`` does not accept.
+    """
+    sig = inspect.signature(scenario_cls.initialize_async)
+    accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    if accepts_var_kw:
+        return
+
+    accepted = {
+        name
+        for name, param in sig.parameters.items()
+        if name != "self" and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    unknown = sorted(set(init_async_inputs) - accepted)
+    if unknown:
+        raise ScenarioInputValidationError(
+            f"Unknown init_async_inputs keys for {scenario_cls.__name__}: {unknown!r}. "
+            f"Accepted keys: {sorted(accepted)!r}."
+        )
+
+
 async def build_scenario_from_inputs(
     scenario_cls: type[Scenario],
     *,
@@ -145,24 +192,33 @@ async def build_scenario_from_inputs(
     rather than a deep ``TypeError`` from the constructor.
 
     ``init_async_inputs`` are passed verbatim to ``initialize_async``. The
-    existing :meth:`Scenario.set_params_from_args` machinery already validates
-    these against ``supported_parameters``, so the builder does not re-validate.
+    existing :meth:`Scenario.set_params_from_args` machinery validates
+    scenario-declared parameters; here we additionally pre-check that every key
+    in ``init_async_inputs`` is accepted by ``initialize_async``'s signature, so
+    typo'd keys surface as :class:`ScenarioInputValidationError` (recoverable by
+    the wizard's retry loop) rather than a raw ``TypeError`` (which would crash
+    the loop). Scenarios whose ``initialize_async`` accepts ``**kwargs`` opt out
+    of the unknown-key check.
 
     Args:
         scenario_cls: Concrete subclass of :class:`Scenario`.
         init_inputs: Rich-object ``__init__`` arguments keyed by role name. All
             required roles from ``input_schema()`` must be present.
-        init_async_inputs: Scalar ``initialize_async`` arguments. Validated by
+        init_async_inputs: Scalar ``initialize_async`` arguments. Validated
+            against the ``initialize_async`` signature for unknown keys, and by
             ``Scenario.set_params_from_args`` via ``supported_parameters()``.
 
     Returns:
         Scenario: An initialized, runnable scenario instance.
 
     Raises:
-        ScenarioInputValidationError: If ``init_inputs`` fails validation.
+        ScenarioInputValidationError: If ``init_inputs`` fails validation or
+            ``init_async_inputs`` contains keys not accepted by
+            ``initialize_async``.
     """
     schema = discover_input_schema(scenario_cls)
     validate_init_inputs(schema=schema, init_inputs=init_inputs)
+    validate_init_async_inputs(scenario_cls=scenario_cls, init_async_inputs=init_async_inputs)
 
     scenario = scenario_cls(**init_inputs)
     await scenario.initialize_async(**init_async_inputs)

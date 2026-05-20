@@ -15,6 +15,7 @@ from pyrit.scenario.core.builder import (
     build_scenario_from_inputs,
     discover_input_schema,
     discover_supported_parameters,
+    validate_init_async_inputs,
     validate_init_inputs,
 )
 from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
@@ -180,6 +181,53 @@ class TestValidateInitInputs:
         validate_init_inputs(schema=[], init_inputs={"whatever": 1})
 
 
+class TestValidateInitAsyncInputs:
+    def test_accepts_all_known_keys(self):
+        validate_init_async_inputs(
+            scenario_cls=cast("Any", _FakeScenarioScalarRoles),
+            init_async_inputs={"max_concurrency": 4},
+        )
+
+    def test_accepts_empty(self):
+        validate_init_async_inputs(
+            scenario_cls=cast("Any", _FakeScenarioScalarRoles),
+            init_async_inputs={},
+        )
+
+    def test_rejects_unknown_key(self):
+        with pytest.raises(ScenarioInputValidationError) as exc_info:
+            validate_init_async_inputs(
+                scenario_cls=cast("Any", _FakeScenarioScalarRoles),
+                init_async_inputs={"typo": 1},
+            )
+        message = str(exc_info.value)
+        assert "typo" in message
+        # The error should also list what *is* accepted to help the user recover.
+        assert "max_concurrency" in message
+
+    def test_rejects_multiple_unknown_keys(self):
+        with pytest.raises(ScenarioInputValidationError) as exc_info:
+            validate_init_async_inputs(
+                scenario_cls=cast("Any", _FakeScenarioScalarRoles),
+                init_async_inputs={"foo": 1, "bar": 2},
+            )
+        message = str(exc_info.value)
+        assert "foo" in message and "bar" in message
+
+    def test_var_keyword_opts_out(self):
+        """Scenarios whose ``initialize_async`` accepts ``**kwargs`` skip the check."""
+
+        class _VarKw(_FakeScenarioBase):
+            async def initialize_async(self, **kwargs: Any) -> None:
+                pass
+
+        # Should not raise even with an arbitrary key.
+        validate_init_async_inputs(
+            scenario_cls=cast("Any", _VarKw),
+            init_async_inputs={"anything": "goes"},
+        )
+
+
 class TestBuildScenarioFromInputs:
     async def test_constructs_and_initializes(self):
         scenario = await build_scenario_from_inputs(
@@ -234,6 +282,70 @@ class TestBuildScenarioFromInputs:
                 init_async_inputs={},
             )
         assert exc_info.value.role_name == "mode"
+
+    async def test_init_async_inputs_unknown_key_raises_validation_error(self):
+        """Lead 2: an unknown init_async_inputs key surfaces as ScenarioInputValidationError.
+
+        Without pre-validation, ``initialize_async(**init_async_inputs)`` blows up with
+        a raw ``TypeError`` from Python's call machinery (via the @apply_defaults
+        wrapper's ``sig.bind``). The wizard's retry loop catches only
+        ``ScenarioInputValidationError``, so a typo'd flag would crash the wizard
+        instead of surfacing as a recoverable validation error.
+        """
+        with pytest.raises(ScenarioInputValidationError) as exc_info:
+            await build_scenario_from_inputs(
+                cast("Any", _FakeScenarioScalarRoles),
+                init_inputs={"weakness_label": "harm"},
+                init_async_inputs={"max_concurrency": 4, "bogus_typo": "value"},
+            )
+        assert "bogus_typo" in str(exc_info.value)
+
+    async def test_init_async_inputs_multiple_unknown_keys_all_listed(self):
+        with pytest.raises(ScenarioInputValidationError) as exc_info:
+            await build_scenario_from_inputs(
+                cast("Any", _FakeScenarioScalarRoles),
+                init_inputs={"weakness_label": "harm"},
+                init_async_inputs={"alpha": 1, "beta": 2},
+            )
+        message = str(exc_info.value)
+        assert "alpha" in message and "beta" in message
+
+    async def test_init_async_inputs_unknown_key_does_not_construct_scenario(self):
+        """Validation must run before ``__init__`` to avoid orphaned construction side effects."""
+
+        class _TracksConstruction(_FakeScenarioBase):
+            constructed = False
+
+            def __init__(self) -> None:
+                type(self).constructed = True
+
+            async def initialize_async(self) -> None:
+                pass
+
+        with pytest.raises(ScenarioInputValidationError):
+            await build_scenario_from_inputs(
+                cast("Any", _TracksConstruction),
+                init_inputs={},
+                init_async_inputs={"bogus": 1},
+            )
+        assert _TracksConstruction.constructed is False
+
+    async def test_init_async_inputs_var_keyword_accepts_anything(self):
+        """A scenario whose ``initialize_async`` accepts ``**kwargs`` opts out of validation."""
+
+        class _VarKw(_FakeScenarioBase):
+            def __init__(self) -> None:
+                pass
+
+            async def initialize_async(self, **kwargs: Any) -> None:
+                self.received_kwargs = kwargs
+
+        scenario = await build_scenario_from_inputs(
+            cast("Any", _VarKw),
+            init_inputs={},
+            init_async_inputs={"whatever": "ok"},
+        )
+        assert scenario.received_kwargs == {"whatever": "ok"}  # type: ignore[attr-defined]
 
 
 class TestScenarioInputValidationError:

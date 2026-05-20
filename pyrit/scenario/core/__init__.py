@@ -12,6 +12,7 @@ from pyrit.scenario.core.builder import (
     build_scenario_from_inputs,
     discover_input_schema,
     discover_supported_parameters,
+    validate_init_async_inputs,
     validate_init_inputs,
 )
 from pyrit.scenario.core.dataset_configuration import EXPLICIT_SEED_GROUPS_KEY, DatasetConfiguration
@@ -100,5 +101,6 @@ __all__ = [
     "policy_to_spec",
     "register_scenario_techniques",
     "spec_to_enum",
+    "validate_init_async_inputs",
     "validate_init_inputs",
 ]
