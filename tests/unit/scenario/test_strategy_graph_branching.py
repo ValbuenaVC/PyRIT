@@ -24,6 +24,8 @@ branching with at least one self-loop-free path that skips a step.
 
 from enum import Enum
 
+import pytest
+
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.strategy_graph import StrategyGraph, StrategyPolicy
 
@@ -153,3 +155,52 @@ async def test_reset_replays_branching_graph():
     assert [r.outcome for r in results] == ["violation", "done"]
     assert sweep.call_count == 2
     assert escalation.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# 3-way dispatch — confirms transitions are dict-lookup based, not isinstance chains.
+# ---------------------------------------------------------------------------
+
+
+class _DispatchState(str, Enum):
+    DISPATCH = "dispatch"
+    BRANCH_A = "branch_a"
+    BRANCH_B = "branch_b"
+    BRANCH_C = "branch_c"
+    COMPLETE = "complete"
+
+
+def _build_three_way_graph(*, target: _DispatchState) -> StrategyGraph:
+    async def dispatch_action(graph):
+        return target, ScenarioStepResult(outcome=f"to_{target.value}")
+
+    async def branch_action(graph):
+        return _DispatchState.COMPLETE, ScenarioStepResult(outcome=f"reached_{graph.current_state.value}")
+
+    policy: StrategyPolicy[ScenarioStep, _DispatchState] = StrategyPolicy(
+        actions={
+            _DispatchState.DISPATCH: dispatch_action,
+            _DispatchState.BRANCH_A: branch_action,
+            _DispatchState.BRANCH_B: branch_action,
+            _DispatchState.BRANCH_C: branch_action,
+        },
+        initial_state=_DispatchState.DISPATCH,
+        terminal_states=frozenset({_DispatchState.COMPLETE}),
+    )
+    return StrategyGraph(policy=policy)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [_DispatchState.BRANCH_A, _DispatchState.BRANCH_B, _DispatchState.BRANCH_C],
+)
+async def test_three_way_branch_dispatches_to_target_state(target: _DispatchState) -> None:
+    graph = _build_three_way_graph(target=target)
+
+    results = [r async for r in graph.event_loop_async()]
+
+    assert [r.outcome for r in results] == [f"to_{target.value}", f"reached_{target.value}"]
+    states_before = [state for state, _ in graph.history]
+    assert states_before == [_DispatchState.DISPATCH, target]
+    assert graph.current_state == _DispatchState.COMPLETE
+    assert graph.is_terminal

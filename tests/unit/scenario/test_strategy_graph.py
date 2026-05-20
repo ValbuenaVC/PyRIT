@@ -4,6 +4,7 @@
 """Tests for ``pyrit.scenario.core.strategy_graph``."""
 
 from enum import Enum
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -28,7 +29,6 @@ def _make_graph(*, policy: StrategyPolicy) -> StrategyGraph:
 
 
 class TestStrategyPolicyInit:
-
     def test_requires_non_empty_terminal_states(self):
         with pytest.raises(ValueError, match="at least one terminal state"):
             StrategyPolicy(
@@ -104,6 +104,25 @@ class TestStrategyPolicyInit:
         )
         assert policy.is_terminal(state=_State.END)
         assert not policy.is_terminal(state=_State.START)
+
+    def test_terminal_states_frozen_against_input_mutation(self):
+        """Mutating the original set passed in must not leak into the policy."""
+
+        async def _action(graph):
+            return _State.END, None
+
+        mutable_terminals: set = {_State.END}
+        policy: StrategyPolicy = StrategyPolicy(
+            actions={_State.START: _action},
+            initial_state=_State.START,
+            terminal_states=mutable_terminals,  # type: ignore[arg-type]
+        )
+
+        mutable_terminals.add(_State.MIDDLE)
+
+        assert isinstance(policy.terminal_states, frozenset)
+        assert policy.terminal_states == frozenset({_State.END})
+        assert not policy.is_terminal(state=_State.MIDDLE)
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +315,80 @@ async def test_strategy_graph_works_with_scenario_core_state():
     results = [r async for r in graph.event_loop_async()]
     assert [r.outcome for r in results] == ["finished"]
     assert graph.current_state == ScenarioCoreState.COMPLETE
+
+
+async def test_event_loop_invokes_each_action_exactly_once_in_linear_graph():
+    """Performance guard: an N-state linear graph triggers exactly N actions, not N**2."""
+    n = 10
+    actions: dict[int, AsyncMock] = {
+        i: AsyncMock(return_value=(i + 1, ScenarioStepResult(outcome=f"step_{i}"))) for i in range(n)
+    }
+
+    graph: StrategyGraph[object, int] = StrategyGraph(
+        policy=StrategyPolicy(
+            actions=actions,
+            initial_state=0,
+            terminal_states=frozenset({n}),
+        ),
+    )
+
+    results = [r async for r in graph.event_loop_async()]
+
+    assert len(results) == n
+    for i, action in actions.items():
+        assert action.call_count == 1, f"action[{i}] invoked {action.call_count} times"
+    assert sum(action.call_count for action in actions.values()) == n
+
+
+async def test_event_loop_reaches_alternate_terminal_state():
+    """A policy with multiple terminals must allow stopping on any of them."""
+
+    async def failing_action(graph):
+        return ScenarioCoreState.FAILED, ScenarioStepResult(outcome="aborted")
+
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={ScenarioCoreState.EXECUTING: failing_action},
+            initial_state=ScenarioCoreState.EXECUTING,
+            terminal_states=frozenset({ScenarioCoreState.COMPLETE, ScenarioCoreState.FAILED}),
+        ),
+    )
+
+    results = [r async for r in graph.event_loop_async()]
+
+    assert [r.outcome for r in results] == ["aborted"]
+    assert graph.current_state == ScenarioCoreState.FAILED
+    assert graph.is_terminal
+
+
+async def test_history_order_is_deterministic_across_runs():
+    """Two consecutive runs of the same graph yield identical history orderings."""
+    n = 5
+
+    def _make_action(*, index: int):
+        async def _action(graph):
+            return index + 1, ScenarioStepResult(outcome=f"step_{index}")
+
+        return _action
+
+    actions = {i: _make_action(index=i) for i in range(n)}
+
+    graph: StrategyGraph[object, int] = StrategyGraph(
+        policy=StrategyPolicy(
+            actions=actions,
+            initial_state=0,
+            terminal_states=frozenset({n}),
+        ),
+    )
+
+    _ = [r async for r in graph.event_loop_async()]
+    first_run = [(state, result.outcome) for state, result in graph.history]
+
+    graph.reset()
+    _ = [r async for r in graph.event_loop_async()]
+    second_run = [(state, result.outcome) for state, result in graph.history]
+
+    expected = [(i, f"step_{i}") for i in range(n)]
+    assert first_run == expected
+    assert second_run == expected
+    assert first_run == second_run
