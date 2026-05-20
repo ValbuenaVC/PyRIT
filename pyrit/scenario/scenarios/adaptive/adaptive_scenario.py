@@ -22,7 +22,7 @@ import uuid
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from pyrit.executor.attack import AttackScoringConfig
-from pyrit.scenario.core.scenario import BaselinePolicy, Scenario
+from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy
 from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
@@ -57,7 +57,7 @@ class AdaptiveScenario(Scenario):
     rehydration are handled here.
     """
 
-    BASELINE_POLICY: ClassVar[BaselinePolicy] = BaselinePolicy.Forbidden
+    BASELINE_ATTACK_POLICY: ClassVar[BaselineAttackPolicy] = BaselineAttackPolicy.Forbidden
 
     #: Subclasses must declare a scenario version for memory bookkeeping.
     VERSION: ClassVar[int]

@@ -66,7 +66,7 @@ class SweepThenDeepDiveState(str, Enum):
     The three states that drive ``BroadSweepThenDeepDive``.
 
     Inherits ``str`` for the canonical ``(str, Enum)`` design language used
-    by ``ScenarioCoreState``, ``BaselinePolicy``, and ``AttackOutcome``: the
+    by ``ScenarioCoreState``, ``BaselineAttackPolicy``, and ``AttackOutcome``: the
     enum members serialize naturally in identifiers and logs.
 
     The two terminal states are distinct so that downstream consumers can

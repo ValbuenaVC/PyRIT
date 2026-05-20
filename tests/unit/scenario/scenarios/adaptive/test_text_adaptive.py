@@ -14,7 +14,7 @@ from pyrit.models import AttackOutcome, AttackResult, SeedAttackGroup, SeedObjec
 from pyrit.prompt_target import PromptTarget
 from pyrit.registry.object_registries.attack_technique_registry import AttackTechniqueRegistry
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
-from pyrit.scenario.core.scenario import BaselinePolicy
+from pyrit.scenario.core.scenario import BaselineAttackPolicy
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.strategy_graph import StrategyGraph, StrategyPolicy
 from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
@@ -113,7 +113,7 @@ class TestTextAdaptiveBasics:
         assert TextAdaptive.VERSION == 1
 
     def test_baseline_forbidden(self):
-        assert TextAdaptive.BASELINE_POLICY is BaselinePolicy.Forbidden
+        assert TextAdaptive.BASELINE_ATTACK_POLICY is BaselineAttackPolicy.Forbidden
 
     def test_default_dataset_config(self):
         config = TextAdaptive.default_dataset_config()
@@ -501,7 +501,7 @@ class TestTextAdaptiveSelectorRehydration:
 
 
 @pytest.mark.usefixtures(*FIXTURES)
-class TestTextAdaptiveBaselinePolicy:
+class TestTextAdaptiveBaselineAttackPolicy:
     async def test_initialize_async_rejects_explicit_baseline(self, mock_objective_target, mock_objective_scorer):
         groups = {"violence": [_make_seed_group(value="obj", harm_categories=["violence"])]}
         with patch.object(DatasetConfiguration, "get_seed_attack_groups", return_value=groups):
