@@ -22,11 +22,13 @@ from pyrit.identifiers.evaluation_identifier import (
     compute_eval_hash,
 )
 from pyrit.identifiers.identifier_filters import IdentifierFilter, IdentifierType
+from pyrit.identifiers.step_identifier import STEP_EVAL_VERSION, build_step_identifier
 
 __all__ = [
     "AtomicAttackEvaluationIdentifier",
     "build_atomic_attack_identifier",
     "build_seed_identifier",
+    "build_step_identifier",
     "ChildEvalRule",
     "class_name_to_snake_case",
     "ComponentIdentifier",
@@ -36,6 +38,7 @@ __all__ = [
     "REGISTRY_NAME_PATTERN",
     "ScorerEvaluationIdentifier",
     "snake_case_to_class_name",
+    "STEP_EVAL_VERSION",
     "validate_registry_name",
     "config_hash",
     "IdentifierFilter",
