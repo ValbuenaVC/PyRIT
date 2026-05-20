@@ -3,6 +3,9 @@
 
 """Tests for ``pyrit.score.decorators.outcome_scorer``."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -12,6 +15,9 @@ from pyrit.identifiers import ComponentIdentifier
 from pyrit.models import Message, MessagePiece, Score
 from pyrit.score import Scorer
 from pyrit.score.decorators import OutcomeScorer
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _make_score(*, value: str, score_type: str = "true_false") -> Score:
@@ -155,3 +161,131 @@ async def test_resolve_outcome_matches_against_any_score_in_list():
     )
     label = await outer.resolve_outcome_async(_make_message())
     assert label == "hit"
+
+
+def test_unscored_sentinel_value_is_stable():
+    """Lock the public sentinel string so downstream policies can declare it."""
+    assert OutcomeScorer.UNSCORED == "unscored"
+
+
+async def test_resolve_outcome_returns_unscored_when_wrapped_scorer_returns_none():
+    """`if not scores` must treat ``None`` like an empty list, not crash."""
+    scorer = MagicMock(spec=Scorer)
+    scorer.score_async = AsyncMock(return_value=None)
+    outer = OutcomeScorer(
+        wrapped_scorer=scorer,
+        outcome_map={"hit": lambda s: True},
+    )
+
+    label = await outer.resolve_outcome_async(_make_message())
+    assert label == OutcomeScorer.UNSCORED
+    assert label in outer.outcomes
+
+
+async def test_resolve_outcome_unscored_is_declared_in_outcomes():
+    """When no predicate matches, the returned sentinel must be in ``outcomes``."""
+    scorer = MagicMock(spec=Scorer)
+    scorer.score_async = AsyncMock(return_value=[_make_score(value="0.5", score_type="float_scale")])
+    outer = OutcomeScorer(
+        wrapped_scorer=scorer,
+        outcome_map={
+            "violation": lambda s: s.score_value == "true",
+            "refusal": lambda s: s.score_value == "false",
+        },
+    )
+
+    label = await outer.resolve_outcome_async(_make_message())
+    assert label == OutcomeScorer.UNSCORED
+    assert label in outer.outcomes
+
+
+@pytest.mark.parametrize(
+    ("scorer_values", "score_type"),
+    [
+        ([], "true_false"),
+        ([None], "true_false"),
+        (["true"], "true_false"),
+        (["false"], "true_false"),
+        (["0.5"], "float_scale"),
+        (["false", "true"], "true_false"),
+        (["true", "false"], "true_false"),
+        (["0.0", "0.5", "1.0"], "float_scale"),
+    ],
+)
+async def test_resolved_label_is_always_in_declared_outcomes(scorer_values, score_type):
+    """Invariant: every label ``resolve_outcome_async`` returns is in ``outcomes``."""
+    if scorer_values == [None]:
+        return_value = None
+    else:
+        return_value = [_make_score(value=v, score_type=score_type) for v in scorer_values]
+    scorer = MagicMock(spec=Scorer)
+    scorer.score_async = AsyncMock(return_value=return_value)
+    outer = OutcomeScorer(
+        wrapped_scorer=scorer,
+        outcome_map={
+            "violation": lambda s: s.score_value == "true",
+            "refusal": lambda s: s.score_value == "false",
+        },
+    )
+
+    label = await outer.resolve_outcome_async(_make_message())
+    assert label in outer.outcomes
+
+
+async def test_resolve_outcome_propagates_wrapped_scorer_exception():
+    """Errors from the wrapped scorer must bubble up; the wrapper is not a swallow."""
+    scorer = MagicMock(spec=Scorer)
+    scorer.score_async = AsyncMock(side_effect=RuntimeError("boom"))
+    outer = OutcomeScorer(
+        wrapped_scorer=scorer,
+        outcome_map={"hit": lambda s: True},
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await outer.resolve_outcome_async(_make_message())
+
+
+async def test_resolve_outcome_propagates_predicate_exception():
+    """Errors from a predicate must bubble up rather than degrading to ``unscored``."""
+    scorer = MagicMock(spec=Scorer)
+    scorer.score_async = AsyncMock(return_value=[_make_score(value="true")])
+
+    def _bad_predicate(score: Score) -> bool:
+        raise ValueError("predicate failure")
+
+    outer = OutcomeScorer(
+        wrapped_scorer=scorer,
+        outcome_map={"hit": _bad_predicate},
+    )
+
+    with pytest.raises(ValueError, match="predicate failure"):
+        await outer.resolve_outcome_async(_make_message())
+
+
+async def test_init_defensively_copies_outcome_map():
+    """Mutating the input ``outcome_map`` after init must not affect resolution."""
+    scorer = MagicMock(spec=Scorer)
+    scorer.score_async = AsyncMock(return_value=[_make_score(value="true")])
+    outcome_map: dict[str, Callable[[Score], bool]] = {
+        "violation": lambda s: s.score_value == "true",
+    }
+    outer = OutcomeScorer(wrapped_scorer=scorer, outcome_map=outcome_map)
+
+    outcome_map.clear()
+    outcome_map["other"] = lambda s: True
+
+    assert outer.outcomes == ["violation", OutcomeScorer.UNSCORED]
+    label = await outer.resolve_outcome_async(_make_message())
+    assert label == "violation"
+
+
+def test_outcome_scorer_is_not_a_scorer_subclass():
+    """``OutcomeScorer`` is a composition wrapper; the canonical identity path is
+    ``wrapped_scorer.get_identifier()``. Locking this in prevents accidental
+    subclassing that would shift identifier composition semantics."""
+    inner = MagicMock(spec=Scorer)
+    outer = OutcomeScorer(wrapped_scorer=inner, outcome_map={"hit": lambda s: True})
+
+    assert not isinstance(outer, Scorer)
+    assert not hasattr(outer, "get_identifier")
+    assert outer.wrapped_scorer is inner
