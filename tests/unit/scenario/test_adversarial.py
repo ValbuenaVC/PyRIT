@@ -25,6 +25,7 @@ from pyrit.registry.object_registries.attack_technique_registry import AttackTec
 from pyrit.scenario.core import AtomicAttack, BaselineAttackPolicy
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
 from pyrit.scenario.core.scenario_techniques import SCENARIO_TECHNIQUES
+from pyrit.scenario.core.waterfall import policy_to_spec
 from pyrit.scenario.scenarios.benchmark.adversarial import AdversarialBenchmark
 from pyrit.score import TrueFalseScorer
 
@@ -617,3 +618,77 @@ class TestBenchmarkASRBreakdown:
 
         # Display grouping must not lose results.
         assert sum(len(rs) for rs in groups.values()) == sum(len(rs) for rs in attack_results.values())
+
+
+# ===========================================================================
+# Phase 8a waterfall integration tests
+# ===========================================================================
+
+
+@pytest.mark.usefixtures(*FIXTURES)
+class TestBenchmarkAttackTechniqueFactories:
+    """Pin AdversarialBenchmark._get_attack_technique_factories semantics.
+
+    AdversarialBenchmark sweeps user-provided ``adversarial_models`` and injects
+    the chat per-attack at create-time. The factories it advertises through
+    ``_get_attack_technique_factories`` (consumed by ``policy_to_spec``) must
+    therefore reflect the *benchmarkable* specs (``adversarial_chat is None``),
+    NOT the global registry's replaced versions where
+    ``register_scenario_techniques`` has baked in a default adversarial chat.
+    """
+
+    def test_factory_keys_are_exactly_benchmarkable_spec_names(self, single_adversarial_model):
+        scenario = _make_benchmark(single_adversarial_model)
+        factories = scenario._get_attack_technique_factories()
+        expected = {spec.name for spec in AdversarialBenchmark._get_benchmarkable_specs()}
+        assert set(factories.keys()) == expected
+
+    def test_factory_source_specs_have_no_baked_adversarial_chat(self, single_adversarial_model):
+        scenario = _make_benchmark(single_adversarial_model)
+        factories = scenario._get_attack_technique_factories()
+        for name, factory in factories.items():
+            assert factory.source_spec is not None, f"factory {name!r} has no source_spec"
+            assert factory.source_spec.adversarial_chat is None, (
+                f"factory {name!r} carries a baked-in adversarial_chat; AdversarialBenchmark "
+                "must surface specs whose chat is supplied per-model at create-time"
+            )
+
+    def test_factory_source_specs_match_benchmarkable_specs(self, single_adversarial_model):
+        scenario = _make_benchmark(single_adversarial_model)
+        factories = scenario._get_attack_technique_factories()
+        benchmarkable_by_name = {spec.name: spec for spec in AdversarialBenchmark._get_benchmarkable_specs()}
+        for name, factory in factories.items():
+            assert factory.source_spec == benchmarkable_by_name[name]
+
+    def test_get_attack_technique_factories_does_not_mutate_global_registry(self, single_adversarial_model):
+        before = set(AttackTechniqueRegistry.get_registry_singleton().get_factories().keys())
+        scenario = _make_benchmark(single_adversarial_model)
+        scenario._get_attack_technique_factories()
+        after = set(AttackTechniqueRegistry.get_registry_singleton().get_factories().keys())
+        assert before == after, (
+            "AdversarialBenchmark._get_attack_technique_factories must not register "
+            "anything into the global registry singleton"
+        )
+
+    async def test_policy_to_spec_returns_benchmarkable_specs(self, mock_objective_target, single_adversarial_model):
+        """policy_to_spec must surface the specs the scenario actually uses."""
+        groups = {"harmbench": _make_seed_groups("harmbench")}
+        with (
+            patch.object(DatasetConfiguration, "get_seed_attack_groups", return_value=groups),
+            patch("pyrit.scenario.core.scenario.Scenario._get_default_objective_scorer") as mock_scorer,
+        ):
+            mock_scorer.return_value = MagicMock(spec=TrueFalseScorer, get_identifier=lambda: _mock_id("scorer"))
+            scenario = AdversarialBenchmark(adversarial_models=single_adversarial_model)
+            all_strat = scenario._strategy_class("all")
+            await scenario.initialize_async(objective_target=mock_objective_target, scenario_strategies=[all_strat])
+
+        specs = policy_to_spec(scenario)
+        assert specs, "policy_to_spec returned empty list for an initialized AdversarialBenchmark"
+        for spec in specs:
+            assert spec.adversarial_chat is None, (
+                f"policy_to_spec returned spec {spec.name!r} with a baked-in adversarial_chat; "
+                "the wizard would mis-reconstruct the scenario"
+            )
+        returned_names = {spec.name for spec in specs}
+        expected_names = {spec.name for spec in AdversarialBenchmark._get_benchmarkable_specs()}
+        assert returned_names == expected_names

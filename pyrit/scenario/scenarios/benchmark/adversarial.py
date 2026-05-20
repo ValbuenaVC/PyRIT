@@ -20,6 +20,7 @@ from pyrit.scenario.core.scenario_techniques import SCENARIO_TECHNIQUES
 
 if TYPE_CHECKING:
     from pyrit.prompt_target import PromptTarget
+    from pyrit.registry.object_registries.attack_technique_registry import AttackTechniqueFactory
     from pyrit.scenario.core.scenario_strategy import ScenarioStrategy
     from pyrit.score import TrueFalseScorer
 
@@ -294,3 +295,44 @@ class AdversarialBenchmark(Scenario):
             for spec in SCENARIO_TECHNIQUES
             if AttackTechniqueRegistry._accepts_adversarial(spec.attack_class) and spec.adversarial_chat is None
         ]
+
+    def _get_attack_technique_factories(self) -> dict[str, AttackTechniqueFactory]:
+        """
+        Return locally-built factories backed by the benchmarkable specs.
+
+        AdversarialBenchmark sweeps user-supplied ``adversarial_models`` rather
+        than using a single baked-in chat; its specs deliberately have
+        ``adversarial_chat = None`` and the per-model
+        :class:`AttackAdversarialConfig` is injected at attack-create time via
+        :attr:`_adversarial_configs`.
+
+        The base implementation would dispatch to the global
+        :class:`AttackTechniqueRegistry` singleton, which carries the versions
+        of these specs that ``register_scenario_techniques`` has rewritten with
+        a default adversarial chat — a stale view that does not reflect what
+        this scenario actually runs. Worse, that path also triggers global
+        registry mutation as a side effect of being inspected.
+
+        Returning factories built directly from
+        :meth:`_get_benchmarkable_specs` ensures that:
+
+        * :func:`pyrit.scenario.core.waterfall.policy_to_spec` surfaces the
+          benchmarkable (no-chat) specs that the wizard / configurator can
+          round-trip without absorbing the default adversarial chat.
+        * No global registry registration occurs as a side effect of the
+          inspection.
+
+        The returned factories are not used to execute attacks (that path runs
+        through :meth:`_get_atomic_attacks_async` with its own local factory
+        construction); they exist purely as the registry-shaped catalog of
+        techniques this scenario uses.
+
+        Returns:
+            dict[str, AttackTechniqueFactory]: ``spec.name -> factory`` for
+                every benchmarkable spec; each factory carries the benchmarkable
+                spec (``adversarial_chat is None``) via ``source_spec``.
+        """
+        return {
+            spec.name: AttackTechniqueRegistry.build_factory_from_spec(spec)
+            for spec in AdversarialBenchmark._get_benchmarkable_specs()
+        }
