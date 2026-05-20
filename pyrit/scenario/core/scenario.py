@@ -1129,9 +1129,7 @@ class Scenario(ABC):
             )
         return StrategyGraph(policy=self._build_default_linear_policy(steps=effective_steps))
 
-    def _build_default_linear_policy(
-        self, *, steps: Sequence[ScenarioStep]
-    ) -> StrategyPolicy[ScenarioStep, int]:
+    def _build_default_linear_policy(self, *, steps: Sequence[ScenarioStep]) -> StrategyPolicy[ScenarioStep, int]:
         """
         Build a linear-traversal policy that preserves scenario-level execution params.
 
@@ -1404,10 +1402,7 @@ class Scenario(ABC):
                     # before truncation so it survives the DB round-trip, then push the enriched
                     # identifier back to the AttackResultEntry row by attack_result_id.
                     for attack_result in step_result.attack_results:
-                        if (
-                            attack_result.step_identifier is None
-                            and attack_result.atomic_attack_identifier is not None
-                        ):
+                        if attack_result.step_identifier is None and attack_result.atomic_attack_identifier is not None:
                             new_identifier = build_step_identifier(
                                 step_name=step_name,
                                 outcome=step_result.outcome,

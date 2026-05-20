@@ -66,8 +66,7 @@ class OutcomeScorer:
             raise ValueError("OutcomeScorer requires a non-empty outcome_map.")
         if self.UNSCORED in outcome_map:
             raise ValueError(
-                f"Label {self.UNSCORED!r} is reserved as the no-match sentinel "
-                f"and may not appear in outcome_map."
+                f"Label {self.UNSCORED!r} is reserved as the no-match sentinel and may not appear in outcome_map."
             )
 
         self._wrapped_scorer = wrapped_scorer

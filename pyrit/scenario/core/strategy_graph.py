@@ -83,16 +83,11 @@ class StrategyPolicy(Generic[StepT, StateT]):
         if not self.terminal_states:
             raise ValueError("StrategyPolicy requires at least one terminal state.")
         if self.initial_state in self.terminal_states:
-            raise ValueError(
-                f"initial_state {self.initial_state!r} is in terminal_states; "
-                f"the graph would do no work."
-            )
+            raise ValueError(f"initial_state {self.initial_state!r} is in terminal_states; the graph would do no work.")
 
         overlap = [state for state in self.actions if state in self.terminal_states]
         if overlap:
-            raise ValueError(
-                f"Terminal states must not appear in actions: {overlap!r}."
-            )
+            raise ValueError(f"Terminal states must not appear in actions: {overlap!r}.")
 
         object.__setattr__(self, "actions", MappingProxyType(dict(self.actions)))
         object.__setattr__(self, "terminal_states", frozenset(self.terminal_states))
@@ -115,9 +110,7 @@ class StrategyPolicy(Generic[StepT, StateT]):
             return self.actions[state]
         except KeyError:
             known = ", ".join(sorted(str(s) for s in self.actions))
-            raise KeyError(
-                f"No action defined for state {state!r}. Known states: {known or '(none)'}."
-            ) from None
+            raise KeyError(f"No action defined for state {state!r}. Known states: {known or '(none)'}.") from None
 
     def is_terminal(self, *, state: StateT) -> bool:
         """Return ``True`` if ``state`` is a terminal state."""

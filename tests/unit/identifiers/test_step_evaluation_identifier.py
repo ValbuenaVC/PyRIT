@@ -119,10 +119,7 @@ class TestStepEvaluationIdentifier:
             outcome="done",
             attack_execution_identifiers=[noisy_atomic],
         )
-        assert (
-            StepEvaluationIdentifier(noisy).eval_hash
-            == StepEvaluationIdentifier(baseline).eval_hash
-        )
+        assert StepEvaluationIdentifier(noisy).eval_hash == StepEvaluationIdentifier(baseline).eval_hash
 
     def test_nested_objective_target_temperature_change_changes_hash(self):
         hot = StepEvaluationIdentifier(_build_step(target_temp=0.7)).eval_hash

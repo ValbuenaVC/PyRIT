@@ -282,9 +282,7 @@ class AttackResult(StrategyResult):
                 else None
             ),
             step_identifier=(
-                ComponentIdentifier.from_dict(data["step_identifier"])
-                if data.get("step_identifier")
-                else None
+                ComponentIdentifier.from_dict(data["step_identifier"]) if data.get("step_identifier") else None
             ),
             last_response=(MessagePiece.from_dict(data["last_response"]) if data.get("last_response") else None),
             last_score=Score.from_dict(data["last_score"]) if data.get("last_score") else None,
