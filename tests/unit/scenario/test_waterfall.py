@@ -216,3 +216,90 @@ def test_round_trip_policy_to_spec_to_enum(name: str):
     specs = policy_to_spec(scenario)
     enums = spec_to_enum(_DummyScenario, specs)
     assert enums == [_DummyStrategy[name.upper()]]
+
+
+# ---------- first-party scenario round-trips ---------------------------------
+#
+# The DummyScenario coverage above pins behavior against a hand-crafted strategy
+# class. These tests exercise the same surface against the real first-party
+# AdaptiveScenario subclass (TextAdaptive), which inherits the base
+# ``_get_attack_technique_factories`` implementation and therefore relies on
+# the global ``AttackTechniqueRegistry`` populated by
+# ``register_scenario_techniques()``. Regressions in registry-population
+# (factories built without ``source_spec``) would break the wizard's ability to
+# reconstruct an Adaptive policy from CLI inputs.
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestTextAdaptiveRoundTrip:
+    """Pin that registry-backed first-party scenarios round-trip cleanly."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_registry(self):
+        from pyrit.registry import TargetRegistry
+        from pyrit.scenario.scenarios.adaptive.text_adaptive import TextAdaptive
+
+        AttackTechniqueRegistry.reset_instance()
+        TargetRegistry.reset_instance()
+        TextAdaptive._cached_strategy_class = None
+        yield
+        AttackTechniqueRegistry.reset_instance()
+        TargetRegistry.reset_instance()
+        TextAdaptive._cached_strategy_class = None
+
+    def _build_scenario(self, monkeypatch: pytest.MonkeyPatch):
+        from pyrit.prompt_target import PromptTarget
+        from pyrit.scenario.scenarios.adaptive.text_adaptive import TextAdaptive
+
+        adversarial = MagicMock(spec=PromptTarget)
+        adversarial.get_identifier.return_value = ComponentIdentifier(
+            class_name="MockAdversarial", class_module="tests.unit.scenario"
+        )
+        monkeypatch.setattr(
+            "pyrit.scenario.core.scenario_techniques.get_default_adversarial_target",
+            lambda: adversarial,
+        )
+        monkeypatch.setattr(
+            "pyrit.scenario.core.scenario.Scenario._get_default_objective_scorer",
+            lambda self: _make_scorer_mock(),
+        )
+        return TextAdaptive(), TextAdaptive
+
+    def test_default_strategies_round_trip(self, monkeypatch: pytest.MonkeyPatch):
+        scenario, scenario_cls = self._build_scenario(monkeypatch)
+        strategy_cls = scenario_cls.get_strategy_class()
+        default = scenario_cls.get_default_strategy()
+        resolved = strategy_cls.resolve(None, default=default)
+        scenario._scenario_strategies = resolved
+
+        specs = policy_to_spec(scenario)
+        assert [sp.name for sp in specs] == [m.value for m in resolved]
+
+        enums = spec_to_enum(scenario_cls, specs)
+        assert enums == resolved
+
+    def test_explicit_leaf_subset_round_trips(self, monkeypatch: pytest.MonkeyPatch):
+        scenario, scenario_cls = self._build_scenario(monkeypatch)
+        strategy_cls = scenario_cls.get_strategy_class()
+        # Use the first three concrete (non-aggregate) members. The exact set
+        # is whatever ``SCENARIO_TECHNIQUES`` registers; we don't hardcode it.
+        leaves = strategy_cls.get_all_strategies()[:3]
+        assert len(leaves) >= 1, "TextAdaptive should register at least one technique"
+        scenario._scenario_strategies = leaves
+
+        specs = policy_to_spec(scenario)
+        assert [sp.name for sp in specs] == [m.value for m in leaves]
+
+        enums = spec_to_enum(scenario_cls, specs)
+        assert enums == leaves
+
+    def test_every_registered_factory_carries_source_spec(self, monkeypatch: pytest.MonkeyPatch):
+        scenario, _ = self._build_scenario(monkeypatch)
+        factories = scenario._get_attack_technique_factories()
+        assert factories, "registry should populate factories for TextAdaptive"
+        missing = [name for name, fac in factories.items() if fac.source_spec is None]
+        assert missing == [], (
+            "Every registry-built factory must expose source_spec so "
+            "policy_to_spec can reconstruct the technique catalog "
+            f"(found {len(missing)} without source_spec: {missing})"
+        )
