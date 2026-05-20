@@ -16,12 +16,13 @@ the selector's techniques rather than being prepended.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
-import uuid
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from pyrit.executor.attack import AttackScoringConfig
+from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
 from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy
@@ -109,6 +110,63 @@ class AdaptiveScenario(Scenario):
             objective_scorer=objective_scorer,
             scenario_result_id=scenario_result_id,
         )
+
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        """
+        Declare the wizard-elicitable scalar inputs to ``__init__``.
+
+        Only the four numeric / seed scalars are returned here. ``objective_scorer``
+        and ``scenario_result_id`` are base-scenario lifecycle arguments handled by
+        the wizard's standard plumbing; ``context_extractor`` is a ``Callable``
+        with a usable default (``global_context``) that the CLI elicitor cannot
+        introspect — programmatic callers may override it directly via
+        ``build_scenario_from_inputs(..., init_inputs={"context_extractor": ...})``.
+        Strategy selection (``scenario_strategies``) lives in
+        :meth:`supported_parameters` as an :meth:`initialize_async` ``--kebab-flag``
+        argument, not in :meth:`__init__`.
+
+        Returns:
+            list[RoleDescriptor]: Four SCALAR roles mirroring the constructor
+                defaults.
+        """
+        return [
+            RoleDescriptor(
+                name="epsilon",
+                description="Exploration probability for the epsilon-greedy selector (0.0 = pure exploit).",
+                tag=RoleTag.SCALAR,
+                param_type=float,
+                default=0.2,
+                required=False,
+            ),
+            RoleDescriptor(
+                name="pool_threshold",
+                description=(
+                    "Minimum per-(context, technique) attempts before the local estimate overrides the pooled rate. "
+                    "Set to 1 to disable pooling."
+                ),
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                default=3,
+                required=False,
+            ),
+            RoleDescriptor(
+                name="max_attempts_per_objective",
+                description="Maximum number of techniques to dispatch per objective before giving up.",
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                default=3,
+                required=False,
+            ),
+            RoleDescriptor(
+                name="seed",
+                description="RNG seed for deterministic technique selection. ``None`` uses a non-deterministic RNG.",
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                default=None,
+                required=False,
+            ),
+        ]
 
     async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
         """
@@ -260,9 +318,14 @@ class AdaptiveScenario(Scenario):
             return None
 
         adaptive_context = self._context_extractor(seed_group)
-        # Prefer the objective's id when available so resume keys stay stable
-        # across re-fetches of the same seed groups.
-        objective_id = seed_group.objective.id if seed_group.objective.id else uuid.uuid4()
+        # Derive a deterministic 12-char hash from the objective text so two
+        # ``initialize_async`` runs over structurally identical seed groups
+        # produce identical step identifiers — a Phase 8g prerequisite for
+        # graph-artifact round-trip hash equivalence. ``SeedObjective.id``
+        # has a ``uuid.uuid4()`` default-factory (``seed.py:95``) that mints
+        # a fresh UUID per in-memory construction, so it cannot be used as
+        # a stable resume key here.
+        objective_id = hashlib.sha256(seed_group.objective.value.encode("utf-8")).hexdigest()[:12]
         atomic_attack_name = f"{self._atomic_attack_prefix}_{dataset_name}_{objective_id}"
 
         memory_labels = {

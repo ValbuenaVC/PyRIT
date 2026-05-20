@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional, cast
 from pyrit.common import apply_defaults
 from pyrit.models import Message
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
+from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
 from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.scenario_strategy import ScenarioStrategy
@@ -118,6 +119,12 @@ class CategoryAggregatingSweepStep(ScenarioStep):
     """
 
     _OUTPUTS: ClassVar[tuple[str, ...]] = ("found_weaknesses", "all_safe")
+
+    #: Marker for ``graph_artifact.build_graph_artifact`` (Phase 8g): this step's
+    #: constructor takes a bound ``OutcomeScorer`` and an ``AtomicAttack`` whose
+    #: factory closures cannot be re-derived from primitive args. Encoding via
+    #: ``ComponentIdentifier.to_dict()`` is the only sound round-trip path.
+    GRAPH_ARTIFACT_OPAQUE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -291,6 +298,12 @@ class FilteredDeepDiveStep(ScenarioStep):
     """
 
     _OUTPUTS: ClassVar[tuple[str, ...]] = ("done",)
+
+    #: Marker for ``graph_artifact.build_graph_artifact`` (Phase 8g): this step's
+    #: constructor takes a ``Callable`` closure (``weak_categories_ref``) that
+    #: cannot be re-derived from primitive args. Encoding via
+    #: ``ComponentIdentifier.to_dict()`` is the only sound round-trip path.
+    GRAPH_ARTIFACT_OPAQUE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -501,6 +514,60 @@ class BroadSweepThenDeepDive(Scenario):
             strategy_class=self.get_strategy_class(),
             scenario_result_id=scenario_result_id,
         )
+
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        """
+        Declare the rich-object and scalar inputs the wizard / artifact must capture.
+
+        The three opaque roles are pre-built ``Identifiable`` instances that the
+        CLI wizard cannot elicit directly — programmatic callers must supply them
+        and CLI flows must round-trip them through a saved graph artifact (see
+        :class:`pyrit.scenario.core.graph_artifact.GraphArtifact`). The single
+        scalar role (``weakness_label``) is freely elicitable.
+
+        Returns:
+            list[RoleDescriptor]: Three OPAQUE roles plus one SCALAR.
+        """
+        return [
+            RoleDescriptor(
+                name="sweep_atomic_attack",
+                description=(
+                    "Pre-built single-turn AtomicAttack run across all seed groups during the sweep phase. "
+                    "Must already be wired to a target and scorer."
+                ),
+                tag=RoleTag.OPAQUE,
+                required=True,
+            ),
+            RoleDescriptor(
+                name="deep_dive_atomic_attacks",
+                description=(
+                    "Pre-built sequence of multi-turn AtomicAttacks considered during the deep-dive phase. "
+                    "Each is gated by its ``display_group`` matching a category flagged by the sweep."
+                ),
+                tag=RoleTag.OPAQUE,
+                required=True,
+            ),
+            RoleDescriptor(
+                name="outcome_scorer",
+                description=(
+                    "Pre-built OutcomeScorer whose per-response label set must include ``weakness_label``. "
+                    "Drives the sweep's category-weakness classification."
+                ),
+                tag=RoleTag.OPAQUE,
+                required=True,
+            ),
+            RoleDescriptor(
+                name="weakness_label",
+                description=(
+                    "OutcomeScorer label that signals a category breach and triggers escalation to deep dive."
+                ),
+                tag=RoleTag.SCALAR,
+                param_type=str,
+                default="safety_violation",
+                required=False,
+            ),
+        ]
 
     @classmethod
     def get_strategy_class(cls) -> type[ScenarioStrategy]:

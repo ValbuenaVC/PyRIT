@@ -251,6 +251,39 @@ class TestTextAdaptiveAtomicAttacks:
         names = [atomic.atomic_attack_name for atomic in attacks]
         assert len(set(names)) == len(names)
 
+    async def test_atomic_names_are_deterministic_across_runs(self, mock_objective_target, mock_objective_scorer):
+        """Phase 8b-1 regression: SHA256 fallback for unset objective.id is deterministic.
+
+        Building the scenario twice with structurally identical seed groups must
+        produce identical atomic_attack_names. With the previous ``uuid.uuid4()``
+        fallback, the two runs would produce different names and graph-artifact
+        round-trip (Phase 8g) would fail its hash-equivalence invariant.
+        """
+        groups_factory = lambda: {  # noqa: E731
+            "violence": [
+                _make_seed_group(value="obj-determ-1", harm_categories=["violence"]),
+                _make_seed_group(value="obj-determ-2", harm_categories=["violence"]),
+            ],
+            "hate": [_make_seed_group(value="obj-determ-3", harm_categories=["hate"])],
+        }
+        _s1, attacks_first = await self._build_scenario_and_attacks(
+            mock_objective_target=mock_objective_target,
+            mock_objective_scorer=mock_objective_scorer,
+            seed_groups=groups_factory(),
+        )
+        _s2, attacks_second = await self._build_scenario_and_attacks(
+            mock_objective_target=mock_objective_target,
+            mock_objective_scorer=mock_objective_scorer,
+            seed_groups=groups_factory(),
+        )
+        names_first = sorted(atomic.atomic_attack_name for atomic in attacks_first)
+        names_second = sorted(atomic.atomic_attack_name for atomic in attacks_second)
+        assert names_first == names_second, (
+            "Atomic-attack names must be deterministic across runs with structurally "
+            "identical seed groups. The Phase 8b SHA256 fallback for unset objective.id "
+            "was likely replaced with a non-deterministic primitive."
+        )
+
     async def test_display_group_is_dataset_name(self, mock_objective_target, mock_objective_scorer):
         groups = {
             "violence": [_make_seed_group(value="obj-v", harm_categories=["violence"])],
