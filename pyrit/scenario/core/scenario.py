@@ -1220,6 +1220,16 @@ class Scenario(ABC):
         ``ScenarioStepResult.metadata['step_name']`` so the orchestrator can
         identify the step at yield time.
 
+        Concurrency contract: ``ScenarioStep.process_async`` takes no arguments,
+        so the default policy cannot thread ``self._max_concurrency`` to non-
+        ``AtomicAttack`` steps. To avoid silently serializing work the caller
+        explicitly asked to run in parallel, this method raises ``ValueError``
+        when ``self._max_concurrency > 1`` and any step is not an
+        ``AtomicAttack``. Scenarios that want concurrent dispatch over custom
+        steps must override ``_build_execution_graph`` and pass concurrency
+        through their own policy actions (see
+        ``BroadSweepThenDeepDive._build_execution_graph`` for the pattern).
+
         Args:
             steps (Sequence[ScenarioStep]): The steps to wrap. Must be non-empty.
 
@@ -1227,12 +1237,29 @@ class Scenario(ABC):
             StrategyPolicy[ScenarioStep, int]: A frozen linear policy.
 
         Raises:
-            ValueError: If ``steps`` is empty.
+            ValueError: If ``steps`` is empty, or if ``self._max_concurrency > 1``
+                and at least one step is not an ``AtomicAttack``.
         """
         if not steps:
             raise ValueError("_build_default_linear_policy requires at least one step.")
 
         max_concurrency = self._max_concurrency
+
+        if max_concurrency > 1:
+            non_atomic = [step for step in steps if not isinstance(step, AtomicAttack)]
+            if non_atomic:
+                non_atomic_names = ", ".join(repr(step.name) for step in non_atomic)
+                raise ValueError(
+                    f"Scenario '{self._name}' is configured with max_concurrency="
+                    f"{max_concurrency} but the default linear policy received "
+                    f"non-AtomicAttack ScenarioStep instances (steps: {non_atomic_names}). "
+                    "The default policy cannot thread max_concurrency through "
+                    "ScenarioStep.process_async, which would silently serialize "
+                    "execution. Either lower max_concurrency to 1, or override "
+                    "_build_execution_graph to author a policy that forwards "
+                    "concurrency through your custom step type."
+                )
+
         terminal_state = len(steps)
         actions: dict[int, PolicyAction[ScenarioStep, int]] = {}
 

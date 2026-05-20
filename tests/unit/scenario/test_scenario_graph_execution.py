@@ -448,12 +448,32 @@ class TestPartialFailureSurfacing:
 
 
 class _CountingStep(ScenarioStep):
-    """Non-AtomicAttack step that records every process_async call."""
+    """Non-AtomicAttack step that records every process_async call.
+
+    Duck-types the ``atomic_attack_name`` / ``objectives`` /
+    ``filter_seed_groups_by_objectives`` surface so the orchestrator's resume
+    bookkeeping can walk this step the same way it would walk an AtomicAttack.
+    """
 
     def __init__(self, *, name: str) -> None:
         self.name = name
         self.outputs = ["done"]
         self.call_count = 0
+        # Duck-type AtomicAttack-shaped attributes so the orchestrator's resume
+        # filter can survey this step alongside real AtomicAttacks.
+        self.atomic_attack_name = name
+        self.objectives: list[str] = []
+        self.seed_groups: list = []
+        self.display_group = name
+        # Duck-type the resume-disambiguator attribute added by the AtomicAttack
+        # main-merge upgrade. ``_get_completed_objective_hashes_for_attack`` reads
+        # it before the linear-policy guard can fire; supplying a stable string
+        # lets the test reach the guard while preserving a sentinel value that
+        # never collides with a real ``technique_eval_hash``.
+        self.technique_eval_hash = f"counting-step::{name}"
+
+    def filter_seed_groups_by_objectives(self, *, remaining_objectives: list[str]) -> None:
+        self.objectives = list(remaining_objectives)
 
     async def process_async(self) -> ScenarioStepResult:
         self.call_count += 1
@@ -511,6 +531,72 @@ class _CustomStepScenario(_GraphConcreteScenario):
             terminal_states=frozenset({len(effective_steps)}),
         )
         return StrategyGraph(policy=policy)
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestNonAtomicStepConcurrencyContract:
+    """The default linear policy cannot thread ``max_concurrency`` through ``process_async``.
+
+    ``ScenarioStep.process_async`` takes no arguments by contract, so the default
+    ``_build_default_linear_policy`` has no way to forward the scenario-level
+    ``max_concurrency`` to non-AtomicAttack steps. The legacy behavior was to
+    silently swallow ``max_concurrency`` for those steps — a footgun, because
+    ``max_concurrency`` defaults to ``10`` and users had no signal that their
+    custom step was being serialized.
+
+    Contract:
+      * ``max_concurrency == 1`` is fine for any ``ScenarioStep`` (no concurrency
+        was requested in the first place).
+      * ``max_concurrency > 1`` with a non-AtomicAttack step in the default policy
+        is a misuse: raise ``ValueError`` pointing the user at the
+        ``_build_execution_graph`` override.
+    """
+
+    def test_raises_when_non_atomic_step_with_concurrency_above_one(self, mock_objective_target):
+        scenario = _GraphConcreteScenario(name="MisuseConcurrency", version=1)
+        scenario._max_concurrency = 4
+        custom_step = _CountingStep(name="custom")
+
+        with pytest.raises(ValueError, match="max_concurrency"):
+            scenario._build_default_linear_policy(steps=[custom_step])
+
+    def test_raises_when_mixed_steps_with_concurrency_above_one(self, mock_objective_target):
+        scenario = _GraphConcreteScenario(name="MisuseMixed", version=1)
+        scenario._max_concurrency = 2
+        atomic = _make_atomic_attack_mock("a0", _sample_result(0))
+        custom_step = _CountingStep(name="custom")
+
+        with pytest.raises(ValueError, match="max_concurrency"):
+            scenario._build_default_linear_policy(steps=[atomic, custom_step])
+
+    def test_allows_non_atomic_step_when_concurrency_is_one(self, mock_objective_target):
+        scenario = _GraphConcreteScenario(name="SerialCustom", version=1)
+        scenario._max_concurrency = 1
+        custom_step = _CountingStep(name="custom")
+
+        policy = scenario._build_default_linear_policy(steps=[custom_step])
+
+        assert policy.initial_state == 0
+        assert policy.terminal_states == frozenset({1})
+
+    async def test_run_async_raises_when_default_policy_gets_non_atomic_with_concurrency(self, mock_objective_target):
+        """End-to-end: running a scenario whose ``_get_atomic_attacks_async`` returns
+        non-AtomicAttack steps with the default ``max_concurrency=10`` raises
+        before any step executes, instead of silently serializing.
+        """
+        custom_step = _CountingStep(name="silent_serializer")
+        # Give the step a fake objective so the resume filter keeps it alive long
+        # enough to reach _build_execution_graph.
+        custom_step.objectives = ["dummy-objective"]
+        scenario = _GraphConcreteScenario(
+            name="SilentSerialize",
+            version=1,
+            atomic_attacks_to_return=cast("list", [custom_step]),
+        )
+        await scenario.initialize_async(objective_target=mock_objective_target)
+        with pytest.raises(ValueError, match="max_concurrency"):
+            await scenario.run_async()
+        assert custom_step.call_count == 0
 
 
 @pytest.mark.usefixtures("patch_central_database")
