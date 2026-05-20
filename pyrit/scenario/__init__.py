@@ -33,6 +33,7 @@ from pyrit.scenario.core import (
     ScenarioStrategy,
     StrategyGraph,
     StrategyPolicy,
+    linear_strategy_policy,
 )
 
 # Import scenario submodules directly and register them as virtual subpackages
@@ -73,6 +74,7 @@ __all__ = [
     "ScenarioResult",
     "StrategyGraph",
     "StrategyPolicy",
+    "linear_strategy_policy",
     "airt",
     "benchmark",
     "garak",

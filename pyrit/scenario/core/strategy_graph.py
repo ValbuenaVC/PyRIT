@@ -9,15 +9,17 @@ through states by invoking the action bound to the current state. Each action
 returns a ``(next_state, ScenarioStepResult | None)`` pair; the graph yields
 the result and advances. Terminal states stop the loop.
 
-This module is part of the scenario core refactor scaffold (Phase 0). The
-skeleton supports straight-line execution; richer policy composition (graph
-validation, cycle detection, parallel branches) lands as Phase 3 needs it.
+This module also exposes ``linear_strategy_policy``, a convenience builder
+that produces a trivial "run steps 0..N-1 in order" policy. Phase 5 will use
+it to silently upgrade scenarios that still declare their steps as a flat
+list (via the legacy ``_get_atomic_attacks_async`` override) without forcing
+those scenarios to author a custom policy.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Hashable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Generic, TypeVar
@@ -239,8 +241,60 @@ class StrategyGraph(Generic[StepT, StateT]):
             self._current_state = next_state
 
 
+def linear_strategy_policy(
+    steps: Sequence[ScenarioStep],
+) -> StrategyPolicy[ScenarioStep, int]:
+    """
+    Build a trivial linear-traversal policy over an ordered list of steps.
+
+    State ``i`` binds ``steps[i]`` as the graph's current step, awaits its
+    ``process_async``, and transitions to state ``i + 1``. State ``len(steps)``
+    is the sole terminal state.
+
+    Args:
+        steps (Sequence[ScenarioStep]): Steps to execute in order. Must be
+            non-empty.
+
+    Returns:
+        StrategyPolicy[ScenarioStep, int]: A policy that walks the steps
+        sequentially. Pass it to ``StrategyGraph(policy=...)`` to get the
+        runnable graph.
+
+    Raises:
+        ValueError: If ``steps`` is empty.
+    """
+    if not steps:
+        raise ValueError("linear_strategy_policy requires at least one step.")
+
+    terminal = len(steps)
+    actions: dict[int, PolicyAction[ScenarioStep, int]] = {}
+
+    for index, step in enumerate(steps):
+
+        async def _action(
+            graph: StrategyGraph[ScenarioStep, int],
+            _step: ScenarioStep = step,
+            _next: int = index + 1,
+        ) -> tuple[int, ScenarioStepResult | None]:
+            graph.bind_current_step(step=_step)
+            try:
+                result = await _step.process_async()
+            finally:
+                graph.bind_current_step(step=None)
+            return _next, result
+
+        actions[index] = _action
+
+    return StrategyPolicy(
+        actions=actions,
+        initial_state=0,
+        terminal_states=frozenset({terminal}),
+    )
+
+
 __all__ = [
     "StrategyGraph",
     "StrategyPolicy",
     "PolicyAction",
+    "linear_strategy_policy",
 ]

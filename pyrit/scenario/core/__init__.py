@@ -17,7 +17,7 @@ from pyrit.scenario.core.scenario_techniques import (
     SCENARIO_TECHNIQUES,
     register_scenario_techniques,
 )
-from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy
+from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy, linear_strategy_policy
 
 __all__ = [
     "AtomicAttack",
@@ -39,6 +39,7 @@ __all__ = [
     "ScorerOverridePolicy",
     "StrategyGraph",
     "StrategyPolicy",
+    "linear_strategy_policy",
     "register_scenario_techniques",
     "get_default_scorer_target",
     "get_default_adversarial_target",
