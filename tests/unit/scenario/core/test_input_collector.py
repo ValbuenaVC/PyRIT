@@ -242,6 +242,42 @@ class TestArtifactInputCollector:
         collector = ArtifactInputCollector({"instance": opaque_payload})
         assert collector.collect(role=_opaque_role()) == opaque_payload
 
+    def test_defensive_copy_of_input_mapping(self):
+        """Mutating the source dict after construction does not affect the collector."""
+        source: dict[str, Any] = {"label": "first"}
+        collector = ArtifactInputCollector(source)
+        source["label"] = "second"
+        assert collector.collect(role=_scalar_role()) == "first"
+
+    def test_implements_input_collector_protocol(self):
+        assert isinstance(ArtifactInputCollector({}), InputCollector)
+
+
+class TestInputCollectorProtocolNegative:
+    """Pin that ``@runtime_checkable`` does not over-match objects without ``collect``."""
+
+    def test_str_is_not_collector(self):
+        assert not isinstance("not a collector", InputCollector)
+
+    def test_dict_is_not_collector(self):
+        assert not isinstance({"label": "v"}, InputCollector)
+
+    def test_object_with_unrelated_attrs_is_not_collector(self):
+        class _NotACollector:
+            def some_other_method(self) -> None:
+                pass
+
+        assert not isinstance(_NotACollector(), InputCollector)
+
+    def test_object_with_collect_attr_is_collector(self):
+        """``@runtime_checkable`` only checks attribute presence, not signature."""
+
+        class _DuckTyped:
+            def collect(self, *, role: Any, error: Any = None, attempt: int = 0) -> Any:
+                return "ok"
+
+        assert isinstance(_DuckTyped(), InputCollector)
+
 
 # --- collect_inputs_with_retry ---------------------------------------------------
 
