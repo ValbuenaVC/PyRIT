@@ -12,6 +12,13 @@ from pyrit.scenario.scenarios.airt.leakage import Leakage
 from pyrit.scenario.scenarios.airt.psychosocial import Psychosocial, PsychosocialStrategy
 from pyrit.scenario.scenarios.airt.rapid_response import RapidResponse
 from pyrit.scenario.scenarios.airt.scam import Scam, ScamStrategy
+from pyrit.scenario.scenarios.airt.sweep_then_deep_dive import (
+    BroadSweepThenDeepDive,
+    BroadSweepThenDeepDiveStrategy,
+    CategoryAggregatingSweepStep,
+    FilteredDeepDiveStep,
+    SweepThenDeepDiveState,
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -36,10 +43,14 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "BroadSweepThenDeepDive",
+    "BroadSweepThenDeepDiveStrategy",
+    "CategoryAggregatingSweepStep",
     "ContentHarms",
     "ContentHarmsStrategy",
     "Cyber",
     "CyberStrategy",
+    "FilteredDeepDiveStep",
     "Jailbreak",
     "JailbreakStrategy",
     "Leakage",
@@ -50,4 +61,5 @@ __all__ = [
     "RapidResponseStrategy",
     "Scam",
     "ScamStrategy",
+    "SweepThenDeepDiveState",
 ]
