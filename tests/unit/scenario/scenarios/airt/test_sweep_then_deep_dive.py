@@ -504,6 +504,29 @@ class TestBroadSweepThenDeepDive:
                 outcome_scorer=scorer,
             )
 
+    def test_constructor_rejects_weakness_label_not_in_outcome_scorer(self) -> None:
+        # The inner ``CategoryAggregatingSweepStep.__init__`` already validates
+        # this, but it only runs when ``_build_execution_graph`` is invoked at
+        # ``run_async`` time. A wizard-built scenario would happily save a
+        # graph artifact and only blow up the first time the user actually
+        # ran it. Fail-fast at outer-constructor time so the wizard / API
+        # caller gets the error at the same point they supplied the input.
+        wrapped = MagicMock(spec=Scorer)
+        wrapped.get_identifier.return_value = _make_scorer_id("MockScorer")
+        scorer = OutcomeScorer(
+            wrapped_scorer=wrapped,
+            outcome_map={_SAFE_LABEL: lambda s: True},  # no weakness label
+        )
+        sweep = _make_atomic_mock(name="sweep", display_group="cat-a", attack_results=[])
+        deep = _make_atomic_mock(name="deep", display_group="cat-a", attack_results=[])
+        with pytest.raises(ValueError, match=r"weakness_label .* not declared"):
+            BroadSweepThenDeepDive(
+                sweep_atomic_attack=cast("AtomicAttack", sweep),
+                deep_dive_atomic_attacks=[cast("AtomicAttack", deep)],
+                outcome_scorer=scorer,
+                weakness_label="never_emitted",
+            )
+
     def test_strategy_metadata(self) -> None:
         assert BroadSweepThenDeepDive.get_strategy_class() is BroadSweepThenDeepDiveStrategy
         assert BroadSweepThenDeepDive.get_default_strategy() is BroadSweepThenDeepDiveStrategy.DEFAULT

@@ -492,9 +492,24 @@ class BroadSweepThenDeepDive(Scenario):
 
         Raises:
             ValueError: If ``deep_dive_atomic_attacks`` is empty.
+            ValueError: If ``weakness_label`` is not declared as one of
+                ``outcome_scorer.outcomes``.
         """
         if not deep_dive_atomic_attacks:
             raise ValueError("BroadSweepThenDeepDive requires at least one deep_dive_atomic_attack.")
+
+        # Fail fast: the inner ``CategoryAggregatingSweepStep`` performs the
+        # same check, but only inside ``_build_execution_graph`` (called from
+        # ``run_async``). A wizard-built scenario would otherwise serialize a
+        # graph artifact and only error at first execution, defeating the
+        # "validate at the surface that elicited the input" guarantee that
+        # ``input_schema`` advertises for the ``weakness_label`` / ``outcome_scorer``
+        # pair.
+        if weakness_label not in outcome_scorer.outcomes:
+            raise ValueError(
+                f"weakness_label {weakness_label!r} is not declared as an outcome of the "
+                f"supplied OutcomeScorer (declared: {outcome_scorer.outcomes!r})."
+            )
 
         self._sweep_atomic = sweep_atomic_attack
         self._deep_dive_atomics: list[AtomicAttack] = list(deep_dive_atomic_attacks)
