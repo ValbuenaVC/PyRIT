@@ -262,3 +262,85 @@ def test_generate_schema_migration_with_diffs_creates_revision():
                 mock_revision.assert_called_once()
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: step_identifier additive migration (a1c2e4f80b3d)
+# ---------------------------------------------------------------------------
+
+
+def _column_names(connection, table: str) -> set[str]:
+    return {col["name"] for col in inspect(connection).get_columns(table)}
+
+
+def test_step_identifier_migration_metadata():
+    """Phase 4 migration script declares the correct revision chain."""
+    from pyrit.memory.alembic.versions import a1c2e4f80b3d_add_step_identifier as mod
+
+    assert mod.revision == "a1c2e4f80b3d"
+    assert mod.down_revision == "7a1b2c3d4e5f"
+    assert mod.branch_labels is None
+    assert mod.depends_on is None
+
+
+def test_step_identifier_migration_upgrade_adds_column():
+    """Upgrading to a1c2e4f80b3d adds the nullable step_identifier column to AttackResultEntries."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = os.path.join(temp_dir, "step-upgrade.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            with engine.begin() as connection:
+                pyrit_root = Path(__file__).resolve().parent.parent.parent.parent / "pyrit"
+                script_location = pyrit_root / "memory" / "alembic"
+                config = Config()
+                config.set_main_option("script_location", str(script_location))
+                config.attributes["connection"] = connection
+                config.attributes["version_table"] = "pyrit_memory_alembic_version"
+
+                # Stop just before the step_identifier migration: no column yet.
+                command.upgrade(config, "7a1b2c3d4e5f")
+                cols_before = _column_names(connection, "AttackResultEntries")
+                assert "step_identifier" not in cols_before
+                assert "atomic_attack_identifier" in cols_before  # sanity: prior migration applied
+
+                command.upgrade(config, "a1c2e4f80b3d")
+                cols_after = _column_names(connection, "AttackResultEntries")
+                assert "step_identifier" in cols_after
+        finally:
+            engine.dispose()
+
+
+def test_step_identifier_migration_downgrade_round_trip_leaves_clean_schema():
+    """Round-tripping a1c2e4f80b3d (upgrade then downgrade) restores the pre-Phase-4 schema and leaves
+    the rest of the schema untouched."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = os.path.join(temp_dir, "step-roundtrip.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            with engine.begin() as connection:
+                pyrit_root = Path(__file__).resolve().parent.parent.parent.parent / "pyrit"
+                script_location = pyrit_root / "memory" / "alembic"
+                config = Config()
+                config.set_main_option("script_location", str(script_location))
+                config.attributes["connection"] = connection
+                config.attributes["version_table"] = "pyrit_memory_alembic_version"
+
+                command.upgrade(config, "7a1b2c3d4e5f")
+                baseline_cols = _column_names(connection, "AttackResultEntries")
+                baseline_tables = set(inspect(connection).get_table_names())
+
+                command.upgrade(config, "a1c2e4f80b3d")
+                assert "step_identifier" in _column_names(connection, "AttackResultEntries")
+                version = connection.execute(text("SELECT version_num FROM pyrit_memory_alembic_version")).scalar_one()
+                assert version == "a1c2e4f80b3d"
+
+                command.downgrade(config, "7a1b2c3d4e5f")
+                after_cols = _column_names(connection, "AttackResultEntries")
+                after_tables = set(inspect(connection).get_table_names())
+                assert "step_identifier" not in after_cols
+                assert after_cols == baseline_cols
+                assert after_tables == baseline_tables
+                version = connection.execute(text("SELECT version_num FROM pyrit_memory_alembic_version")).scalar_one()
+                assert version == "7a1b2c3d4e5f"
+        finally:
+            engine.dispose()

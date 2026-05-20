@@ -1756,6 +1756,56 @@ def test_get_attack_results_by_step_identifier_filter_skips_legacy_rows(sqlite_i
     assert [r.conversation_id for r in results] == ["conv_new"]
 
 
+def test_legacy_attack_result_without_step_identifier_round_trips(sqlite_instance: MemoryInterface):
+    """A legacy AttackResult (no step_identifier) persists and loads back with step_identifier == None."""
+    legacy_ar = _make_attack_result_with_identifier("conv_legacy", "CrescendoAttack")
+    assert legacy_ar.step_identifier is None
+    sqlite_instance.add_attack_results_to_memory(attack_results=[legacy_ar])
+
+    results = sqlite_instance.get_attack_results()
+    assert len(results) == 1
+    assert results[0].conversation_id == "conv_legacy"
+    assert results[0].step_identifier is None
+
+
+def test_multiple_attack_results_share_step_identifier(sqlite_instance: MemoryInterface):
+    """Two AttackResults for the same logical step share one step_identifier hash after persistence,
+    and a single STEP filter retrieves both."""
+    from pyrit.identifiers.step_identifier import build_step_identifier
+
+    ar1 = _make_attack_result_with_identifier("conv_share_1", "CrescendoAttack")
+    ar2 = _make_attack_result_with_identifier("conv_share_2", "CrescendoAttack")
+    other = _make_attack_result_with_identifier("conv_other", "CrescendoAttack")
+
+    shared_step = build_step_identifier(
+        step_name="opening_phase",
+        outcome="done",
+        attack_execution_identifiers=[ar1.atomic_attack_identifier],
+    )
+    ar1.step_identifier = shared_step
+    ar2.step_identifier = shared_step
+    other.step_identifier = build_step_identifier(
+        step_name="escalation_phase",
+        outcome="done",
+        attack_execution_identifiers=[other.atomic_attack_identifier],
+    )
+    sqlite_instance.add_attack_results_to_memory(attack_results=[ar1, ar2, other])
+
+    results = sqlite_instance.get_attack_results(
+        identifier_filters=[
+            IdentifierFilter(
+                identifier_type=IdentifierType.STEP,
+                property_path="$.hash",
+                value=shared_step.hash,
+                partial_match=False,
+            )
+        ],
+    )
+    assert {r.conversation_id for r in results} == {"conv_share_1", "conv_share_2"}
+    hashes = {r.step_identifier.hash for r in results}
+    assert hashes == {shared_step.hash}
+
+
 def test_get_attack_results_targeted_harm_categories_emits_deprecation_warning(sqlite_instance: MemoryInterface):
     """Test that passing targeted_harm_categories emits a DeprecationWarning."""
     import warnings

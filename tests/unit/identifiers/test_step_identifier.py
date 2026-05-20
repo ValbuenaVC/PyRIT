@@ -145,3 +145,85 @@ def test_hash_differs_when_step_name_differs():
 def test_step_eval_version_is_positive_int():
     assert isinstance(STEP_EVAL_VERSION, int)
     assert STEP_EVAL_VERSION >= 1
+
+
+def test_hash_differs_when_attack_execution_child_config_differs():
+    """Same step_name and outcome but different atomic child params must NOT dedup."""
+    atomic_a = _make_atomic_identifier(hash_suffix="a")
+    atomic_b = _make_atomic_identifier(hash_suffix="b")
+
+    only_a = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[atomic_a],
+    )
+    only_b = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[atomic_b],
+    )
+    assert only_a.hash != only_b.hash
+
+
+def test_attack_executions_value_is_list_not_nested_dict():
+    """children["attack_executions"] must be a ``list[ComponentIdentifier]``, never a nested dict."""
+    atomic = _make_atomic_identifier()
+    result = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[atomic],
+    )
+    nested = result.children["attack_executions"]
+    assert isinstance(nested, list)
+    assert not isinstance(nested, dict)
+    assert all(isinstance(c, ComponentIdentifier) for c in nested)
+
+
+def test_attack_executions_preserves_input_order():
+    """``attack_execution_identifiers`` is preserved in execution order (per docstring), so reversed inputs
+    produce a different hash. This guards against an accidental sort that would erase execution-order
+    semantics for branching/adaptive scenarios."""
+    atomic_a = _make_atomic_identifier(hash_suffix="a")
+    atomic_b = _make_atomic_identifier(hash_suffix="b")
+
+    ab = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[atomic_a, atomic_b],
+    )
+    ba = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[atomic_b, atomic_a],
+    )
+    # Lists preserve caller-supplied order.
+    assert [c.params["marker"] for c in ab.children["attack_executions"]] == ["a", "b"]
+    assert [c.params["marker"] for c in ba.children["attack_executions"]] == ["b", "a"]
+    # Hash reflects order — these are NOT considered the same step execution.
+    assert ab.hash != ba.hash
+
+
+def test_hash_changes_when_a_child_param_changes():
+    """If an atomic child's params change, the step identifier's hash changes too."""
+    baseline = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[_make_atomic_identifier(hash_suffix="v1")],
+    )
+    mutated = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[_make_atomic_identifier(hash_suffix="v2")],
+    )
+    assert baseline.hash != mutated.hash
+
+
+def test_step_identifier_eval_version_in_params():
+    """The schema/eval version is embedded in params so old rows preserve their original version."""
+    result = build_step_identifier(
+        step_name="opening",
+        outcome="violation",
+        attack_execution_identifiers=[],
+    )
+    assert "eval_version" in result.params
+    assert result.params["eval_version"] == STEP_EVAL_VERSION
