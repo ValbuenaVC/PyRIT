@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional, cast
 from pyrit.common import apply_defaults
 from pyrit.models import Message
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
-from pyrit.scenario.core.scenario import Scenario
+from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.scenario_strategy import ScenarioStrategy
 from pyrit.scenario.core.strategy_graph import (
@@ -434,6 +434,13 @@ class BroadSweepThenDeepDive(Scenario):
     """
 
     VERSION: int = 1
+
+    #: The branching graph in ``_build_execution_graph`` ignores the orchestrator-supplied
+    #: ``steps`` list and dispatches a fixed sweep -> deep-dive policy, so an implicitly
+    #: prepended baseline ``AtomicAttack`` would be persisted in ``_atomic_attacks`` but
+    #: never executed by the graph. ``Forbidden`` makes the (correct) intent explicit and
+    #: fails fast if a caller passes ``include_baseline=True``.
+    BASELINE_ATTACK_POLICY: ClassVar[BaselineAttackPolicy] = BaselineAttackPolicy.Forbidden
 
     @apply_defaults
     def __init__(

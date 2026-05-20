@@ -30,6 +30,7 @@ from pyrit.identifiers import ComponentIdentifier
 from pyrit.models import AttackOutcome, AttackResult, MessagePiece
 from pyrit.scenario import DatasetConfiguration
 from pyrit.scenario.core import AtomicAttack
+from pyrit.scenario.core.scenario import BaselineAttackPolicy
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 from pyrit.scenario.core.strategy_graph import StrategyGraph, StrategyPolicy
 from pyrit.scenario.scenarios.airt.sweep_then_deep_dive import (
@@ -507,6 +508,13 @@ class TestBroadSweepThenDeepDive:
         assert BroadSweepThenDeepDive.get_strategy_class() is BroadSweepThenDeepDiveStrategy
         assert BroadSweepThenDeepDive.get_default_strategy() is BroadSweepThenDeepDiveStrategy.DEFAULT
         assert isinstance(BroadSweepThenDeepDive.default_dataset_config(), DatasetConfiguration)
+
+    def test_baseline_attack_policy_is_forbidden(self) -> None:
+        # The branching graph ignores the orchestrator-supplied ``steps`` list, so an
+        # implicitly prepended baseline ``AtomicAttack`` would be persisted but never
+        # executed. ``Forbidden`` makes the (correct) intent explicit and fails fast
+        # if a caller passes ``include_baseline=True``.
+        assert BroadSweepThenDeepDive.BASELINE_ATTACK_POLICY is BaselineAttackPolicy.Forbidden
 
     async def test_get_atomic_attacks_returns_canonical_order(self) -> None:
         scenario, sweep_atomic, deep_dives = self._build_scenario(
