@@ -17,10 +17,10 @@ validation, cycle detection, parallel branches) lands as Phase 3 needs it.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Hashable, Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Generic, TypeVar
-
-from pyrit.scenario.core.scenario_state import ScenarioCoreState, ScenarioStateLike
 
 if TYPE_CHECKING:
     from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 StepT = TypeVar("StepT", bound="ScenarioStep")
-StateT = TypeVar("StateT", bound=ScenarioStateLike)
+StateT = TypeVar("StateT", bound=Hashable)
 
 #: A policy action receives the graph and returns the next state plus the
 #: result produced (or ``None`` if the action did no observable work).
@@ -38,15 +38,99 @@ PolicyAction = Callable[
 ]
 
 
+@dataclass(frozen=True)
+class StrategyPolicy(Generic[StepT, StateT]):
+    """
+    Frozen declaration of how a ``StrategyGraph`` traverses its states.
+
+    Mirrors the codebase's other policy wrappers (``CapabilityHandlingPolicy``,
+    ``TargetRequirements``): a typed wrapper around a mapping plus the
+    structural invariants that mapping must satisfy. Bundling the action
+    map, ``initial_state``, and ``terminal_states`` into one frozen value
+    means the policy can be constructed once at scenario class definition
+    time and shared across runs without risk of mutation.
+
+    The action mapping is defensively copied into a ``MappingProxyType``
+    in ``__post_init__`` so the policy is genuinely read-only.
+
+    Attributes:
+        actions (Mapping[StateT, PolicyAction[StepT, StateT]]): Per-state
+            async callable that produces the next state plus an optional
+            ``ScenarioStepResult``.
+        initial_state (StateT): The state the graph starts in. Must not be
+            in ``terminal_states`` (a graph that starts terminal does no
+            work and is almost certainly a bug).
+        terminal_states (frozenset[StateT]): States that stop the event
+            loop when reached. Must be non-empty. Terminal states must not
+            appear in ``actions``.
+    """
+
+    actions: Mapping[StateT, PolicyAction[StepT, StateT]]
+    initial_state: StateT
+    terminal_states: frozenset[StateT] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        """
+        Validate the policy structure and freeze the action map.
+
+        Raises:
+            ValueError: If ``terminal_states`` is empty, ``initial_state``
+                is itself a terminal state, or a terminal state appears as
+                a key in ``actions`` (which would never fire).
+        """
+        if not self.terminal_states:
+            raise ValueError("StrategyPolicy requires at least one terminal state.")
+        if self.initial_state in self.terminal_states:
+            raise ValueError(
+                f"initial_state {self.initial_state!r} is in terminal_states; "
+                f"the graph would do no work."
+            )
+
+        overlap = [state for state in self.actions if state in self.terminal_states]
+        if overlap:
+            raise ValueError(
+                f"Terminal states must not appear in actions: {overlap!r}."
+            )
+
+        object.__setattr__(self, "actions", MappingProxyType(dict(self.actions)))
+        object.__setattr__(self, "terminal_states", frozenset(self.terminal_states))
+
+    def get_action(self, *, state: StateT) -> PolicyAction[StepT, StateT]:
+        """
+        Return the action bound to ``state``.
+
+        Args:
+            state (StateT): The state to look up.
+
+        Returns:
+            PolicyAction[StepT, StateT]: The configured async action.
+
+        Raises:
+            KeyError: If ``state`` is non-terminal and has no entry in
+                ``actions`` (indicates a malformed policy).
+        """
+        try:
+            return self.actions[state]
+        except KeyError:
+            known = ", ".join(sorted(str(s) for s in self.actions))
+            raise KeyError(
+                f"No action defined for state {state!r}. Known states: {known or '(none)'}."
+            ) from None
+
+    def is_terminal(self, *, state: StateT) -> bool:
+        """Return ``True`` if ``state`` is a terminal state."""
+        return state in self.terminal_states
+
+
 class StrategyGraph(Generic[StepT, StateT]):
     """
     Policy-driven state machine over ``ScenarioStep``s.
 
-    Construct with a ``policy`` dict mapping each non-terminal state to an
-    async callable that returns the next state and (optionally) the step
-    result produced. ``event_loop_async`` iterates the graph: at each state
-    it invokes the bound action, yields any returned result, and advances to
-    the next state until a terminal state is reached.
+    Construct with a frozen ``StrategyPolicy`` describing the action map,
+    starting state, and terminal states. ``event_loop_async`` iterates the
+    graph: at each state it invokes the bound action, yields any returned
+    result, and advances to the next state until a terminal state is
+    reached.
 
     The graph maintains ``current_state``, ``current_step``, and ``history``
     so that retries can resume from the last persisted state without
@@ -56,46 +140,26 @@ class StrategyGraph(Generic[StepT, StateT]):
     def __init__(
         self,
         *,
-        policy: dict[StateT, PolicyAction[StepT, StateT]],
-        initial_state: StateT,
-        terminal_states: set[StateT],
+        policy: StrategyPolicy[StepT, StateT],
     ) -> None:
         """
-        Initialize a ``StrategyGraph``.
+        Initialize a ``StrategyGraph`` from a frozen policy.
 
         Args:
-            policy (dict[StateT, PolicyAction[StepT, StateT]]): Mapping from
-                each non-terminal state to the async action that fires while
-                in that state.
-            initial_state (StateT): Starting state. Must not be in
-                ``terminal_states`` (a graph that starts in a terminal state
-                does no work and is almost certainly a bug).
-            terminal_states (set[StateT]): States that stop ``event_loop_async``
-                when reached. Must be non-empty.
-
-        Raises:
-            ValueError: If ``terminal_states`` is empty, ``initial_state``
-                is terminal, or a non-terminal state lacks a policy entry.
+            policy (StrategyPolicy[StepT, StateT]): Frozen policy describing
+                the action map, initial state, and terminal states. All
+                structural validation lives on ``StrategyPolicy``; the graph
+                trusts the policy it receives.
         """
-        if not terminal_states:
-            raise ValueError("StrategyGraph requires at least one terminal state.")
-        if initial_state in terminal_states:
-            raise ValueError(
-                f"initial_state {initial_state!r} is in terminal_states; the graph would do no work."
-            )
-
-        missing_policy = [state for state in policy if state in terminal_states]
-        if missing_policy:
-            raise ValueError(
-                f"Terminal states must not appear in policy: {missing_policy!r}."
-            )
-
-        self._policy = dict(policy)
-        self._initial_state = initial_state
-        self._terminal_states = set(terminal_states)
-        self._current_state: StateT = initial_state
+        self._policy = policy
+        self._current_state: StateT = policy.initial_state
         self._current_step: StepT | None = None
         self._history: list[tuple[StateT, ScenarioStepResult]] = []
+
+    @property
+    def policy(self) -> StrategyPolicy[StepT, StateT]:
+        """Return the frozen policy that drives this graph."""
+        return self._policy
 
     @property
     def current_state(self) -> StateT:
@@ -115,9 +179,9 @@ class StrategyGraph(Generic[StepT, StateT]):
     @property
     def is_terminal(self) -> bool:
         """Return ``True`` if the graph is in a terminal state."""
-        return self._current_state in self._terminal_states
+        return self._policy.is_terminal(state=self._current_state)
 
-    def bind_current_step(self, step: StepT | None) -> None:
+    def bind_current_step(self, *, step: StepT | None) -> None:
         """
         Set the step bound to the current state.
 
@@ -132,12 +196,12 @@ class StrategyGraph(Generic[StepT, StateT]):
 
     def reset(self) -> None:
         """
-        Reset the graph back to ``initial_state`` and clear history.
+        Reset the graph back to ``policy.initial_state`` and clear history.
 
         Used by retry paths that want a clean slate rather than resuming
         from the last persisted state.
         """
-        self._current_state = self._initial_state
+        self._current_state = self._policy.initial_state
         self._current_step = None
         self._history = []
 
@@ -148,7 +212,7 @@ class StrategyGraph(Generic[StepT, StateT]):
         Restartable: callers may resume from the current state after an
         exception or external interruption. Each iteration:
 
-        1. Looks up the action for ``current_state``.
+        1. Looks up the action for ``current_state`` via the policy.
         2. Awaits the action to receive ``(next_state, result)``.
         3. Appends ``(state_before, result)`` to history when ``result`` is
            non-null.
@@ -165,12 +229,7 @@ class StrategyGraph(Generic[StepT, StateT]):
         """
         while not self.is_terminal:
             state_before = self._current_state
-            action = self._policy.get(state_before)
-            if action is None:
-                raise KeyError(
-                    f"StrategyGraph reached non-terminal state {state_before!r} "
-                    f"with no policy entry."
-                )
+            action = self._policy.get_action(state=state_before)
 
             next_state, result = await action(self)
             if result is not None:
@@ -182,6 +241,6 @@ class StrategyGraph(Generic[StepT, StateT]):
 
 __all__ = [
     "StrategyGraph",
+    "StrategyPolicy",
     "PolicyAction",
-    "ScenarioCoreState",
 ]

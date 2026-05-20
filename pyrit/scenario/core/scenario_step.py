@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pyrit.identifiers import ComponentIdentifier, Identifiable
 
@@ -44,11 +44,19 @@ class ScenarioStepResult:
             for this step execution. ``None`` until Phase 4 lands the
             ``step_identifier`` persistence column; populated after that for
             scenarios that opt into graph-based execution.
+        metadata (dict[str, Any]): Free-form metadata produced by the step.
+            Used to carry per-step bookkeeping that isn't part of the outcome
+            label itself — e.g., ``incomplete_objectives`` from a partial
+            ``AttackExecutorResult``, or selector state for adaptive steps.
+            The orchestrator in Phase 5 reads from this dict to drive
+            resume / retry logic without forcing every step to invent its own
+            payload type.
     """
 
     outcome: str
     attack_results: list[AttackResult] = field(default_factory=list)
     step_identifier: ComponentIdentifier | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ScenarioStep(Identifiable):

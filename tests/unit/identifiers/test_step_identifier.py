@@ -63,6 +63,8 @@ def test_attack_executions_are_nested_under_children():
     assert "attack_executions" in result.children
     nested = result.children["attack_executions"]
     assert isinstance(nested, list)
+    assert isinstance(nested[0], ComponentIdentifier)
+    assert isinstance(nested[1], ComponentIdentifier)
     assert nested[0].params["marker"] == "a"
     assert nested[1].params["marker"] == "b"
 

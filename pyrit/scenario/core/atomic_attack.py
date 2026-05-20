@@ -19,12 +19,13 @@ from typing import TYPE_CHECKING, Any, Optional
 from pyrit.common.deprecation import print_deprecation_message
 from pyrit.executor.attack import AttackExecutor, AttackStrategy
 from pyrit.executor.attack.core.attack_executor import AttackExecutorResult
-from pyrit.identifiers import build_atomic_attack_identifier
+from pyrit.identifiers import ComponentIdentifier, build_atomic_attack_identifier
 from pyrit.identifiers.evaluation_identifier import AtomicAttackEvaluationIdentifier
 from pyrit.memory import CentralMemory
 from pyrit.memory.memory_models import MAX_IDENTIFIER_VALUE_LENGTH
 from pyrit.models import AttackResult, SeedAttackGroup
 from pyrit.scenario.core.attack_technique import AttackTechnique
+from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
 
 if TYPE_CHECKING:
     from pyrit.prompt_target import PromptTarget
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AtomicAttack:
+class AtomicAttack(ScenarioStep):
     """
     Represents a single atomic attack test combining an attack strategy and dataset.
 
@@ -47,7 +48,18 @@ class AtomicAttack:
     An ``AttackTechnique`` bundles the attack strategy with an optional
     ``SeedAttackTechniqueGroup``, cleanly separating "how to attack" from
     "what to attack" (the objective).
+
+    Implements the ``ScenarioStep`` contract so the upcoming ``StrategyGraph``
+    orchestrator can drive AtomicAttack the same way it drives richer steps:
+    one ``process_async`` call yields one ``ScenarioStepResult``. AtomicAttack
+    always emits the single ``"done"`` outcome — graph-aware scenarios that
+    want richer transitions implement their own ``ScenarioStep`` subclass.
     """
+
+    #: Hard-coded outcome label for graph-based scenarios. AtomicAttack does
+    #: no outcome scoring of its own; richer steps override ``outputs`` to
+    #: declare scorer-driven transition labels.
+    _OUTPUTS: tuple[str, ...] = ("done",)
 
     def __init__(
         self,
@@ -151,6 +163,68 @@ class AtomicAttack:
             List[SeedAttackGroup]: A copy of the seed groups list.
         """
         return list(self._seed_groups)
+
+    @property
+    def name(self) -> str:
+        """
+        Display / resume key for this atomic attack, satisfying ``ScenarioStep``.
+
+        Aliases ``atomic_attack_name`` so existing code continues using the
+        original attribute while the ``StrategyGraph`` orchestrator reads
+        ``name`` uniformly across all step types.
+        """
+        return self.atomic_attack_name
+
+    @property
+    def outputs(self) -> list[str]:
+        """Transition labels this step can emit. AtomicAttack emits only ``"done"``."""
+        return list(self._OUTPUTS)
+
+    async def process_async(self) -> ScenarioStepResult:
+        """
+        ``ScenarioStep`` adapter — runs the atomic attack and wraps the result.
+
+        Delegates to ``run_async`` using the instance's stored execution
+        parameters, then packages the completed results into a
+        ``ScenarioStepResult``. Incomplete objectives and the executor's
+        ``input_indices`` are stashed in ``metadata`` so the orchestrator
+        (Phase 5) can drive resume / retry logic without losing information.
+
+        Returns:
+            ScenarioStepResult: ``outcome="done"`` with the completed attack
+                results and execution bookkeeping in ``metadata``.
+        """
+        executor_result = await self.run_async()
+        return ScenarioStepResult(
+            outcome="done",
+            attack_results=list(executor_result.completed_results),
+            metadata={
+                "incomplete_objectives": list(executor_result.incomplete_objectives),
+                "input_indices": list(executor_result.input_indices),
+            },
+        )
+
+    def _build_identifier(self) -> ComponentIdentifier:
+        """
+        Build the behavioral identity for this atomic attack.
+
+        Captures the atomic attack name (the resume / dedup key) and nests
+        the underlying ``AttackTechnique`` identifier so hash drift in the
+        attack or its seeds propagates upward.
+
+        Returns:
+            ComponentIdentifier: Identifier whose ``params`` carry the step
+            name and declared outputs, with the underlying attack identifier
+            nested under ``children``.
+        """
+        return ComponentIdentifier.of(
+            self,
+            params={
+                "atomic_attack_name": self.atomic_attack_name,
+                "outputs": list(self.outputs),
+            },
+            children={"attack_technique": self._attack_technique.get_identifier()},
+        )
 
     def filter_seed_groups_by_objectives(self, *, remaining_objectives: list[str]) -> None:
         """

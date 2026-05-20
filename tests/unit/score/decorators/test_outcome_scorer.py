@@ -18,7 +18,7 @@ def _make_score(*, value: str, score_type: str = "true_false") -> Score:
     return Score(
         score_value=value,
         score_value_description="",
-        score_type=score_type,  # type: ignore[arg-type]
+        score_type=score_type,  # type: ignore[ty:invalid-argument-type]
         score_rationale="",
         message_piece_id=str(uuid4()),
         scorer_class_identifier=ComponentIdentifier(

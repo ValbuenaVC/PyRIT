@@ -60,7 +60,7 @@ def test_get_identifier_is_cached():
 def test_step_result_is_frozen():
     result = ScenarioStepResult(outcome="done")
     with pytest.raises(Exception):  # frozen dataclass raises FrozenInstanceError
-        result.outcome = "other"  # type: ignore[misc]
+        result.outcome = "other"  # type: ignore[ty:invalid-assignment]
 
 
 def test_step_result_defaults():

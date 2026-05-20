@@ -16,10 +16,11 @@ freshly produced response into one of the step's declared ``outputs``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pyrit.models import Message, Score
     from pyrit.score import Scorer
 

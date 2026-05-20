@@ -37,9 +37,14 @@ class ScenarioStateLike(Protocol):
     value: object
 
 
-class ScenarioCoreState(Enum):
+class ScenarioCoreState(str, Enum):
     """
     Lifecycle states shared by every scenario.
+
+    Inherits from ``str`` to match the codebase convention for canonical
+    identifier enums (``CapabilityName``, ``ScorerOverridePolicy``), keeping
+    state values JSON-serializable for resume payloads without explicit
+    coercion.
 
     Per-scenario state enums extend this vocabulary by declaring their own
     enum class with additional members.

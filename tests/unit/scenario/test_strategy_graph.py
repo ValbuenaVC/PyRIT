@@ -9,7 +9,7 @@ import pytest
 
 from pyrit.scenario.core.scenario_state import ScenarioCoreState
 from pyrit.scenario.core.scenario_step import ScenarioStepResult
-from pyrit.scenario.core.strategy_graph import StrategyGraph
+from pyrit.scenario.core.strategy_graph import StrategyGraph, StrategyPolicy
 
 
 class _State(Enum):
@@ -18,34 +18,97 @@ class _State(Enum):
     END = "end"
 
 
-def test_init_requires_non_empty_terminal_states():
-    with pytest.raises(ValueError, match="at least one terminal state"):
-        StrategyGraph(
-            policy={},
+def _make_graph(*, policy: StrategyPolicy) -> StrategyGraph:
+    return StrategyGraph(policy=policy)
+
+
+# ---------------------------------------------------------------------------
+# StrategyPolicy construction & validation
+# ---------------------------------------------------------------------------
+
+
+class TestStrategyPolicyInit:
+
+    def test_requires_non_empty_terminal_states(self):
+        with pytest.raises(ValueError, match="at least one terminal state"):
+            StrategyPolicy(
+                actions={},
+                initial_state=_State.START,
+                terminal_states=frozenset(),
+            )
+
+    def test_rejects_initial_state_in_terminals(self):
+        with pytest.raises(ValueError, match="would do no work"):
+            StrategyPolicy(
+                actions={},
+                initial_state=_State.END,
+                terminal_states=frozenset({_State.END}),
+            )
+
+    def test_rejects_terminal_state_with_action_entry(self):
+        async def _action(graph):
+            return _State.END, None
+
+        with pytest.raises(ValueError, match="Terminal states must not appear"):
+            StrategyPolicy(
+                actions={_State.END: _action},
+                initial_state=_State.START,
+                terminal_states=frozenset({_State.END}),
+            )
+
+    def test_actions_mapping_is_read_only(self):
+        async def _action(graph):
+            return _State.END, None
+
+        policy = StrategyPolicy(
+            actions={_State.START: _action},
             initial_state=_State.START,
-            terminal_states=set(),
+            terminal_states=frozenset({_State.END}),
         )
 
+        with pytest.raises(TypeError):
+            policy.actions[_State.MIDDLE] = _action  # type: ignore[ty:invalid-assignment]
 
-def test_init_rejects_initial_state_in_terminals():
-    with pytest.raises(ValueError, match="would do no work"):
-        StrategyGraph(
-            policy={},
-            initial_state=_State.END,
-            terminal_states={_State.END},
-        )
+    def test_get_action_returns_configured_action(self):
+        async def _action(graph):
+            return _State.END, None
 
-
-def test_init_rejects_terminal_state_with_policy_entry():
-    async def _action(graph):
-        return _State.END, None
-
-    with pytest.raises(ValueError, match="Terminal states must not appear in policy"):
-        StrategyGraph(
-            policy={_State.END: _action},
+        policy = StrategyPolicy(
+            actions={_State.START: _action},
             initial_state=_State.START,
-            terminal_states={_State.END},
+            terminal_states=frozenset({_State.END}),
         )
+        assert policy.get_action(state=_State.START) is _action
+
+    def test_get_action_raises_informative_error_for_unknown_state(self):
+        async def _action(graph):
+            return _State.END, None
+
+        policy = StrategyPolicy(
+            actions={_State.START: _action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        )
+
+        with pytest.raises(KeyError, match="No action defined for state"):
+            policy.get_action(state=_State.MIDDLE)
+
+    def test_is_terminal_predicate(self):
+        async def _action(graph):
+            return _State.END, None
+
+        policy = StrategyPolicy(
+            actions={_State.START: _action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        )
+        assert policy.is_terminal(state=_State.END)
+        assert not policy.is_terminal(state=_State.START)
+
+
+# ---------------------------------------------------------------------------
+# StrategyGraph traversal
+# ---------------------------------------------------------------------------
 
 
 async def test_event_loop_yields_results_in_order():
@@ -55,10 +118,12 @@ async def test_event_loop_yields_results_in_order():
     async def middle_action(graph):
         return _State.END, ScenarioStepResult(outcome="from_middle")
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: start_action, _State.MIDDLE: middle_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: start_action, _State.MIDDLE: middle_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
     results = [r async for r in graph.event_loop_async()]
@@ -69,10 +134,12 @@ async def test_event_loop_advances_current_state():
     async def start_action(graph):
         return _State.END, ScenarioStepResult(outcome="done")
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: start_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: start_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
     assert graph.current_state == _State.START
@@ -85,10 +152,12 @@ async def test_event_loop_skips_yield_when_action_returns_no_result():
     async def silent_action(graph):
         return _State.END, None
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: silent_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: silent_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
     results = [r async for r in graph.event_loop_async()]
@@ -96,18 +165,20 @@ async def test_event_loop_skips_yield_when_action_returns_no_result():
     assert graph.current_state == _State.END
 
 
-async def test_event_loop_raises_on_missing_policy_entry():
+async def test_event_loop_raises_on_missing_action_entry():
     async def start_action(graph):
         # Transition to MIDDLE but the graph has no policy entry for MIDDLE.
         return _State.MIDDLE, None
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: start_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: start_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
-    with pytest.raises(KeyError, match="no policy entry"):
+    with pytest.raises(KeyError, match="No action defined for state"):
         _ = [r async for r in graph.event_loop_async()]
 
 
@@ -118,10 +189,12 @@ async def test_history_records_yielded_results_only():
     async def middle_action(graph):
         return _State.END, None
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: start_action, _State.MIDDLE: middle_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: start_action, _State.MIDDLE: middle_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
     _ = [r async for r in graph.event_loop_async()]
@@ -135,10 +208,12 @@ async def test_reset_returns_graph_to_initial_state():
     async def start_action(graph):
         return _State.END, ScenarioStepResult(outcome="done")
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: start_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: start_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
     _ = [r async for r in graph.event_loop_async()]
@@ -155,17 +230,19 @@ def test_bind_current_step_sets_and_clears():
     async def noop_action(graph):
         return _State.END, None
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: noop_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: noop_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
-    graph.bind_current_step(None)
+    graph.bind_current_step(step=None)
     assert graph.current_step is None
 
     sentinel = object()
-    graph.bind_current_step(sentinel)  # type: ignore[arg-type]
+    graph.bind_current_step(step=sentinel)  # type: ignore[arg-type]
     assert graph.current_step is sentinel
 
 
@@ -179,10 +256,12 @@ async def test_event_loop_is_restartable_from_current_state():
             raise RuntimeError("first call fails")
         return _State.END, ScenarioStepResult(outcome="recovered")
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={_State.START: flaky_action},
-        initial_state=_State.START,
-        terminal_states={_State.END},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={_State.START: flaky_action},
+            initial_state=_State.START,
+            terminal_states=frozenset({_State.END}),
+        ),
     )
 
     # First attempt blows up; graph stays at START.
@@ -203,13 +282,15 @@ async def test_strategy_graph_works_with_scenario_core_state():
     async def executing_action(graph):
         return ScenarioCoreState.COMPLETE, ScenarioStepResult(outcome="finished")
 
-    graph: StrategyGraph = StrategyGraph(
-        policy={
-            ScenarioCoreState.INITIALIZING: initializing_action,
-            ScenarioCoreState.EXECUTING: executing_action,
-        },
-        initial_state=ScenarioCoreState.INITIALIZING,
-        terminal_states={ScenarioCoreState.COMPLETE, ScenarioCoreState.FAILED},
+    graph = _make_graph(
+        policy=StrategyPolicy(
+            actions={
+                ScenarioCoreState.INITIALIZING: initializing_action,
+                ScenarioCoreState.EXECUTING: executing_action,
+            },
+            initial_state=ScenarioCoreState.INITIALIZING,
+            terminal_states=frozenset({ScenarioCoreState.COMPLETE, ScenarioCoreState.FAILED}),
+        ),
     )
 
     results = [r async for r in graph.event_loop_async()]
