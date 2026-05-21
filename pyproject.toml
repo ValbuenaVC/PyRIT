@@ -160,6 +160,7 @@ all = [
 pyrit_backend = "pyrit.cli.pyrit_backend:main"
 pyrit_scan = "pyrit.cli.pyrit_scan:main"
 pyrit_shell = "pyrit.cli.pyrit_shell:main"
+pyrit_wizard = "pyrit.cli.pyrit_wizard:main"
 
 [tool.pytest.ini_options]
 addopts = [
