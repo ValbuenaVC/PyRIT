@@ -537,6 +537,87 @@ class TestPipelineExecution:
 
 
 # --------------------------------------------------------------------------- #
+# Failure modes — exception propagation from inner lifecycle and predicates
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestPipelineFailureModes:
+    """Pin how exceptions raised by inner-scenario lifecycle and predicates surface.
+
+    Covers the gaps Duck #1 (gpt-5.3-codex) flagged in the post-R5 review:
+    inner ``initialize_async`` failures, inner ``run_async`` failures, and
+    predicate failures. All three should propagate as exceptions out of
+    ``pipeline.run_async()`` after marking the scenario FAILED in memory, not
+    be silently caught.
+    """
+
+    async def test_inner_initialize_async_exception_propagates(self, mock_objective_target):
+        inner = _make_inner_scenario("blowup")
+        inner.initialize_async.side_effect = RuntimeError("init exploded")
+        spec = PhaseSpec(name="blowup", scenario_factory=lambda: inner)
+
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        with pytest.raises(RuntimeError, match="init exploded"):
+            await pipeline.run_async()
+        # run_async should never have been reached.
+        inner.run_async.assert_not_called()
+
+    async def test_inner_run_async_exception_propagates(self, mock_objective_target):
+        inner = _make_inner_scenario("midflight")
+        inner.run_async.side_effect = RuntimeError("run exploded")
+        spec = PhaseSpec(name="midflight", scenario_factory=lambda: inner)
+
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        with pytest.raises(RuntimeError, match="run exploded"):
+            await pipeline.run_async()
+        # initialize_async ran, run_async raised.
+        inner.initialize_async.assert_awaited_once()
+
+    async def test_predicate_exception_propagates(self, mock_objective_target):
+        inner = _make_inner_scenario("downstream")
+
+        spec_a, inner_a = _phase_spec("a")
+        spec_b = ConditionalPhaseSpec(
+            name="b_broken_predicate",
+            scenario_factory=lambda: inner,
+            skip_when=lambda _ctx: (_ for _ in ()).throw(ValueError("predicate logic bug")),
+        )
+
+        pipeline = ScenarioPipeline(phases=[spec_a, spec_b])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        with pytest.raises(ValueError, match="predicate logic bug"):
+            await pipeline.run_async()
+        # Phase a completed before the broken predicate was evaluated.
+        inner_a.run_async.assert_awaited_once()
+        # The broken-predicate phase's factory was never called.
+        inner.run_async.assert_not_called()
+
+    async def test_failure_in_later_phase_records_earlier_phases_executions(self, mock_objective_target):
+        """When phase N fails, phase_executions for phases 1..N-1 should still be recorded."""
+        spec_a, inner_a = _phase_spec("alpha")
+        inner_b = _make_inner_scenario("beta")
+        inner_b.run_async.side_effect = RuntimeError("phase 2 down")
+        spec_b = PhaseSpec(name="beta", scenario_factory=lambda: inner_b)
+
+        pipeline = ScenarioPipeline(phases=[spec_a, spec_b])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        with pytest.raises(RuntimeError, match="phase 2 down"):
+            await pipeline.run_async()
+
+        # The in-memory log captures the completed phase before the crash.
+        assert len(pipeline.phase_executions) == 1
+        assert pipeline.phase_executions[0].name == "alpha"
+        assert pipeline.phase_executions[0].outcome == _PHASE_OUTCOME_COMPLETED
+
+
+# --------------------------------------------------------------------------- #
 # Artifact round-trip limitation (v1 contract pin)
 # --------------------------------------------------------------------------- #
 
@@ -602,3 +683,147 @@ class TestArtifactRoundTripNotSupported:
         out_path = tmp_path / "pipeline.yaml"
         with pytest.raises(yaml.representer.RepresenterError, match="cannot represent"):
             graph_artifact_to_yaml(artifact, out_path)
+
+
+# --------------------------------------------------------------------------- #
+# Metadata merge order (pipeline keys always win)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestPhaseActionMetadataMergeOrder:
+    """Pin that pipeline-stamped metadata wins over inner step result metadata.
+
+    The orchestrator's logging and ``step_identifier`` consumers downstream of
+    ``_build_phase_action`` always need the pipeline's view of
+    ``step_name`` / ``phase_index``, not whatever the inner step decided to
+    stamp. A misbehaving inner that emits ``"step_name"`` in its result
+    metadata must not override the pipeline's stamp.
+    """
+
+    async def test_pipeline_keys_override_inner_step_metadata(self, mock_objective_target):
+        from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
+
+        class _NoisyStep(ScenarioStep):
+            """A step whose process_async result carries colliding metadata keys."""
+
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.outputs = ["done"]
+
+            async def process_async(self) -> ScenarioStepResult:
+                return ScenarioStepResult(
+                    outcome="done",
+                    attack_results=[],
+                    metadata={
+                        "step_name": "INNER_HIJACK",
+                        "phase_index": 999,
+                        "innocuous": "inner_value",
+                    },
+                )
+
+            def _build_identifier(self) -> ComponentIdentifier:
+                return ComponentIdentifier.of(self, params={"name": self.name})
+
+        spec, _ = _phase_spec("pipeline_phase_zero")
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        noisy = _NoisyStep(name="pipeline_phase_zero")
+        action = pipeline._build_phase_action(index=0, step=noisy)
+        graph = pipeline._build_execution_graph(steps=[noisy])
+
+        next_state, result = await action(graph)
+
+        assert next_state == 1
+        assert result is not None
+        # Pipeline keys win:
+        assert result.metadata["step_name"] == "pipeline_phase_zero"
+        assert result.metadata["phase_index"] == 0
+        # Innocuous inner keys still pass through:
+        assert result.metadata["innocuous"] == "inner_value"
+
+
+# --------------------------------------------------------------------------- #
+# Persisted ScenarioResult.metadata["phase_executions"]
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestPhaseExecutionsPersistence:
+    """Pin that per-phase outcomes are written into the outer ScenarioResult.metadata.
+
+    Without this persistence, cross-process readers of the pipeline's
+    ``ScenarioResult`` (anything reloading via ``get_scenario_results``
+    without holding a live pipeline reference) would see only the composition
+    (empty phase buckets) and no per-phase outcome record. The persisted
+    snapshot is a list of ``{"name", "outcome", "inner_scenario_result_id"}``
+    dicts keyed under ``metadata["phase_executions"]``.
+    """
+
+    async def test_phase_executions_persisted_in_scenario_result_metadata(self, mock_objective_target):
+        from pyrit.memory import CentralMemory
+
+        spec_a, inner_a = _phase_spec("alpha")
+        spec_b, inner_b = _phase_spec("beta")
+
+        pipeline = ScenarioPipeline(phases=[spec_a, spec_b])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+        result = await pipeline.run_async()
+
+        memory = CentralMemory.get_memory_instance()
+        [persisted] = memory.get_scenario_results(scenario_result_ids=[str(result.id)])
+        snapshot = persisted.metadata["phase_executions"]
+
+        assert isinstance(snapshot, list)
+        assert len(snapshot) == 2
+        assert snapshot[0]["name"] == "alpha"
+        assert snapshot[0]["outcome"] == _PHASE_OUTCOME_COMPLETED
+        assert snapshot[0]["inner_scenario_result_id"] == str(inner_a.run_async.return_value.id)
+        assert snapshot[1]["name"] == "beta"
+        assert snapshot[1]["outcome"] == _PHASE_OUTCOME_COMPLETED
+        assert snapshot[1]["inner_scenario_result_id"] == str(inner_b.run_async.return_value.id)
+
+    async def test_skipped_phase_persists_with_null_inner_result_id(self, mock_objective_target):
+        from pyrit.memory import CentralMemory
+
+        spec_a, _ = _phase_spec("a")
+        spec_b, inner_b = _conditional_phase_spec("b", skip_when=lambda _ctx: True)
+
+        pipeline = ScenarioPipeline(phases=[spec_a, spec_b])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+        result = await pipeline.run_async()
+
+        memory = CentralMemory.get_memory_instance()
+        [persisted] = memory.get_scenario_results(scenario_result_ids=[str(result.id)])
+        snapshot = persisted.metadata["phase_executions"]
+
+        assert snapshot[1]["name"] == "b"
+        assert snapshot[1]["outcome"] == _PHASE_OUTCOME_SKIPPED
+        assert snapshot[1]["inner_scenario_result_id"] is None
+        # Predicate elided execution, factory should never have been called.
+        inner_b.run_async.assert_not_called()
+
+    async def test_finalize_hook_preserves_existing_metadata_keys(self, mock_objective_target):
+        """The finalize override merges with prior metadata, doesn't replace it."""
+        from pyrit.memory import CentralMemory
+
+        spec, _ = _phase_spec("only")
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        # Simulate a prior metadata entry (e.g. what the base _build_initial_scenario_metadata
+        # would write when max_dataset_size is set).
+        memory = CentralMemory.get_memory_instance()
+        memory.update_scenario_metadata(
+            scenario_result_id=str(pipeline._scenario_result_id),
+            metadata={"objective_hashes": ["sentinel-pre-existing-hash"]},
+        )
+
+        result = await pipeline.run_async()
+        [persisted] = memory.get_scenario_results(scenario_result_ids=[str(result.id)])
+
+        # Both keys must coexist; the finalize hook merges, doesn't replace.
+        assert persisted.metadata["objective_hashes"] == ["sentinel-pre-existing-hash"]
+        assert "phase_executions" in persisted.metadata
+        assert persisted.metadata["phase_executions"][0]["name"] == "only"

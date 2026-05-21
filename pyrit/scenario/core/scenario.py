@@ -843,6 +843,27 @@ class Scenario(ABC):
         metadata["objective_hashes"] = hashes
         return metadata
 
+    async def _finalize_scenario_result_async(self, *, scenario_result_id: str) -> None:
+        """
+        Persist any run-summary state to the scenario result before COMPLETED.
+
+        Called once per successful execution attempt of ``_execute_scenario_async``,
+        right after the final step completes and before the
+        ``update_scenario_run_state(COMPLETED)`` transition lands. Subclasses
+        that need to record run-summary state (e.g. composition pipelines
+        writing per-phase outcomes into ``ScenarioResult.metadata``) should
+        override this method.
+
+        The default is a no-op. The ``scenario_result_id`` is supplied so
+        subclasses don't need to re-derive it from ``self._scenario_result_id``.
+
+        Args:
+            scenario_result_id (str): The id of the scenario result that is
+                about to be marked COMPLETED. Use
+                ``self._memory.update_scenario_metadata`` to write into it.
+        """
+        return
+
     def _apply_persisted_objectives(self, *, stored_result: ScenarioResult) -> None:
         """
         On resume, replay the originally-sampled objective subset.
@@ -1578,6 +1599,11 @@ class Scenario(ABC):
                 raise
 
             logger.info(f"Scenario '{self._name}' completed successfully")
+
+            # Give subclasses a chance to persist run-summary state on the
+            # ScenarioResult (e.g. composition pipelines writing per-phase
+            # outcomes into metadata) just before the COMPLETED transition.
+            await self._finalize_scenario_result_async(scenario_result_id=scenario_result_id)
 
             # Mark scenario as completed
             self._memory.update_scenario_run_state(

@@ -100,6 +100,16 @@ class PipelineContext:
     that already ran. Tuples (not lists) make accidental mutation by the
     predicate impossible.
 
+    .. note::
+
+       "Read-only" here means *structurally* read-only — the dataclass itself
+       is frozen and the outer containers are tuples. The :class:`ScenarioResult`
+       payloads referenced from :attr:`phase_executions` are **not** deep-frozen,
+       so a predicate that reaches into ``execution.scenario_result.attack_results``
+       and mutates the underlying object will affect the persisted result. Treat
+       inner objects as read-only by convention; don't rely on them being
+       immutable at the type-system level.
+
     Attributes:
         completed_phase_names (tuple[str, ...]): Names of every phase that has
             either completed or been skipped so far, in dispatch order.
@@ -423,21 +433,24 @@ class ScenarioPipeline(Scenario):
     ``ScenarioResult`` (with its own ``scenario_result_id`` persisted
     independently).
 
-    The pipeline's own ``ScenarioResult`` records only the **composition** —
-    each phase name appears as a key in ``attack_results``, but every bucket
-    is empty because the inner scenarios persist their own ``AttackResult``s
-    against their own ``scenario_result_id``s and re-emitting them under the
-    pipeline's id would duplicate-persist them.
+    The pipeline's own ``ScenarioResult`` records the **composition** plus
+    a per-phase outcome summary. Each phase name appears as a key in
+    ``attack_results`` but every bucket is empty (inner scenarios persist
+    their own ``AttackResult``s against their own ``scenario_result_id``s
+    and re-emitting them under the pipeline's id would duplicate-persist
+    them). The per-phase outcome summary lands in
+    ``ScenarioResult.metadata["phase_executions"]`` as a list of
+    ``{"name", "outcome", "inner_scenario_result_id"}`` dicts so
+    cross-process readers can reload the pipeline result and pull
+    inner-scenario results by id without holding a reference to the live
+    pipeline instance.
 
-    **Per-phase outcomes are NOT persisted in v1.** They live only on
-    :attr:`phase_executions`, an in-memory log scoped to the live pipeline
-    instance. To inspect per-phase outcomes after a pipeline run, you must
-    keep a reference to the pipeline object and walk
-    ``pipeline.phase_executions``; reading the persisted outer
-    ``ScenarioResult`` back via ``get_scenario_results`` from another process
-    will show only the composition (empty phase buckets), not the outcomes.
-    See ``tests.unit.scenario.composite.test_scenario_pipeline.TestPipelineExecution``
-    for the in-process inspection pattern.
+    Per-phase outcomes are *also* surfaced in-process via
+    :attr:`phase_executions` for the duration of the live pipeline object;
+    those snapshots carry the full inner :class:`ScenarioResult` instances
+    (not just ids) for ergonomic in-process inspection. See
+    ``tests.unit.scenario.composite.test_scenario_pipeline.TestPipelineExecution``
+    for both inspection patterns.
 
     Example::
 
@@ -571,6 +584,17 @@ class ScenarioPipeline(Scenario):
         (a :class:`types.MappingProxyType`) is YAML-serializable. See
         :class:`tests.unit.scenario.composite.test_scenario_pipeline.TestArtifactRoundTripNotSupported`
         for the regression pin.
+
+        The ``phases`` role is **kept** in the schema (despite the broken
+        artifact path) so the wizard and other introspection consumers can
+        discover that the pipeline needs a phase list at all. Authoring
+        consumers (the wizard in particular) should treat the OPAQUE tag as
+        a hard refusal signal: "this scenario cannot be assembled from
+        wizard-elicited primitives; the user must supply a programmatic
+        pipeline instance directly." When the recursive-encoder follow-up
+        lands and pipelines can round-trip module-level factories, the
+        schema declaration becomes useful for read-back as well — until
+        then, it serves as authoring-intent documentation.
 
         Returns:
             list[RoleDescriptor]: Two roles — ``phases`` (opaque, required)
@@ -737,10 +761,16 @@ class ScenarioPipeline(Scenario):
             graph.bind_current_step(step=step)
             try:
                 base_result = await step.process_async()
+                # Pipeline diagnostic keys (``step_name``, ``phase_index``) must
+                # win over any same-named keys the inner step result may carry,
+                # so downstream loggers and step_identifier consumers always see
+                # the pipeline's view of the phase, not whatever the inner step
+                # decided to stamp. Spread base_result.metadata first, pipeline
+                # keys last.
                 merged_metadata = {
+                    **base_result.metadata,
                     "step_name": step.name,
                     "phase_index": index,
-                    **base_result.metadata,
                 }
                 result = ScenarioStepResult(
                     outcome=base_result.outcome,
@@ -757,6 +787,56 @@ class ScenarioPipeline(Scenario):
     def _record_phase_execution(self, *, execution: PhaseExecution) -> None:
         """Append a phase execution snapshot to the pipeline's run-scoped log."""
         self._phase_executions.append(execution)
+
+    async def _finalize_scenario_result_async(self, *, scenario_result_id: str) -> None:
+        """
+        Persist per-phase outcomes into the outer ``ScenarioResult.metadata``.
+
+        The pipeline's :attr:`phase_executions` log is otherwise in-memory
+        only, scoped to the live ``ScenarioPipeline`` instance. Without this
+        hook, cross-process readers (anything that reloads the
+        ``ScenarioResult`` via ``get_scenario_results`` from another process
+        or after the pipeline object has been garbage-collected) would see
+        only the composition (empty phase buckets in ``attack_results``) and
+        no per-phase outcome record. The snapshot is written under the
+        ``"phase_executions"`` metadata key as a list of
+        ``{"name": str, "outcome": str, "inner_scenario_result_id": str | None}``
+        dicts. Inner scenarios' full ``AttackResult`` rows continue to live
+        on their own ``scenario_result_id``s; this snapshot only records
+        which phases ran, what they returned, and how to find the inner
+        result if there was one.
+
+        Merges with (does not replace) any prior metadata (e.g. the
+        ``objective_hashes`` that the base ``_build_initial_scenario_metadata``
+        may have written at construction time).
+
+        Args:
+            scenario_result_id (str): The id of the pipeline's
+                :class:`ScenarioResult`, supplied by the orchestrator.
+        """
+        snapshot: list[dict[str, Any]] = [
+            {
+                "name": execution.name,
+                "outcome": execution.outcome,
+                "inner_scenario_result_id": (
+                    str(execution.scenario_result.id)
+                    if execution.scenario_result is not None and execution.scenario_result.id is not None
+                    else None
+                ),
+            }
+            for execution in self._phase_executions
+        ]
+
+        current = self._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
+        existing_metadata: dict[str, Any] = {}
+        if current:
+            existing_metadata = dict(current[0].metadata or {})
+        existing_metadata["phase_executions"] = snapshot
+
+        self._memory.update_scenario_metadata(
+            scenario_result_id=scenario_result_id,
+            metadata=existing_metadata,
+        )
 
     def _snapshot_pipeline_context(self) -> PipelineContext:
         """
