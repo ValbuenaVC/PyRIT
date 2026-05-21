@@ -1231,15 +1231,17 @@ class Scenario(ABC):
         """
         Build a linear-traversal policy that preserves scenario-level execution params.
 
-        Each policy action runs ``steps[i]`` and transitions to state ``i + 1``;
-        state ``len(steps)`` is the sole terminal state. For ``AtomicAttack``
-        steps the action calls ``run_async`` directly so ``max_concurrency`` and
-        ``return_partial_on_failure`` semantics that the legacy flat loop relied
-        on are preserved. Non-``AtomicAttack`` steps fall back to
-        ``process_async`` (so any future custom ``ScenarioStep`` subclass works
-        out of the box). In both paths the step's ``name`` is stamped into
+        Each policy action runs ``steps[i].process_async()`` and transitions
+        to state ``i + 1``; state ``len(steps)`` is the sole terminal state.
+        Every step type — ``AtomicAttack``, ``AdaptiveStep``, or any future
+        custom ``ScenarioStep`` subclass — flows through the same uniform
+        dispatch path. ``AtomicAttack`` steps receive scenario-level
+        ``max_concurrency`` via :meth:`AtomicAttack.set_scenario_max_concurrency`
+        before the policy is frozen, so the unified action body does not need
+        to branch on step type. The step's ``name`` is stamped into
         ``ScenarioStepResult.metadata['step_name']`` so the orchestrator can
-        identify the step at yield time.
+        identify the step at yield time (caller-supplied metadata wins on
+        collision).
 
         Args:
             steps (Sequence[ScenarioStep]): The steps to wrap. Must be non-empty.
@@ -1253,7 +1255,14 @@ class Scenario(ABC):
         if not steps:
             raise ValueError("_build_default_linear_policy requires at least one step.")
 
-        max_concurrency = self._max_concurrency
+        # Push the scenario-level max_concurrency into every AtomicAttack step
+        # exactly once, before any action runs. Non-AtomicAttack steps either
+        # own their own concurrency (e.g. AdaptiveStep) or default to 1, so the
+        # orchestrator stays out of their dispatch.
+        for step in steps:
+            if isinstance(step, AtomicAttack):
+                step.set_scenario_max_concurrency(self._max_concurrency)
+
         terminal_state = len(steps)
         actions: dict[int, PolicyAction[ScenarioStep, int]] = {}
 
@@ -1263,35 +1272,21 @@ class Scenario(ABC):
                 graph: StrategyGraph[ScenarioStep, int],
                 _step: ScenarioStep = step,
                 _next: int = index + 1,
-                _max_concurrency: int = max_concurrency,
             ) -> tuple[int, ScenarioStepResult | None]:
                 graph.bind_current_step(step=_step)
                 try:
-                    if isinstance(_step, AtomicAttack):
-                        executor_result = await _step.run_async(
-                            max_concurrency=_max_concurrency,
-                            return_partial_on_failure=True,
-                        )
-                        result: ScenarioStepResult | None = ScenarioStepResult(
-                            outcome="done",
-                            attack_results=list(executor_result.completed_results),
-                            metadata={
-                                "step_name": _step.atomic_attack_name,
-                                "incomplete_objectives": list(executor_result.incomplete_objectives),
-                                "input_indices": list(executor_result.input_indices),
-                            },
-                        )
-                    else:
-                        base_result = await _step.process_async()
-                        # Re-stamp metadata with step_name so the orchestrator can route results
-                        # without depending on graph.current_step (which is cleared before yield).
-                        merged_metadata = {"step_name": _step.name, **base_result.metadata}
-                        result = ScenarioStepResult(
-                            outcome=base_result.outcome,
-                            attack_results=base_result.attack_results,
-                            step_identifier=base_result.step_identifier,
-                            metadata=merged_metadata,
-                        )
+                    base_result = await _step.process_async()
+                    # Stamp ``step_name`` so the orchestrator can route the
+                    # result without depending on ``graph.current_step``
+                    # (cleared before yield). Caller metadata wins on
+                    # collision so steps remain authoritative.
+                    merged_metadata = {"step_name": _step.name, **base_result.metadata}
+                    result: ScenarioStepResult | None = ScenarioStepResult(
+                        outcome=base_result.outcome,
+                        attack_results=list(base_result.attack_results),
+                        step_identifier=base_result.step_identifier,
+                        metadata=merged_metadata,
+                    )
                 finally:
                     graph.bind_current_step(step=None)
                 return _next, result

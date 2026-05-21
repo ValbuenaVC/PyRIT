@@ -14,6 +14,7 @@ from pyrit.memory import CentralMemory
 from pyrit.models import AttackOutcome, AttackResult
 from pyrit.scenario import DatasetConfiguration, ScenarioIdentifier, ScenarioResult
 from pyrit.scenario.core import AtomicAttack, BaselineAttackPolicy, Scenario, ScenarioStrategy
+from pyrit.scenario.core.scenario_step import ScenarioStepResult
 from pyrit.score import Scorer
 
 # Reusable test scorer identifier
@@ -21,6 +22,45 @@ _TEST_SCORER_ID = ComponentIdentifier(
     class_name="MockScorer",
     class_module="tests.unit.scenarios",
 )
+
+
+def _wire_process_async(attack: MagicMock) -> None:
+    """
+    Wire an :class:`AtomicAttack` MagicMock's ``process_async`` to delegate
+    to its ``run_async`` so the default linear policy dispatch path works.
+
+    Reads ``run_async`` dynamically each call, so tests that replace
+    ``attack.run_async`` after fixture setup don't need to re-wire
+    ``process_async``.
+    """
+
+    async def _fake_process(*args, **kwargs):
+        executor_result = await attack.run_async(
+            max_concurrency=getattr(attack, "_scenario_max_concurrency", 1),
+            return_partial_on_failure=True,
+        )
+        return ScenarioStepResult(
+            outcome="done",
+            attack_results=list(executor_result.completed_results),
+            metadata={
+                "incomplete_objectives": list(executor_result.incomplete_objectives),
+                "input_indices": list(executor_result.input_indices),
+            },
+        )
+
+    attack.process_async = MagicMock(side_effect=_fake_process)
+
+
+def _wire_atomic_attack_mock(attack: MagicMock, *, name: str) -> None:
+    """Apply the canonical setter / process_async wiring for an AtomicAttack mock."""
+    attack._scenario_result_id = None
+    attack._scenario_max_concurrency = 1
+    attack.name = name
+    attack.set_scenario_result_id = MagicMock(side_effect=lambda sid: setattr(attack, "_scenario_result_id", sid))
+    attack.set_scenario_max_concurrency = MagicMock(
+        side_effect=lambda mc: setattr(attack, "_scenario_max_concurrency", mc)
+    )
+    _wire_process_async(attack)
 
 
 def save_attack_results_to_memory(attack_results):
@@ -77,24 +117,21 @@ def mock_atomic_attacks():
     run1.atomic_attack_name = "attack_run_1"
     run1.display_group = "attack_run_1"
     run1._attack = mock_attack
-    run1._scenario_result_id = None
-    run1.set_scenario_result_id = MagicMock(side_effect=lambda sid: setattr(run1, "_scenario_result_id", sid))
+    _wire_atomic_attack_mock(run1, name="attack_run_1")
     type(run1).objectives = PropertyMock(return_value=["objective1"])
 
     run2 = MagicMock(spec=AtomicAttack)
     run2.atomic_attack_name = "attack_run_2"
     run2.display_group = "attack_run_2"
     run2._attack = mock_attack
-    run2._scenario_result_id = None
-    run2.set_scenario_result_id = MagicMock(side_effect=lambda sid: setattr(run2, "_scenario_result_id", sid))
+    _wire_atomic_attack_mock(run2, name="attack_run_2")
     type(run2).objectives = PropertyMock(return_value=["objective2"])
 
     run3 = MagicMock(spec=AtomicAttack)
     run3.atomic_attack_name = "attack_run_3"
     run3.display_group = "attack_run_3"
     run3._attack = mock_attack
-    run3._scenario_result_id = None
-    run3.set_scenario_result_id = MagicMock(side_effect=lambda sid: setattr(run3, "_scenario_result_id", sid))
+    _wire_atomic_attack_mock(run3, name="attack_run_3")
     type(run3).objectives = PropertyMock(return_value=["objective3"])
 
     return [run1, run2, run3]

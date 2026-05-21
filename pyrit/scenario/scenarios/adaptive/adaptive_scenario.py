@@ -24,8 +24,6 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from pyrit.executor.attack import AttackScoringConfig
 from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
 from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
-from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
-from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy
 from pyrit.scenario.scenarios.adaptive.adaptive_step import AdaptiveStep
 from pyrit.scenario.scenarios.adaptive.dispatcher import (
     ADAPTIVE_CONTEXT_LABEL,
@@ -38,8 +36,6 @@ from pyrit.scenario.scenarios.adaptive.selector import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from pyrit.models import SeedAttackGroup
     from pyrit.prompt_target import PromptTarget
     from pyrit.scenario.core.atomic_attack import AtomicAttack
@@ -201,9 +197,10 @@ class AdaptiveScenario(Scenario):
         resume bookkeeping treats steps via the duck-typed attributes
         :class:`AdaptiveStep` provides (``atomic_attack_name``, ``objectives``,
         ``seed_groups``, ``display_group``, ``filter_seed_groups_by_objectives``).
-        Execution dispatch in :meth:`_build_execution_graph` calls
-        ``step.process_async`` directly, bypassing the default linear policy's
-        ``AtomicAttack.run_async`` branch.
+        Execution flows through the unified default linear policy
+        (:meth:`Scenario._build_default_linear_policy`), which dispatches every
+        step — atomic or adaptive — via ``step.process_async`` so the
+        ``"success"`` / ``"exhausted"`` outcome labels propagate unchanged.
 
         Returns:
             list[AtomicAttack]: One step per objective with at least one
@@ -361,89 +358,6 @@ class AdaptiveScenario(Scenario):
             max_attempts_per_objective=self._max_attempts_per_objective,
             memory_labels=memory_labels,
             adaptive_context=adaptive_context,
-        )
-
-    def _build_execution_graph(
-        self,
-        *,
-        steps: Sequence[ScenarioStep] | None = None,
-    ) -> StrategyGraph[ScenarioStep, int]:
-        """
-        Build a linear graph that drives each :class:`AdaptiveStep` via
-        ``process_async`` so the ``"success"`` / ``"exhausted"`` outcome
-        labels survive into the orchestrator (the default policy from the
-        base class would dispatch ``AtomicAttack`` instances through
-        ``run_async`` and lose the outcome distinction).
-
-        Args:
-            steps: Optional explicit step list. Defaults to
-                ``self._atomic_attacks``, mirroring the base class contract.
-
-        Returns:
-            StrategyGraph[ScenarioStep, int]: A linear traversal whose actions
-                always dispatch via ``step.process_async``.
-        """
-        effective_steps = list(steps) if steps is not None else list(self._atomic_attacks)
-        policy = self._build_adaptive_linear_policy(steps=effective_steps)
-        return StrategyGraph(policy=policy)
-
-    def _build_adaptive_linear_policy(
-        self,
-        *,
-        steps: Sequence[ScenarioStep],
-    ) -> StrategyPolicy[ScenarioStep, int]:
-        """
-        Build a linear policy that always dispatches via ``process_async``.
-
-        Each policy action runs ``steps[i].process_async()`` and transitions
-        to state ``i + 1``; state ``len(steps)`` is the sole terminal state.
-        Unlike :meth:`Scenario._build_default_linear_policy` there's no
-        ``isinstance(_step, AtomicAttack)`` branch — adaptive steps always
-        go through their own process_async loop so the
-        ``"success"``/``"exhausted"`` outcome labels propagate unchanged.
-
-        Args:
-            steps: The steps to wrap. Must be non-empty.
-
-        Returns:
-            StrategyPolicy[ScenarioStep, int]: A frozen linear policy.
-
-        Raises:
-            ValueError: If ``steps`` is empty.
-        """
-        if not steps:
-            raise ValueError("_build_adaptive_linear_policy requires at least one step.")
-
-        terminal_state = len(steps)
-        actions: dict[int, PolicyAction[ScenarioStep, int]] = {}
-
-        for index, step in enumerate(steps):
-
-            async def _action(
-                graph: StrategyGraph[ScenarioStep, int],
-                _step: ScenarioStep = step,
-                _next: int = index + 1,
-            ) -> tuple[int, ScenarioStepResult | None]:
-                graph.bind_current_step(step=_step)
-                try:
-                    base_result = await _step.process_async()
-                    merged_metadata = {"step_name": _step.name, **base_result.metadata}
-                    result: ScenarioStepResult | None = ScenarioStepResult(
-                        outcome=base_result.outcome,
-                        attack_results=list(base_result.attack_results),
-                        step_identifier=base_result.step_identifier,
-                        metadata=merged_metadata,
-                    )
-                finally:
-                    graph.bind_current_step(step=None)
-                return _next, result
-
-            actions[index] = _action
-
-        return StrategyPolicy(
-            actions=actions,
-            initial_state=0,
-            terminal_states=frozenset({terminal_state}),
         )
 
     def _rehydrate_selector_from_memory(

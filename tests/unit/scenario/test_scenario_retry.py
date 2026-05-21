@@ -14,6 +14,7 @@ from pyrit.memory import CentralMemory
 from pyrit.models import AttackOutcome, AttackResult
 from pyrit.scenario import DatasetConfiguration, ScenarioResult
 from pyrit.scenario.core import AtomicAttack, BaselineAttackPolicy, Scenario, ScenarioStrategy
+from pyrit.scenario.core.scenario_step import ScenarioStepResult
 
 # Test constants
 TEST_ATTACK_TYPE = "TestAttack"
@@ -136,14 +137,37 @@ def create_mock_atomic_attack(name: str, objectives: list[str], run_async_mock: 
 
     attack = MagicMock(spec=AtomicAttack)
     attack.atomic_attack_name = name
+    attack.name = name
     attack.display_group = name
     attack._attack = mock_attack_strategy
     attack._scenario_result_id = None
+    attack._scenario_max_concurrency = 1
 
     def _set_scenario_result_id(scenario_result_id):
         attack._scenario_result_id = scenario_result_id
 
     attack.set_scenario_result_id = MagicMock(side_effect=_set_scenario_result_id)
+
+    def _set_scenario_max_concurrency(max_concurrency):
+        attack._scenario_max_concurrency = max_concurrency
+
+    attack.set_scenario_max_concurrency = MagicMock(side_effect=_set_scenario_max_concurrency)
+
+    async def _fake_process(*args, **kwargs):
+        executor_result = await attack.run_async(
+            max_concurrency=attack._scenario_max_concurrency,
+            return_partial_on_failure=True,
+        )
+        return ScenarioStepResult(
+            outcome="done",
+            attack_results=list(executor_result.completed_results),
+            metadata={
+                "incomplete_objectives": list(executor_result.incomplete_objectives),
+                "input_indices": list(executor_result.input_indices),
+            },
+        )
+
+    attack.process_async = MagicMock(side_effect=_fake_process)
 
     # Track objectives + objective-hash mapping so the hash-based filter
     # behaves correctly in resume tests.

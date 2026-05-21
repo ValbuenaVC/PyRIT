@@ -56,16 +56,27 @@ def _save_results_to_memory(attack_results, *, atomic_attack=None):
 
 
 def _make_atomic_attack_mock(name: str, attack_result: AttackResult) -> MagicMock:
-    """Build a fake AtomicAttack whose run_async returns the supplied result."""
+    """Build a fake AtomicAttack whose run_async returns the supplied result.
+
+    Wires both ``run_async`` (legacy direct-dispatch path, asserted by some
+    tests) and ``process_async`` (current unified-dispatch path used by the
+    default linear policy after R1). The two side-effects are layered so
+    ``process_async`` invokes ``run_async`` internally — mirroring the real
+    :meth:`AtomicAttack.process_async` — which keeps existing
+    ``attack.run_async.assert_called_once_with(...)`` assertions valid while
+    the orchestrator dispatches via ``process_async``.
+    """
     mock_attack = MagicMock()
     mock_attack.get_objective_target.return_value = MagicMock()
     mock_attack.get_attack_scoring_config.return_value = MagicMock()
 
     attack = MagicMock(spec=AtomicAttack)
     attack.atomic_attack_name = name
+    attack.name = name
     attack.display_group = name
     attack._attack = mock_attack
     attack._scenario_result_id = None
+    attack._scenario_max_concurrency = 1
     type(attack).objectives = PropertyMock(return_value=[attack_result.objective])
 
     def _set_scenario_result_id(sid):
@@ -73,11 +84,32 @@ def _make_atomic_attack_mock(name: str, attack_result: AttackResult) -> MagicMoc
 
     attack.set_scenario_result_id = MagicMock(side_effect=_set_scenario_result_id)
 
+    def _set_scenario_max_concurrency(mc):
+        attack._scenario_max_concurrency = mc
+
+    attack.set_scenario_max_concurrency = MagicMock(side_effect=_set_scenario_max_concurrency)
+
     async def _fake_run(*args, **kwargs):
         _save_results_to_memory([attack_result], atomic_attack=attack)
         return AttackExecutorResult(completed_results=[attack_result], incomplete_objectives=[])
 
     attack.run_async = MagicMock(side_effect=_fake_run)
+
+    async def _fake_process(*args, **kwargs):
+        executor_result = await attack.run_async(
+            max_concurrency=attack._scenario_max_concurrency,
+            return_partial_on_failure=True,
+        )
+        return ScenarioStepResult(
+            outcome="done",
+            attack_results=list(executor_result.completed_results),
+            metadata={
+                "incomplete_objectives": list(executor_result.incomplete_objectives),
+                "input_indices": list(executor_result.input_indices),
+            },
+        )
+
+    attack.process_async = MagicMock(side_effect=_fake_process)
     return attack
 
 

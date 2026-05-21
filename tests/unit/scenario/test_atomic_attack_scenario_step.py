@@ -262,3 +262,90 @@ class TestAtomicAttackFilterSeedGroupsByObjectives:
         )
         atomic.filter_seed_groups_by_objectives(remaining_objectives=["obj1", "does_not_exist"])
         assert atomic.objectives == ["obj1"]
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestAtomicAttackSetScenarioMaxConcurrency:
+    """``set_scenario_max_concurrency`` binds the value consumed by ``process_async``.
+
+    R1 unified the linear-policy dispatch so the base policy pushes
+    scenario-level ``max_concurrency`` into every ``AtomicAttack`` step via this
+    setter before the action loop runs. The setter must validate its input and
+    the value must flow through to ``run_async`` via ``process_async``.
+    """
+
+    def test_default_is_one(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        assert atomic._scenario_max_concurrency == 1
+
+    def test_setter_accepts_positive(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        atomic.set_scenario_max_concurrency(5)
+        assert atomic._scenario_max_concurrency == 5
+
+    def test_setter_rejects_zero(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        with pytest.raises(ValueError, match="max_concurrency must be >= 1"):
+            atomic.set_scenario_max_concurrency(0)
+
+    def test_setter_rejects_negative(self, mock_attack, seed_groups):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        with pytest.raises(ValueError, match="max_concurrency must be >= 1"):
+            atomic.set_scenario_max_concurrency(-3)
+
+    async def test_process_async_uses_bound_max_concurrency(self, mock_attack, seed_groups, attack_results):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+        atomic.set_scenario_max_concurrency(11)
+
+        with patch.object(AttackExecutor, "execute_attack_from_seed_groups_async", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = AttackExecutorResult(
+                completed_results=attack_results,
+                incomplete_objectives=[],
+                input_indices=[0, 1],
+            )
+            with patch.object(AtomicAttack, "run_async", new_callable=AsyncMock) as mock_run:
+                mock_run.return_value = AttackExecutorResult(
+                    completed_results=attack_results,
+                    incomplete_objectives=[],
+                    input_indices=[0, 1],
+                )
+                await atomic.process_async()
+
+        mock_run.assert_called_once_with(max_concurrency=11, return_partial_on_failure=True)
+
+    async def test_process_async_defaults_to_one_when_unset(self, mock_attack, seed_groups, attack_results):
+        atomic = AtomicAttack(
+            attack_technique=AttackTechnique(attack=mock_attack),
+            seed_groups=seed_groups,
+            atomic_attack_name="my_step",
+        )
+
+        with patch.object(AtomicAttack, "run_async", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = AttackExecutorResult(
+                completed_results=attack_results,
+                incomplete_objectives=[],
+                input_indices=[0, 1],
+            )
+            await atomic.process_async()
+
+        mock_run.assert_called_once_with(max_concurrency=1, return_partial_on_failure=True)

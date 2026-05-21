@@ -594,12 +594,12 @@ class TestAdaptiveLinearPolicy:
     def test_empty_steps_raises(self, mock_objective_scorer):
         scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
         with pytest.raises(ValueError, match="at least one step"):
-            scenario._build_adaptive_linear_policy(steps=[])
+            scenario._build_default_linear_policy(steps=[])
 
     def test_initial_state_zero_and_terminal_state_is_step_count(self, mock_objective_scorer):
         scenario = TextAdaptive(objective_scorer=mock_objective_scorer)
         steps = [_make_stub_step(name=f"s{i}") for i in range(3)]
-        policy = scenario._build_adaptive_linear_policy(steps=steps)
+        policy = scenario._build_default_linear_policy(steps=steps)
 
         assert isinstance(policy, StrategyPolicy)
         assert policy.initial_state == 0

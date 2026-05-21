@@ -141,6 +141,12 @@ class AtomicAttack(ScenarioStep):
         # the scenario via the attribution_parent_id foreign key on
         # AttackResultEntry.
         self._scenario_result_id: str | None = None
+        # Set via set_scenario_max_concurrency() by Scenario._build_default_linear_policy
+        # before the policy's per-step action runs. Consumed by ``process_async``
+        # so a scenario-level ``max_concurrency`` setting flows through the
+        # unified linear-dispatch path without the orchestrator needing to
+        # branch on step type.
+        self._scenario_max_concurrency: int = 1
 
         logger.info(
             f"Initialized atomic attack with {len(self._seed_groups)} seed groups, "
@@ -162,6 +168,25 @@ class AtomicAttack(ScenarioStep):
                 atomic attack belongs to, or ``None`` to detach.
         """
         self._scenario_result_id = scenario_result_id
+
+    def set_scenario_max_concurrency(self, max_concurrency: int) -> None:
+        """
+        Bind the scenario-level ``max_concurrency`` for ``process_async`` dispatch.
+
+        Called by ``Scenario._build_default_linear_policy`` once at policy build
+        time so the unified ``process_async`` action body can honor scenario
+        concurrency without the orchestrator special-casing ``AtomicAttack``.
+        Direct ``run_async`` callers (outside of a scenario) are unaffected.
+
+        Args:
+            max_concurrency (int): Positive integer concurrency limit.
+
+        Raises:
+            ValueError: If ``max_concurrency`` is less than ``1``.
+        """
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be >= 1")
+        self._scenario_max_concurrency = max_concurrency
 
     def _validate_unique_objective_hashes(self) -> None:
         """
@@ -258,17 +283,22 @@ class AtomicAttack(ScenarioStep):
         """
         ``ScenarioStep`` adapter — runs the atomic attack and wraps the result.
 
-        Delegates to ``run_async`` using the instance's stored execution
-        parameters, then packages the completed results into a
-        ``ScenarioStepResult``. Incomplete objectives and the executor's
-        ``input_indices`` are stashed in ``metadata`` so the orchestrator
-        (Phase 5) can drive resume / retry logic without losing information.
+        Delegates to ``run_async`` honoring the scenario-level
+        ``max_concurrency`` bound via :meth:`set_scenario_max_concurrency`
+        (defaults to ``1`` when invoked outside a scenario). Completed results
+        are packaged into a ``ScenarioStepResult``; incomplete objectives and
+        the executor's ``input_indices`` are stashed in ``metadata`` so the
+        orchestrator can drive resume / retry logic without losing
+        information.
 
         Returns:
             ScenarioStepResult: ``outcome="done"`` with the completed attack
                 results and execution bookkeeping in ``metadata``.
         """
-        executor_result = await self.run_async()
+        executor_result = await self.run_async(
+            max_concurrency=self._scenario_max_concurrency,
+            return_partial_on_failure=True,
+        )
         return ScenarioStepResult(
             outcome="done",
             attack_results=list(executor_result.completed_results),

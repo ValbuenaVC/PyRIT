@@ -39,6 +39,7 @@ from pyrit.scenario.core.input_collector import (
     collect_inputs_with_retry,
 )
 from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
+from pyrit.scenario.core.linear_scenario import LinearScenario, LinearScenarioStrategy
 from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
 from pyrit.scenario.core.scenario_state import ScenarioCoreState, ScenarioStateLike
 from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
@@ -66,6 +67,8 @@ __all__ = [
     "GraphArtifactError",
     "GraphArtifactSecurityError",
     "InputCollector",
+    "LinearScenario",
+    "LinearScenarioStrategy",
     "MaxAttemptsExceededError",
     "OpaqueInputUnresolvedError",
     "OpaqueRoleNotElicitableError",
