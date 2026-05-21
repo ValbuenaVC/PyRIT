@@ -691,3 +691,116 @@ class TestBroadSweepThenDeepDive:
         assert scenario._weak_categories == set()
         async for _ in graph2.event_loop_async():
             pass
+
+
+# --------------------------------------------------------------------------- #
+# Artifact round-trip limitation (v1 contract pin)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestArtifactRoundTripNotSupported:
+    """Pin the v1 contract that ``BroadSweepThenDeepDive`` cannot round-trip via graph artifacts.
+
+    Two of the three OPAQUE input roles bypass identifier encoding:
+
+    * ``deep_dive_atomic_attacks`` is a ``list``. The list itself has no
+      ``get_identifier``, so :func:`_encode_init_inputs` falls through to
+      its "Unknown opaque shape — defer to caller serialization at their
+      own risk" branch and stores the raw list of ``AtomicAttack`` instances
+      verbatim. ``yaml.SafeDumper`` then raises ``RepresenterError`` on the
+      first element.
+    * ``outcome_scorer`` is an :class:`OutcomeScorer` instance which has no
+      ``get_identifier`` method (it's a wrapper around a scorer, not an
+      Identifiable). Same fall-through; same downstream failure if YAML
+      reached it.
+
+    Only ``sweep_atomic_attack`` (a single AtomicAttack with
+    ``get_identifier``) round-trips correctly. This class pins the v1
+    failure mode so any future change adding proper round-trip support must
+    update the contract intentionally (delete this class, not flip it to
+    ``assert success``).
+
+    Related: the same gap manifests in :class:`ScenarioPipeline`'s
+    ``phases`` role (pinned by
+    ``tests.unit.scenario.composite.test_scenario_pipeline.TestArtifactRoundTripNotSupported``).
+    The right fix is a recursive container encoder in
+    :func:`_encode_init_inputs` plus a fail-loud ``OpaqueInputUnserializableError``
+    at leaf level; tracked as a follow-up to PR #1767.
+    """
+
+    @staticmethod
+    def _build_scenario_and_inputs() -> tuple[BroadSweepThenDeepDive, dict[str, Any], MagicMock]:
+        wrapped_scorer = MagicMock(spec=Scorer)
+        wrapped_scorer.get_identifier.return_value = ComponentIdentifier(
+            class_name="MockScorer",
+            class_module="tests.unit.scenario.scenarios.airt",
+        )
+        scorer = OutcomeScorer(
+            wrapped_scorer=wrapped_scorer,
+            outcome_map={
+                _WEAKNESS_LABEL: lambda s: s.score_value == _WEAKNESS_LABEL,
+                _SAFE_LABEL: lambda s: s.score_value == _SAFE_LABEL,
+            },
+        )
+        sweep = _make_atomic_mock(name="sweep", display_group="cat-a", attack_results=[])
+        deep = _make_atomic_mock(name="deep-0", display_group="cat-a", attack_results=[])
+        scenario = BroadSweepThenDeepDive(
+            sweep_atomic_attack=cast("AtomicAttack", sweep),
+            deep_dive_atomic_attacks=[cast("AtomicAttack", deep)],
+            outcome_scorer=scorer,
+            weakness_label=_WEAKNESS_LABEL,
+        )
+        target = MagicMock()
+        target.get_identifier.return_value = ComponentIdentifier(
+            class_name="MockTarget",
+            class_module="tests.unit.scenario.scenarios.airt",
+        )
+        init_inputs: dict[str, Any] = {
+            "sweep_atomic_attack": sweep,
+            "deep_dive_atomic_attacks": [deep],
+            "outcome_scorer": scorer,
+            "weakness_label": _WEAKNESS_LABEL,
+        }
+        return scenario, init_inputs, target
+
+    async def test_list_of_atomic_attacks_passes_through_then_yaml_chokes(self, tmp_path) -> None:
+        """``deep_dive_atomic_attacks`` (a list) skips identifier encoding and
+        breaks YAML serialization on the contained ``AtomicAttack`` mocks.
+        """
+        import yaml
+
+        from pyrit.scenario.core.graph_artifact import (
+            build_graph_artifact,
+            graph_artifact_to_yaml,
+        )
+
+        scenario, init_inputs, target = self._build_scenario_and_inputs()
+        await scenario.initialize_async(objective_target=target)
+
+        artifact = build_graph_artifact(scenario, init_inputs=init_inputs)
+        # Sanity check: the single-instance role IS encoded as an identifier dict,
+        # but the list-of-instances role is passed through as a live list.
+        assert isinstance(artifact.init_inputs["sweep_atomic_attack"], dict)
+        assert isinstance(artifact.init_inputs["deep_dive_atomic_attacks"], list)
+
+        out_path = tmp_path / "bstd.yaml"
+        with pytest.raises(yaml.representer.RepresenterError, match="cannot represent"):
+            graph_artifact_to_yaml(artifact, out_path)
+
+    async def test_outcome_scorer_lacks_get_identifier_and_passes_through(self) -> None:
+        """``OutcomeScorer`` is a wrapper without ``get_identifier``, so
+        ``_encode_init_inputs`` stores it verbatim instead of as an identifier
+        dict. This is the second OPAQUE role that would break YAML round-trip
+        even if the ``deep_dive_atomic_attacks`` list issue were fixed.
+        """
+        from pyrit.scenario.core.graph_artifact import build_graph_artifact
+
+        scenario, init_inputs, target = self._build_scenario_and_inputs()
+        await scenario.initialize_async(objective_target=target)
+
+        artifact = build_graph_artifact(scenario, init_inputs=init_inputs)
+        stored = artifact.init_inputs["outcome_scorer"]
+        # Pinned passthrough: the live OutcomeScorer instance is what got stored.
+        assert isinstance(stored, OutcomeScorer)
+        assert not hasattr(stored, "get_identifier")

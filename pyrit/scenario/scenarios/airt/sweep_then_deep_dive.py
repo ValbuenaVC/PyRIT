@@ -536,11 +536,23 @@ class BroadSweepThenDeepDive(Scenario):
         """
         Declare the rich-object and scalar inputs the wizard / artifact must capture.
 
-        The three opaque roles are pre-built ``Identifiable`` instances that the
-        CLI wizard cannot elicit directly — programmatic callers must supply them
-        and CLI flows must round-trip them through a saved graph artifact (see
-        :class:`pyrit.scenario.core.graph_artifact.GraphArtifact`). The single
-        scalar role (``weakness_label``) is freely elicitable.
+        The three opaque roles are pre-built instances that the CLI wizard
+        cannot elicit directly — programmatic callers must supply them.
+        Round-tripping a fully-built ``BroadSweepThenDeepDive`` through a
+        saved graph artifact is **not supported in v1**:
+
+        * ``sweep_atomic_attack`` is a single ``Identifiable`` and would
+          encode cleanly, but
+        * ``deep_dive_atomic_attacks`` is a ``list`` (no ``get_identifier``)
+          and ``outcome_scorer`` is an :class:`OutcomeScorer` (no
+          ``get_identifier``). Both fall into the "Unknown opaque shape —
+          defer to caller serialization at their own risk" branch of
+          :func:`pyrit.scenario.core.graph_artifact._encode_init_inputs` and
+          break ``yaml.safe_dump``. See
+          :class:`tests.unit.scenario.scenarios.airt.test_sweep_then_deep_dive.TestArtifactRoundTripNotSupported`
+          for the regression pin.
+
+        The single scalar role (``weakness_label``) is freely elicitable.
 
         Returns:
             list[RoleDescriptor]: Three OPAQUE roles plus one SCALAR.
