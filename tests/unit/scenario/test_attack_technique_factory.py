@@ -637,10 +637,16 @@ class TestFactoryAtomicAttackGraphIntegration:
 
         # The real AttackExecutor persists each AttackResult before returning. Our patched
         # executor must do the same so the scenario can rehydrate results from memory at
-        # ``get_scenario_results`` time.
+        # ``get_scenario_results`` time. Stamp attribution_parent_id like the real attack
+        # event handler does (Scenario sets _scenario_result_id on the AtomicAttack before
+        # run; the executor would normally stamp it via AttackResultAttribution).
         async def _fake_execute(*args, **kwargs):
             from pyrit.memory import CentralMemory
 
+            attribution = kwargs.get("attribution")
+            if attribution is not None:
+                canned_result.attribution_parent_id = attribution.parent_id
+                canned_result.attribution_data = {"parent_collection": attribution.parent_collection}
             CentralMemory.get_memory_instance().add_attack_results_to_memory(attack_results=[canned_result])
             return AttackExecutorResult(
                 completed_results=[canned_result],

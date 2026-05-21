@@ -36,7 +36,21 @@ _TEST_SCORER_ID = ComponentIdentifier(
 )
 
 
-def _save_results_to_memory(attack_results):
+def _save_results_to_memory(attack_results, *, atomic_attack=None):
+    """Helper: persist attack results, optionally stamping attribution_parent_id.
+
+    Mirrors the new contract from PR #1758: AttackResult rows are joined to
+    ``ScenarioResult.attack_results`` via the ``attribution_parent_id`` foreign
+    key set by the attack event handler at write time. Test mocks must stamp
+    the same fields the real persistence path does.
+    """
+    if atomic_attack is not None:
+        sid = getattr(atomic_attack, "_scenario_result_id", None)
+        name = getattr(atomic_attack, "atomic_attack_name", None)
+        if sid and name:
+            for r in attack_results:
+                r.attribution_parent_id = sid
+                r.attribution_data = {"parent_collection": name}
     memory = CentralMemory.get_memory_instance()
     memory.add_attack_results_to_memory(attack_results=attack_results)
 
@@ -51,10 +65,16 @@ def _make_atomic_attack_mock(name: str, attack_result: AttackResult) -> MagicMoc
     attack.atomic_attack_name = name
     attack.display_group = name
     attack._attack = mock_attack
+    attack._scenario_result_id = None
     type(attack).objectives = PropertyMock(return_value=[attack_result.objective])
 
+    def _set_scenario_result_id(sid):
+        attack._scenario_result_id = sid
+
+    attack.set_scenario_result_id = MagicMock(side_effect=_set_scenario_result_id)
+
     async def _fake_run(*args, **kwargs):
-        _save_results_to_memory([attack_result])
+        _save_results_to_memory([attack_result], atomic_attack=attack)
         return AttackExecutorResult(completed_results=[attack_result], incomplete_objectives=[])
 
     attack.run_async = MagicMock(side_effect=_fake_run)
@@ -252,7 +272,7 @@ class TestStepIdentifierStamping:
         attack = _make_atomic_attack_mock("a0", result_obj)
 
         async def _run_returning_stamped(*args, **kwargs):
-            _save_results_to_memory([result_obj])
+            _save_results_to_memory([result_obj], atomic_attack=attack)
             return AttackExecutorResult(completed_results=[result_obj], incomplete_objectives=[])
 
         attack.run_async = MagicMock(side_effect=_run_returning_stamped)
@@ -314,7 +334,7 @@ class TestStepIdentifierStampingNoDuplication:
         attack = _make_atomic_attack_mock("multi", result_a)
 
         async def _run_multi(*args, **kwargs):
-            _save_results_to_memory([result_a, result_b])
+            _save_results_to_memory([result_a, result_b], atomic_attack=attack)
             return AttackExecutorResult(completed_results=[result_a, result_b], incomplete_objectives=[])
 
         attack.run_async = MagicMock(side_effect=_run_multi)
@@ -352,7 +372,7 @@ class TestExecutionGraphRebuildOnRetry:
             call_count[0] += 1
             if call_count[0] == 1:
                 raise RuntimeError("first attempt failure")
-            _save_results_to_memory([result_second])
+            _save_results_to_memory([result_second], atomic_attack=attack_flaky)
             return AttackExecutorResult(completed_results=[result_second], incomplete_objectives=[])
 
         attack_flaky = _make_atomic_attack_mock("a_flaky", result_second)
@@ -408,7 +428,7 @@ class TestPartialFailureSurfacing:
         attack = _make_atomic_attack_mock("a0", result)
 
         async def _run_partial(*args, **kwargs):
-            _save_results_to_memory([result])
+            _save_results_to_memory([result], atomic_attack=attack)
             return AttackExecutorResult(
                 completed_results=[result],
                 incomplete_objectives=[("partial-obj", RuntimeError("boom"))],
