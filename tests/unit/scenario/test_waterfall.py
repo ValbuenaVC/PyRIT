@@ -28,9 +28,15 @@ from pyrit.registry.object_registries.attack_technique_registry import (
 )
 from pyrit.scenario.core.attack_technique_factory import AttackTechniqueFactory
 from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
+from pyrit.scenario.core.input_schema import RoleDescriptor, RoleTag
 from pyrit.scenario.core.scenario import BaselineAttackPolicy, Scenario
 from pyrit.scenario.core.scenario_strategy import ScenarioStrategy
-from pyrit.scenario.core.waterfall import policy_to_spec, spec_to_enum
+from pyrit.scenario.core.waterfall import (
+    enum_to_spec,
+    policy_to_spec,
+    spec_to_enum,
+    spec_to_policy_inputs,
+)
 from pyrit.score import Scorer
 
 # ---------- helpers ----------------------------------------------------------
@@ -303,3 +309,155 @@ class TestTextAdaptiveRoundTrip:
             "policy_to_spec can reconstruct the technique catalog "
             f"(found {len(missing)} without source_spec: {missing})"
         )
+
+
+# ---------- enum_to_spec (inverse) -------------------------------------------
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestEnumToSpec:
+    """Inverse half of the waterfall — enum → spec via the global registry."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_registry(self, monkeypatch: pytest.MonkeyPatch):
+        from pyrit.prompt_target import PromptTarget
+        from pyrit.registry import TargetRegistry
+
+        AttackTechniqueRegistry.reset_instance()
+        TargetRegistry.reset_instance()
+
+        adversarial = MagicMock(spec=PromptTarget)
+        adversarial.get_identifier.return_value = ComponentIdentifier(
+            class_name="MockAdversarial", class_module="tests.unit.scenario"
+        )
+        monkeypatch.setattr(
+            "pyrit.scenario.core.scenario_techniques.get_default_adversarial_target",
+            lambda: adversarial,
+        )
+
+        yield
+        AttackTechniqueRegistry.reset_instance()
+        TargetRegistry.reset_instance()
+
+    def test_empty_input_returns_empty(self):
+        assert enum_to_spec([]) == []
+
+    def test_skips_strategies_not_in_global_registry(self):
+        # _DummyStrategy.ALPHA is not registered in SCENARIO_TECHNIQUES, so the
+        # global registry has no factory for "alpha" → silently skipped.
+        result = enum_to_spec([_DummyStrategy.ALPHA])
+        assert result == []
+
+    def test_resolves_registered_strategies(self):
+        from pyrit.scenario.scenarios.adaptive.text_adaptive import TextAdaptive
+
+        TextAdaptive._cached_strategy_class = None
+        strategy_cls = TextAdaptive.get_strategy_class()
+        leaves = strategy_cls.get_all_strategies()[:2]
+        assert leaves, "TextAdaptive should register at least one leaf strategy"
+
+        specs = enum_to_spec(leaves)
+        assert [sp.name for sp in specs] == [m.value for m in leaves]
+
+
+# ---------- spec_to_policy_inputs (inverse) ----------------------------------
+
+
+class _EmptySchemaScenario(_DummyScenario):
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        return []
+
+
+class _OptionalSchemaScenario(_DummyScenario):
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        return [
+            RoleDescriptor(
+                name="alpha",
+                description="optional scalar",
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                default=3,
+                required=False,
+            )
+        ]
+
+
+class _RequiredScalarWithDefaultScenario(_DummyScenario):
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        return [
+            RoleDescriptor(
+                name="alpha",
+                description="required scalar with default",
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                default=7,
+                required=True,
+            )
+        ]
+
+
+class _RequiredScalarNoDefaultScenario(_DummyScenario):
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        return [
+            RoleDescriptor(
+                name="alpha",
+                description="required scalar with no default",
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                required=True,
+            )
+        ]
+
+
+class _RequiredOpaqueScenario(_DummyScenario):
+    @classmethod
+    def input_schema(cls) -> list[RoleDescriptor]:
+        return [
+            RoleDescriptor(
+                name="step",
+                description="required opaque step",
+                tag=RoleTag.OPAQUE,
+                required=True,
+            )
+        ]
+
+
+class _SchemaRaisesScenario(_DummyScenario):
+    @classmethod
+    def input_schema(cls):
+        raise NotImplementedError("not yet declared")
+
+
+class TestSpecToPolicyInputs:
+    """Inverse half — derive ``__init__`` kwargs from a spec list when possible."""
+
+    def test_returns_empty_when_schema_empty(self):
+        assert spec_to_policy_inputs(_EmptySchemaScenario, []) == {}
+
+    def test_returns_empty_when_default_schema_inherited(self):
+        # _DummyScenario inherits the base ``input_schema`` returning [].
+        assert spec_to_policy_inputs(_DummyScenario, []) == {}
+
+    def test_returns_empty_when_only_optional_roles(self):
+        assert spec_to_policy_inputs(_OptionalSchemaScenario, []) == {}
+
+    def test_returns_empty_when_required_scalar_has_default(self):
+        assert spec_to_policy_inputs(_RequiredScalarWithDefaultScenario, []) == {}
+
+    def test_returns_none_when_required_scalar_has_no_default(self):
+        assert spec_to_policy_inputs(_RequiredScalarNoDefaultScenario, []) is None
+
+    def test_returns_none_when_required_opaque_role_present(self):
+        assert spec_to_policy_inputs(_RequiredOpaqueScenario, []) is None
+
+    def test_treats_not_implemented_schema_as_empty(self):
+        assert spec_to_policy_inputs(_SchemaRaisesScenario, []) == {}
+
+    def test_specs_argument_is_currently_ignored(self):
+        # The placeholder signature accepts a spec list; verify the function
+        # tolerates arbitrary spec inputs without affecting its return value.
+        assert spec_to_policy_inputs(_EmptySchemaScenario, [_spec("alpha"), _spec("beta")]) == {}

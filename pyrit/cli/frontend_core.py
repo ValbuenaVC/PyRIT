@@ -526,6 +526,111 @@ async def run_scenario_async(
     return result
 
 
+async def run_scenario_from_artifact_async(
+    *,
+    artifact_path: Path,
+    context: FrontendCore,
+    target_name: str | None = None,
+    allow_drift: bool = False,
+    print_summary: bool = True,
+) -> ScenarioResult:
+    """
+    Load a graph artifact from disk and run the reconstructed scenario.
+
+    Counterpart to :func:`run_scenario_async` for the Phase 8e replay flow. The
+    artifact already encodes the scenario class, role inputs, and lifecycle
+    config; the caller only needs to supply ``target_name`` (env-specific, never
+    captured in the artifact) and the initializers that register that target.
+
+    Args:
+        artifact_path: Path to a YAML artifact produced by
+            :func:`pyrit.scenario.core.graph_artifact.graph_artifact_to_yaml`.
+        context: PyRIT context with loaded registries.
+        target_name: Name of a registered target. Required — the artifact does
+            not capture the target instance.
+        allow_drift: When ``True``, scenario_version / topology-hash mismatches
+            are tolerated. Defaults to ``False`` (strict-fail) mirroring the
+            resume contract.
+        print_summary: Whether to print the scenario summary after execution.
+            Defaults to True.
+
+    Returns:
+        ScenarioResult: The result of the scenario execution.
+
+    Raises:
+        ValueError: When ``target_name`` is missing or unknown.
+        GraphArtifactError: On security / drift / opaque-resolution failures.
+    """
+    from pyrit.scenario.core.graph_artifact import (
+        graph_artifact_from_yaml,
+        load_scenario_from_artifact,
+    )
+
+    if not context._initialized:
+        await context.initialize_async()
+
+    initializer_instances = None
+    if context._initializer_configs:
+        print(f"Running {len(context._initializer_configs)} initializer(s)...")
+        sys.stdout.flush()
+
+        initializer_instances = []
+        for config in context._initializer_configs:
+            initializer_class = context.initializer_registry.get_class(config.name)
+            instance = initializer_class()
+            if config.args:
+                instance.set_params_from_args(args=config.args)
+            initializer_instances.append(instance)
+
+    await initialize_pyrit_async(
+        memory_db_type=context._database,
+        initialization_scripts=context._initialization_scripts,
+        initializers=initializer_instances,
+        env_files=context._env_files,
+        silent=getattr(context, "_silent_reinit", False),
+    )
+
+    if not target_name:
+        raise ValueError(
+            "--target is required when running from an artifact (the artifact "
+            "does not capture the objective_target instance)."
+        )
+
+    target_registry = TargetRegistry.get_registry_singleton()
+    objective_target = target_registry.get_instance_by_name(target_name)
+    if objective_target is None:
+        available_names = target_registry.get_names()
+        if not available_names:
+            raise ValueError(
+                f"Target '{target_name}' not found. The target registry is empty.\n"
+                "Targets are registered by initializers. Make sure to include an initializer "
+                "that registers targets (e.g., --initializers target)."
+            )
+        raise ValueError(
+            f"Target '{target_name}' not found in registry.\nAvailable targets: {', '.join(available_names)}"
+        )
+
+    print(f"\nLoading artifact: {artifact_path}")
+    sys.stdout.flush()
+    artifact = graph_artifact_from_yaml(artifact_path)
+
+    print(f"Replaying scenario: {artifact.scenario_class_fqn}")
+    sys.stdout.flush()
+    scenario = await load_scenario_from_artifact(
+        artifact,
+        objective_target=objective_target,
+        allow_drift=allow_drift,
+    )
+
+    result = await scenario.run_async()
+
+    if print_summary:
+        printer = ConsoleScenarioResultPrinter()
+        await printer.print_summary_async(result)
+
+    return result
+
+
 def _format_wrapped_text(*, text: str, indent: str, width: int = 78) -> str:
     """
     Format text with word wrapping.

@@ -155,6 +155,25 @@ class TestParseArgs:
 
         assert args.list_targets is True
 
+    def test_parse_args_from_artifact_defaults_to_none(self):
+        args = pyrit_scan.parse_args(["test_scenario"])
+
+        assert args.from_artifact is None
+        assert args.allow_drift is False
+
+    def test_parse_args_with_from_artifact(self):
+        args = pyrit_scan.parse_args(["--from-artifact", "/tmp/scan.yaml", "--target", "openai"])
+
+        assert args.from_artifact == Path("/tmp/scan.yaml")
+        assert args.target == "openai"
+        assert args.scenario_name is None
+
+    def test_parse_args_with_from_artifact_and_allow_drift(self):
+        args = pyrit_scan.parse_args(["--from-artifact", "scan.yaml", "--target", "openai", "--allow-drift"])
+
+        assert args.from_artifact == Path("scan.yaml")
+        assert args.allow_drift is True
+
 
 class TestMain:
     """Tests for main function."""
@@ -270,6 +289,55 @@ class TestMain:
         assert result == 1
         captured = capsys.readouterr()
         assert "No scenario specified" in captured.out
+
+    @patch("pyrit.cli.pyrit_scan.asyncio.run")
+    @patch("pyrit.cli.frontend_core.run_scenario_from_artifact_async", new_callable=AsyncMock)
+    @patch("pyrit.cli.frontend_core.run_scenario_async", new_callable=AsyncMock)
+    @patch("pyrit.cli.frontend_core.FrontendCore")
+    def test_main_from_artifact_short_circuits_normal_path(
+        self,
+        mock_frontend_core: MagicMock,
+        mock_run_scenario: AsyncMock,
+        mock_run_from_artifact: AsyncMock,
+        mock_asyncio_run: MagicMock,
+    ):
+        """`--from-artifact` dispatches via the artifact helper, not the normal flow."""
+        result = pyrit_scan.main(
+            ["--from-artifact", "/tmp/scan.yaml", "--target", "openai", "--initializers", "target"]
+        )
+
+        assert result == 0
+        mock_asyncio_run.assert_called_once()
+        # asyncio.run was given the artifact coroutine; the normal one was never awaited.
+        mock_run_scenario.assert_not_called()
+        mock_run_from_artifact.assert_called_once()
+        call_kwargs = mock_run_from_artifact.call_args.kwargs
+        assert call_kwargs["artifact_path"] == Path("/tmp/scan.yaml")
+        assert call_kwargs["target_name"] == "openai"
+        assert call_kwargs["allow_drift"] is False
+
+    @patch("pyrit.cli.pyrit_scan.asyncio.run")
+    @patch("pyrit.cli.frontend_core.run_scenario_from_artifact_async", new_callable=AsyncMock)
+    @patch("pyrit.cli.frontend_core.FrontendCore")
+    def test_main_from_artifact_propagates_allow_drift(
+        self,
+        mock_frontend_core: MagicMock,
+        mock_run_from_artifact: AsyncMock,
+        mock_asyncio_run: MagicMock,
+    ):
+        result = pyrit_scan.main(
+            [
+                "--from-artifact",
+                "scan.yaml",
+                "--target",
+                "openai",
+                "--allow-drift",
+            ]
+        )
+
+        assert result == 0
+        call_kwargs = mock_run_from_artifact.call_args.kwargs
+        assert call_kwargs["allow_drift"] is True
 
     @patch("pyrit.cli.pyrit_scan.asyncio.run")
     @patch("pyrit.cli.frontend_core.run_scenario_async", new_callable=AsyncMock)

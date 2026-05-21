@@ -53,6 +53,7 @@ from pyrit.scenario.core import (
     collect_inputs_with_retry,
     discover_input_schema,
     discover_supported_parameters,
+    enum_to_spec,
     graph_artifact_from_yaml,
     graph_artifact_to_yaml,
     linear_strategy_policy,
@@ -60,6 +61,7 @@ from pyrit.scenario.core import (
     materialize_opaque_inputs,
     policy_to_spec,
     spec_to_enum,
+    spec_to_policy_inputs,
     validate_init_async_inputs,
     validate_init_inputs,
 )
@@ -128,6 +130,7 @@ __all__ = [
     "collect_inputs_with_retry",
     "discover_input_schema",
     "discover_supported_parameters",
+    "enum_to_spec",
     "foundry",
     "garak",
     "graph_artifact_from_yaml",
@@ -137,6 +140,7 @@ __all__ = [
     "materialize_opaque_inputs",
     "policy_to_spec",
     "spec_to_enum",
+    "spec_to_policy_inputs",
     "validate_init_async_inputs",
     "validate_init_inputs",
 ]

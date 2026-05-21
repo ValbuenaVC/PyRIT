@@ -49,7 +49,7 @@ from pyrit.scenario.core.scenario_techniques import (
     register_scenario_techniques,
 )
 from pyrit.scenario.core.strategy_graph import PolicyAction, StrategyGraph, StrategyPolicy, linear_strategy_policy
-from pyrit.scenario.core.waterfall import policy_to_spec, spec_to_enum
+from pyrit.scenario.core.waterfall import enum_to_spec, policy_to_spec, spec_to_enum, spec_to_policy_inputs
 
 __all__ = [
     "ArtifactInputCollector",
@@ -91,6 +91,7 @@ __all__ = [
     "collect_inputs_with_retry",
     "discover_input_schema",
     "discover_supported_parameters",
+    "enum_to_spec",
     "get_default_adversarial_target",
     "get_default_scorer_target",
     "graph_artifact_from_yaml",
@@ -101,6 +102,7 @@ __all__ = [
     "policy_to_spec",
     "register_scenario_techniques",
     "spec_to_enum",
+    "spec_to_policy_inputs",
     "validate_init_async_inputs",
     "validate_init_inputs",
 ]

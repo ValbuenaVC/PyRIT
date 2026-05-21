@@ -177,6 +177,20 @@ def _build_base_parser(*, add_help: bool = True) -> ArgumentParser:
         help=ARG_HELP["target"],
     )
 
+    parser.add_argument(
+        "--from-artifact",
+        type=Path,
+        dest="from_artifact",
+        help="Replay a scenario from a saved graph artifact (YAML produced by pyrit_wizard --save). "
+        "When set, the positional scenario_name and --strategies are ignored; --target is still required.",
+    )
+
+    parser.add_argument(
+        "--allow-drift",
+        action="store_true",
+        help="When loading via --from-artifact, tolerate scenario_version / topology-hash drift.",
+    )
+
     return parser
 
 
@@ -446,6 +460,18 @@ def main(args: Optional[list[str]] = None) -> int:
             initializer_names=parsed_args.initializers,
             log_level=parsed_args.log_level,
         )
+
+        # Artifact replay short-circuits the scenario_name / --strategies path.
+        if parsed_args.from_artifact is not None:
+            asyncio.run(
+                frontend_core.run_scenario_from_artifact_async(
+                    artifact_path=parsed_args.from_artifact,
+                    context=context,
+                    target_name=parsed_args.target,
+                    allow_drift=parsed_args.allow_drift,
+                )
+            )
+            return 0
 
         # Resolve the effective scenario name: CLI positional wins, config falls through.
         config_scenario = context._scenario_config
