@@ -11,7 +11,7 @@ purely on top of the default linear policy built by
 :meth:`Scenario._build_default_linear_policy`; no graph or state vocabulary
 is exposed to the caller.
 
-L1 (override ``_get_atomic_attacks_async``) and L2 (override
+L1 (override ``_get_steps_async``) and L2 (override
 ``_build_execution_graph``) remain available for scenarios that need
 registry-driven technique selection or non-linear control flow respectively.
 """
@@ -144,12 +144,12 @@ class LinearScenario(Scenario):
         """
         return DatasetConfiguration()
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Return the caller-supplied steps in order.
 
         The return type is :class:`list[AtomicAttack]` for parity with the
-        base ``Scenario._get_atomic_attacks_async`` contract; the resume /
+        base ``Scenario._get_steps_async`` contract; the resume /
         orchestrator code reads the duck-typed attributes that every
         ``ScenarioStep`` exposes (``name``, ``process_async``) so non-
         ``AtomicAttack`` subclasses pass through cleanly.

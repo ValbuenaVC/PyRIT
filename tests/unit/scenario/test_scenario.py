@@ -220,7 +220,7 @@ class ConcreteScenario(Scenario):
         """Return the default dataset configuration for testing."""
         return DatasetConfiguration()
 
-    async def _get_atomic_attacks_async(self):
+    async def _get_steps_async(self):
         return self._atomic_attacks_to_return
 
 
@@ -1013,7 +1013,7 @@ class TestScenarioBaselineUniformObjectives:
         config = DatasetConfiguration(seed_groups=seed_groups, max_dataset_size=3)
 
         class StrategyScenario(ConcreteScenarioWithTrueFalseScorer):
-            async def _get_atomic_attacks_async(self):
+            async def _get_steps_async(self):
                 groups_by_dataset = self._dataset_config.get_seed_attack_groups()
                 all_seed_groups = [g for groups in groups_by_dataset.values() for g in groups]
                 atomic_attacks = [

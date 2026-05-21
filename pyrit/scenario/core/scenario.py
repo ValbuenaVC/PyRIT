@@ -154,6 +154,29 @@ class Scenario(ABC):
     #: caller-supplied ``include_baseline=True`` raises ``ValueError``.
     BASELINE_ATTACK_POLICY: ClassVar[BaselineAttackPolicy] = BaselineAttackPolicy.Enabled
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """
+        Warn once per subclass that still overrides the legacy step builder.
+
+        ``_get_atomic_attacks_async`` was renamed to :meth:`_get_steps_async`
+        in PyRIT 0.15; the old name keeps working through a passthrough but
+        will be removed in 0.16. We detect the override at class-creation
+        time so authors see the deprecation as soon as their subclass module
+        is imported instead of only on the next ``run_async`` call.
+
+        Args:
+            **kwargs (Any): Forwarded to ``ABC.__init_subclass__``.
+        """
+        super().__init_subclass__(**kwargs)
+        overrides_legacy = "_get_atomic_attacks_async" in cls.__dict__
+        overrides_new = "_get_steps_async" in cls.__dict__
+        if overrides_legacy and not overrides_new:
+            print_deprecation_message(
+                old_item=f"{cls.__module__}.{cls.__qualname__}._get_atomic_attacks_async",
+                new_item=f"{cls.__module__}.{cls.__qualname__}._get_steps_async",
+                removed_in="0.16.0",
+            )
+
     @classmethod
     def _get_additional_scoring_questions(cls) -> Sequence[Path]:
         """
@@ -195,7 +218,9 @@ class Scenario(ABC):
 
         Note:
             Attack runs are populated by calling initialize_async(), which invokes the
-            subclass's _get_atomic_attacks_async() method.
+            subclass's _get_steps_async() method (or, for legacy subclasses still
+            overriding the deprecated _get_atomic_attacks_async, the base
+            _get_steps_async delegates to that legacy override).
 
             The scenario description is automatically extracted from the class's docstring (__doc__)
             with whitespace normalized for display.
@@ -226,7 +251,7 @@ class Scenario(ABC):
         self._atomic_attacks: list[AtomicAttack] = []
         self._scenario_result_id: Optional[str] = str(scenario_result_id) if scenario_result_id else None
 
-        # Store prepared strategies for use in _get_atomic_attacks_async
+        # Store prepared strategies for use in _get_steps_async
         self._scenario_strategies: list[ScenarioStrategy] = []
 
         # Maps atomic_attack_name → display_group for user-facing aggregation
@@ -237,7 +262,7 @@ class Scenario(ABC):
         self._declarations_validated: bool = False
 
         # Resolved effective baseline inclusion for the current run. Set in initialize_async
-        # before _get_atomic_attacks_async is awaited so overrides can read it.
+        # before _get_steps_async is awaited so overrides can read it.
         self._include_baseline: bool = False
 
         # Phase 5: state-machine view over the scenario's steps. Built lazily in
@@ -745,7 +770,7 @@ class Scenario(ABC):
         if not self._declarations_validated:
             self.set_params_from_args(args={})
 
-        self._atomic_attacks = await self._get_atomic_attacks_async()
+        self._atomic_attacks = await self._get_steps_async()
 
         # Deprecation rescue. Will be removed in 0.16.0. If the override didn't emit baseline,
         # warn and inject. Migrated overrides emit baseline themselves and bypass this branch.
@@ -1097,14 +1122,26 @@ class Scenario(ABC):
 
         return remaining_attacks
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
-        Build atomic attacks from the cross-product of selected techniques and datasets.
+        Build the steps this scenario will execute.
 
-        Uses ``_get_attack_technique_factories()`` to obtain factories, then
-        iterates over every (technique, dataset) pair to create an
-        ``AtomicAttack`` for each.  Grouping for display is controlled by
-        ``_build_display_group()``.
+        Returns the list of :class:`AtomicAttack` instances the orchestrator
+        walks via the default linear policy. Subclasses override this method
+        to author custom step inventories — adaptive selectors, hand-rolled
+        composites, or wrappers around the registry pattern.
+
+        The default implementation builds atomic attacks from the cross-product
+        of selected techniques and datasets. Uses
+        ``_get_attack_technique_factories()`` to obtain factories, then iterates
+        over every (technique, dataset) pair to create an ``AtomicAttack`` for
+        each. Grouping for display is controlled by ``_build_display_group()``.
+
+        For backward compatibility, subclasses that still override
+        :meth:`_get_atomic_attacks_async` are detected automatically and routed
+        through that override; a deprecation warning is emitted once per such
+        subclass at class-creation time. Removal of the old method is planned
+        for ``0.16.0``.
 
         Subclasses that do **not** use the factory/registry pattern should
         override this method entirely. Overrides that want baseline support
@@ -1112,11 +1149,17 @@ class Scenario(ABC):
         seeds.
 
         Returns:
-            list[AtomicAttack]: The generated atomic attacks.
+            list[AtomicAttack]: The generated steps.
 
         Raises:
             ValueError: If the scenario has not been initialized.
         """
+        # Legacy-override delegation: if a subclass still overrides the old
+        # name (and didn't also override _get_steps_async), call that override
+        # so we don't lose its behavior during the deprecation window.
+        if type(self)._get_atomic_attacks_async is not Scenario._get_atomic_attacks_async:
+            return await self._get_atomic_attacks_async()
+
         if self._objective_target is None:
             raise ValueError(
                 "Scenario not properly initialized. Call await scenario.initialize_async() before running."
@@ -1184,6 +1227,19 @@ class Scenario(ABC):
             atomic_attacks.insert(0, self._build_baseline_atomic_attack(seed_groups=all_seed_groups))
 
         return atomic_attacks
+
+    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+        """
+        Delegate to :meth:`_get_steps_async`.
+
+        Kept as a passthrough so existing subclass overrides keep working
+        through the deprecation window. New scenarios should override
+        :meth:`_get_steps_async` directly. Will be removed in ``0.16.0``.
+
+        Returns:
+            list[AtomicAttack]: Delegates to :meth:`_get_steps_async`.
+        """
+        return await self._get_steps_async()
 
     def _build_execution_graph(
         self, *, steps: Optional[Sequence[ScenarioStep]] = None

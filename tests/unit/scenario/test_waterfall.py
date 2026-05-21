@@ -88,7 +88,7 @@ class _DummyScenario(Scenario):
     def _get_attack_technique_factories(self) -> dict[str, AttackTechniqueFactory]:
         return self._factories_override
 
-    async def _get_atomic_attacks_async(self):
+    async def _get_steps_async(self):
         return []
 
 

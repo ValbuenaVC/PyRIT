@@ -179,7 +179,7 @@ class _GraphConcreteScenario(Scenario):
     def default_dataset_config(cls) -> DatasetConfiguration:
         return DatasetConfiguration()
 
-    async def _get_atomic_attacks_async(self):
+    async def _get_steps_async(self):
         return self._atomic_attacks_to_return
 
 

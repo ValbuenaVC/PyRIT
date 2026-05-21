@@ -34,9 +34,13 @@ class MyScenario(Scenario):
         return DatasetConfiguration(dataset_names=["my_dataset"])
 ```
 
-4. **Optionally override `_get_atomic_attacks_async()`** — the base class provides a default
+4. **Optionally override `_get_steps_async()`** — the base class provides a default
    that uses the factory/registry pattern (see "AtomicAttack Construction" below).
-   Only override if your scenario needs custom attack construction logic.
+   Only override if your scenario needs custom step construction logic.
+
+   > **Deprecation note:** The legacy hook `_get_atomic_attacks_async()` still works as a
+   > passthrough but is deprecated and will be removed in 0.16.0. Migrate overrides to
+   > `_get_steps_async()` — the body is identical; only the name changes.
 
 ## Constructor Pattern
 
@@ -53,7 +57,7 @@ def __init__(
     if not objective_scorer:
         objective_scorer = self._get_default_scorer()
 
-    # 2. Store config objects for _get_atomic_attacks_async
+    # 2. Store config objects for _get_steps_async
     self._scorer_config = AttackScoringConfig(objective_scorer=objective_scorer)
 
     # 3. Call super().__init__ — required args: version, strategy_class, objective_scorer
@@ -139,9 +143,12 @@ Note: `atomic_attack_name` must remain unique per `AtomicAttack` for correct res
 
 ## AtomicAttack Construction — Default Base Class Behaviour
 
-The `Scenario` base class provides a default `_get_atomic_attacks_async()` that uses the
+The `Scenario` base class provides a default `_get_steps_async()` that uses the
 factory/registry pattern.  Scenarios that register their techniques via `_get_attack_technique_factories()`
-get atomic-attack construction **for free** — no override needed.
+get step construction **for free** — no override needed.
+
+> The legacy hook `_get_atomic_attacks_async()` still works as a passthrough but is
+> deprecated and will be removed in 0.16.0. Use `_get_steps_async()` for new code.
 
 The default implementation:
 1. Calls `self._get_attack_technique_factories()` to get name→factory mapping
@@ -150,13 +157,13 @@ The default implementation:
 4. Uses `self._build_display_group()` for user-facing grouping
 5. Builds `AtomicAttack` with unique `atomic_attack_name` = `"{technique}_{dataset}"`
 
-### Customization hooks (no need to override `_get_atomic_attacks_async`):
+### Customization hooks (no need to override `_get_steps_async`):
 - **`_get_attack_technique_factories()`** — override to add/remove/replace factories
 - **`_build_display_group()`** — override to change grouping (default: by technique)
 
-### When to override `_get_atomic_attacks_async`:
+### When to override `_get_steps_async`:
 Only override when the scenario **cannot** use the factory/registry pattern — e.g., scenarios
-with custom composite logic, per-strategy converter stacks, or non-standard attack construction.
+with custom composite logic, per-strategy converter stacks, or non-standard step construction.
 
 Overrides that want baseline support must emit it themselves by calling `self._build_baseline_atomic_attack(seed_groups=...)` with the same seeds used for the strategy attacks and prepending the result. The base implementation emits baseline automatically; passing freshly resolved seeds reintroduces ADO 9012 (baseline-vs-strategy population divergence under `max_dataset_size`).
 
@@ -185,4 +192,4 @@ New scenarios must be registered in `pyrit/scenario/__init__.py` as virtual pack
 - Forgetting `@apply_defaults` on `__init__`
 - Empty `seed_groups` passed to `AtomicAttack`
 - Missing `VERSION` class constant
-- Missing `_async` suffix on `_get_atomic_attacks_async`
+- Missing `_async` suffix on `_get_steps_async`

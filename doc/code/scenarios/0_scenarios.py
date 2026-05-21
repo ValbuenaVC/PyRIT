@@ -64,8 +64,10 @@
 # 2. **Scenario Class**: Extend `Scenario` and implement these abstract methods:
 #    - `get_strategy_class()`: Return your strategy enum class
 #    - `get_default_strategy()`: Return the default strategy (typically `YourStrategy.ALL`)
-#    - The base class provides a default `_get_atomic_attacks_async()` that uses the factory/registry
-#      pattern. Override it only if your scenario needs custom attack construction logic.
+#    - The base class provides a default `_get_steps_async()` that uses the factory/registry
+#      pattern. Override it only if your scenario needs custom step construction logic.
+#      (The legacy hook `_get_atomic_attacks_async()` still works but is deprecated and will
+#      be removed in 0.16.0.)
 #
 # 3. **Default Dataset**: Implement `default_dataset_config()` to specify the datasets your scenario uses out of the box.
 #    - Returns a `DatasetConfiguration` with one or more named datasets (e.g., `DatasetConfiguration(dataset_names=["my_dataset"])`)
@@ -155,8 +157,8 @@ class MyScenario(Scenario):
     def _build_display_group(self, *, technique_name: str, seed_group_name: str) -> str:
         return seed_group_name
 
-    # No _get_atomic_attacks_async override needed!
-    # The base class builds attacks from the (technique x dataset) cross-product
+    # No _get_steps_async override needed!
+    # The base class builds steps from the (technique x dataset) cross-product
     # using the factory/registry pattern automatically.
 
 

@@ -142,7 +142,7 @@ class AdversarialBenchmark(Scenario):
             scenario_result_id=scenario_result_id,
         )
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Build atomic attacks from the cross-product of techniques × models × datasets.
 
@@ -323,7 +323,7 @@ class AdversarialBenchmark(Scenario):
           inspection.
 
         The returned factories are not used to execute attacks (that path runs
-        through :meth:`_get_atomic_attacks_async` with its own local factory
+        through :meth:`_get_steps_async` with its own local factory
         construction); they exist purely as the registry-shaped catalog of
         techniques this scenario uses.
 

@@ -621,7 +621,7 @@ class BroadSweepThenDeepDive(Scenario):
         """
         return DatasetConfiguration()
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Return the atomics in canonical phase order: sweep first, deep dives after.
 

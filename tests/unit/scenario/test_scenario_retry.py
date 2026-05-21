@@ -229,7 +229,7 @@ class ConcreteScenario(Scenario):
         """Return the default dataset configuration for testing."""
         return DatasetConfiguration()
 
-    async def _get_atomic_attacks_async(self):
+    async def _get_steps_async(self):
         return self._atomic_attacks_to_return
 
 

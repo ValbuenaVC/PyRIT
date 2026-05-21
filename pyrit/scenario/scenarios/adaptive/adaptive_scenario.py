@@ -93,7 +93,7 @@ class AdaptiveScenario(Scenario):
         """
         # Validate scalar inputs eagerly. ``AdaptiveTechniqueSelector`` and
         # ``AdaptiveStep`` perform the same checks, but only when constructed
-        # lazily inside ``_get_atomic_attacks_async`` (called from
+        # lazily inside ``_get_steps_async`` (called from
         # ``initialize_async``). Failing fast at __init__ matches the
         # elicitation surface advertised by ``input_schema`` so wizard /
         # programmatic callers get the error on the same line they supplied
@@ -114,7 +114,7 @@ class AdaptiveScenario(Scenario):
         self._max_attempts_per_objective = max_attempts_per_objective
         self._seed = seed
         self._context_extractor = context_extractor
-        # Populated by _get_atomic_attacks_async; consumed by _build_execution_graph
+        # Populated by _get_steps_async; consumed by _build_execution_graph
         # only when an override path needs to introspect it externally.
         self._selector: AdaptiveTechniqueSelector | None = None
 
@@ -182,7 +182,7 @@ class AdaptiveScenario(Scenario):
             ),
         ]
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Build one :class:`AdaptiveStep` per objective.
 
@@ -193,7 +193,7 @@ class AdaptiveScenario(Scenario):
         with no compatible techniques are skipped.
 
         The return type is :class:`list[AtomicAttack]` for parity with the base
-        ``Scenario._get_atomic_attacks_async`` contract — the orchestrator's
+        ``Scenario._get_steps_async`` contract — the orchestrator's
         resume bookkeeping treats steps via the duck-typed attributes
         :class:`AdaptiveStep` provides (``atomic_attack_name``, ``objectives``,
         ``seed_groups``, ``display_group``, ``filter_seed_groups_by_objectives``).
@@ -313,7 +313,7 @@ class AdaptiveScenario(Scenario):
 
         Raises:
             ValueError: If ``self._objective_target`` is not set (defensive
-                guard; ``_get_atomic_attacks_async`` enforces this earlier).
+                guard; ``_get_steps_async`` enforces this earlier).
         """
         if self._objective_target is None:  # pragma: no cover - defensive
             raise ValueError("objective_target must be set before creating attacks")

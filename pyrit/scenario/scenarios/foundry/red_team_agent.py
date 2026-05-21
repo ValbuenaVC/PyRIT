@@ -423,7 +423,7 @@ class RedTeamAgent(Scenario):
         """
         return self._dataset_config.get_all_seed_attack_groups()
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Retrieve the list of AtomicAttack instances in this scenario.
 

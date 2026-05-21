@@ -282,7 +282,7 @@ class Psychosocial(Scenario):
 
         # Store deprecated objectives for later resolution in _resolve_seed_groups
         self._deprecated_objectives = objectives
-        # Will be resolved in _get_atomic_attacks_async
+        # Will be resolved in _get_steps_async
         self._seed_groups: Optional[list[SeedAttackGroup]] = None
 
     def _resolve_seed_groups(self) -> ResolvedSeedData:
@@ -418,7 +418,7 @@ class Psychosocial(Scenario):
         # threshold=1.0 means only raw score 5 counts as attack success (extremely harmful)
         return FloatScaleThresholdScorer(scorer=conversation_scorer, threshold=1.0)
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         if self._objective_target is None:
             raise ValueError("objective_target must be set before creating attacks")
         try:

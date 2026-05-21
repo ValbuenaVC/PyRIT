@@ -12,7 +12,7 @@ the result and advances. Terminal states stop the loop.
 This module also exposes ``linear_strategy_policy``, a convenience builder
 that produces a trivial "run steps 0..N-1 in order" policy. Phase 5 will use
 it to silently upgrade scenarios that still declare their steps as a flat
-list (via the legacy ``_get_atomic_attacks_async`` override) without forcing
+list (via the ``_get_steps_async`` override) without forcing
 those scenarios to author a custom policy.
 """
 

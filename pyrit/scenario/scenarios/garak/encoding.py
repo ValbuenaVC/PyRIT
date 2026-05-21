@@ -212,7 +212,7 @@ class Encoding(Scenario):
             )
             self._legacy_include_baseline = include_baseline
 
-        # Will be resolved in _get_atomic_attacks_async
+        # Will be resolved in _get_steps_async
         self._resolved_seed_groups: Optional[list[SeedAttackGroup]] = None
 
     def _resolve_seed_groups(self) -> list[SeedAttackGroup]:
@@ -230,7 +230,7 @@ class Encoding(Scenario):
 
         return seed_groups
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Retrieve the list of AtomicAttack instances in this scenario.
 

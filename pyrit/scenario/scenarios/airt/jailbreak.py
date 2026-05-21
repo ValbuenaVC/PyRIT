@@ -197,7 +197,7 @@ class Jailbreak(Scenario):
             )
             self._legacy_include_baseline = include_baseline
 
-        # Will be resolved in _get_atomic_attacks_async
+        # Will be resolved in _get_steps_async
         self._seed_groups: Optional[list[SeedAttackGroup]] = None
 
     def _get_or_create_adversarial_target(self) -> PromptTarget:
@@ -295,7 +295,7 @@ class Jailbreak(Scenario):
             seed_groups=self._seed_groups or [],
         )
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Generate atomic attacks for each jailbreak template.
 

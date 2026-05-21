@@ -193,7 +193,7 @@ class Scam(Scenario):
             )
             self._legacy_include_baseline = include_baseline
 
-        # Will be resolved in _get_atomic_attacks_async
+        # Will be resolved in _get_steps_async
         self._seed_groups: Optional[list[SeedAttackGroup]] = None
 
     def _resolve_seed_groups(self) -> list[SeedAttackGroup]:
@@ -269,7 +269,7 @@ class Scam(Scenario):
             memory_labels=self._memory_labels,
         )
 
-    async def _get_atomic_attacks_async(self) -> list[AtomicAttack]:
+    async def _get_steps_async(self) -> list[AtomicAttack]:
         """
         Generate atomic attacks for each strategy.
 
