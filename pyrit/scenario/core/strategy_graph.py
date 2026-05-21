@@ -19,10 +19,12 @@ those scenarios to author a custom policy.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Hashable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Generic, TypeVar
+
+from pyrit.common.deprecation import print_deprecation_message
 
 if TYPE_CHECKING:
     from pyrit.scenario.core.scenario_step import ScenarioStep, ScenarioStepResult
@@ -127,9 +129,13 @@ class StrategyGraph(Generic[StepT, StateT]):
     result, and advances to the next state until a terminal state is
     reached.
 
-    The graph maintains ``current_state``, ``current_step``, and ``history``
+    The graph maintains ``current_state``, ``active_steps``, and ``history``
     so that retries can resume from the last persisted state without
-    replaying completed work.
+    replaying completed work. ``active_steps`` is a tuple so policy actions
+    that fan out to multiple concurrent steps (see R4 / asyncio.gather) have
+    a stable observable surface; single-step dispatch keeps the tuple at
+    length 0 or 1. The legacy singular ``current_step`` property is kept as
+    a backward-compat shim and is deprecated for direct use.
     """
 
     def __init__(
@@ -148,7 +154,7 @@ class StrategyGraph(Generic[StepT, StateT]):
         """
         self._policy = policy
         self._current_state: StateT = policy.initial_state
-        self._current_step: StepT | None = None
+        self._active_steps: tuple[StepT, ...] = ()
         self._history: list[tuple[StateT, ScenarioStepResult]] = []
 
     @property
@@ -162,9 +168,40 @@ class StrategyGraph(Generic[StepT, StateT]):
         return self._current_state
 
     @property
+    def active_steps(self) -> tuple[StepT, ...]:
+        """
+        Return the tuple of steps currently bound to the active state.
+
+        Empty when no action is mid-dispatch. Length 1 for sequential
+        policies (the typical case). Length >1 when a concurrent policy
+        has fanned out to multiple steps via ``asyncio.gather``-style
+        execution (planned for R4).
+        """
+        return self._active_steps
+
+    @property
     def current_step(self) -> StepT | None:
-        """Return the step bound to the current state, if the action set one."""
-        return self._current_step
+        """
+        Return the single active step, or ``None`` when idle.
+
+        Deprecated: prefer :attr:`active_steps` for new code. This property
+        is preserved as a thin shim for legacy callers that assume sequential
+        dispatch (one step at a time). When the graph has fanned out to
+        multiple concurrent steps, this property returns the first one and
+        emits a :class:`DeprecationWarning` to flag the ambiguity. Removal
+        is planned for ``0.16.0``.
+
+        Returns:
+            StepT | None: The first active step, or ``None`` if no step is
+                currently bound.
+        """
+        if len(self._active_steps) > 1:
+            print_deprecation_message(
+                old_item="StrategyGraph.current_step (singular) while multiple steps are active",
+                new_item="StrategyGraph.active_steps (tuple) for concurrent dispatch",
+                removed_in="0.16.0",
+            )
+        return self._active_steps[0] if self._active_steps else None
 
     @property
     def history(self) -> list[tuple[StateT, ScenarioStepResult]]:
@@ -176,18 +213,35 @@ class StrategyGraph(Generic[StepT, StateT]):
         """Return ``True`` if the graph is in a terminal state."""
         return self._policy.is_terminal(state=self._current_state)
 
-    def bind_current_step(self, *, step: StepT | None) -> None:
+    def bind_active_steps(self, *, steps: Iterable[StepT]) -> None:
         """
-        Set the step bound to the current state.
+        Set the steps bound to the current state.
 
         Policy actions call this so external observers (e.g., the surrounding
-        ``Scenario``) can read ``graph.current_step`` while the action runs.
+        ``Scenario``) can read ``graph.active_steps`` while the action runs.
+        Pass an empty iterable to clear the binding.
+
+        Args:
+            steps (Iterable[StepT]): The steps the action is about to execute,
+                or an empty iterable to clear. Concurrent policies pass the
+                full set of co-executing steps; sequential policies pass a
+                single-element iterable.
+        """
+        self._active_steps = tuple(steps)
+
+    def bind_current_step(self, *, step: StepT | None) -> None:
+        """
+        Set the single step bound to the current state.
+
+        Backward-compat shim over :meth:`bind_active_steps`. Sequential
+        policies that bind one step at a time may continue to use this name.
+        Passing ``None`` clears the binding.
 
         Args:
             step (StepT | None): The step the action is about to execute, or
                 ``None`` to clear.
         """
-        self._current_step = step
+        self.bind_active_steps(steps=() if step is None else (step,))
 
     def reset(self) -> None:
         """
@@ -197,7 +251,7 @@ class StrategyGraph(Generic[StepT, StateT]):
         from the last persisted state.
         """
         self._current_state = self._policy.initial_state
-        self._current_step = None
+        self._active_steps = ()
         self._history = []
 
     async def event_loop_async(self) -> AsyncIterator[ScenarioStepResult]:
@@ -269,11 +323,11 @@ def linear_strategy_policy(
             _step: ScenarioStep = step,
             _next: int = index + 1,
         ) -> tuple[int, ScenarioStepResult | None]:
-            graph.bind_current_step(step=_step)
+            graph.bind_active_steps(steps=(_step,))
             try:
                 result = await _step.process_async()
             finally:
-                graph.bind_current_step(step=None)
+                graph.bind_active_steps(steps=())
             return _next, result
 
         actions[index] = _action

@@ -738,8 +738,8 @@ class ScenarioPipeline(Scenario):
         """
         Build the policy action for one phase.
 
-        The action binds the phase step as the current step (so the
-        orchestrator can resolve ``graph.current_step`` mid-dispatch),
+        The action binds the phase step as the active step (so the
+        orchestrator can resolve ``graph.active_steps`` mid-dispatch),
         invokes ``step.process_async``, and advances to the next integer
         state. The step's metadata (``phase_name``, ``phase_index``) is
         merged into the result's metadata so the orchestrator's logging /
@@ -758,7 +758,7 @@ class ScenarioPipeline(Scenario):
         async def _phase_action(
             graph: StrategyGraph[ScenarioStep, int],
         ) -> tuple[int, ScenarioStepResult | None]:
-            graph.bind_current_step(step=step)
+            graph.bind_active_steps(steps=(step,))
             try:
                 base_result = await step.process_async()
                 # Pipeline diagnostic keys (``step_name``, ``phase_index``) must
@@ -779,7 +779,7 @@ class ScenarioPipeline(Scenario):
                     metadata=merged_metadata,
                 )
             finally:
-                graph.bind_current_step(step=None)
+                graph.bind_active_steps(steps=())
             return next_state, result
 
         return _phase_action

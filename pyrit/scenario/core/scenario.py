@@ -1329,11 +1329,11 @@ class Scenario(ABC):
                 _step: ScenarioStep = step,
                 _next: int = index + 1,
             ) -> tuple[int, ScenarioStepResult | None]:
-                graph.bind_current_step(step=_step)
+                graph.bind_active_steps(steps=(_step,))
                 try:
                     base_result = await _step.process_async()
                     # Stamp ``step_name`` so the orchestrator can route the
-                    # result without depending on ``graph.current_step``
+                    # result without depending on ``graph.active_steps``
                     # (cleared before yield). Caller metadata wins on
                     # collision so steps remain authoritative.
                     merged_metadata = {"step_name": _step.name, **base_result.metadata}
@@ -1344,7 +1344,7 @@ class Scenario(ABC):
                         metadata=merged_metadata,
                     )
                 finally:
-                    graph.bind_current_step(step=None)
+                    graph.bind_active_steps(steps=())
                 return _next, result
 
             actions[index] = _action
@@ -1535,7 +1535,7 @@ class Scenario(ABC):
         )
         step_position = completed_count
         # Track the most recent step we attempted so a step-raised exception
-        # can still log the offending step's name. ``graph.current_step`` is
+        # can still log the offending step's name. ``graph.active_steps`` is
         # cleared in the policy action's ``finally`` before the exception
         # propagates, so it's not a reliable post-mortem source.
         last_attempted_step_name: str = "<unknown_step>"

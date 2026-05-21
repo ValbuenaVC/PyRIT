@@ -732,7 +732,7 @@ class BroadSweepThenDeepDive(Scenario):
         async def _sweep_action(
             graph: StrategyGraph[ScenarioStep, SweepThenDeepDiveState],
         ) -> tuple[SweepThenDeepDiveState, ScenarioStepResult | None]:
-            graph.bind_current_step(step=sweep_step)
+            graph.bind_active_steps(steps=(sweep_step,))
             try:
                 base_result = await sweep_step.process_async()
                 # Update the closure-shared weak-categories set so the
@@ -746,7 +746,7 @@ class BroadSweepThenDeepDive(Scenario):
                     metadata=merged_metadata,
                 )
             finally:
-                graph.bind_current_step(step=None)
+                graph.bind_active_steps(steps=())
 
             next_state = (
                 SweepThenDeepDiveState.DEEP_DIVING
@@ -758,7 +758,7 @@ class BroadSweepThenDeepDive(Scenario):
         async def _deep_dive_action(
             graph: StrategyGraph[ScenarioStep, SweepThenDeepDiveState],
         ) -> tuple[SweepThenDeepDiveState, ScenarioStepResult | None]:
-            graph.bind_current_step(step=deep_dive_step)
+            graph.bind_active_steps(steps=(deep_dive_step,))
             try:
                 base_result = await deep_dive_step.process_async()
                 merged_metadata = {"step_name": deep_dive_step.name, **base_result.metadata}
@@ -769,7 +769,7 @@ class BroadSweepThenDeepDive(Scenario):
                     metadata=merged_metadata,
                 )
             finally:
-                graph.bind_current_step(step=None)
+                graph.bind_active_steps(steps=())
             return SweepThenDeepDiveState.COMPLETE, result
 
         actions: dict[SweepThenDeepDiveState, PolicyAction[ScenarioStep, SweepThenDeepDiveState]] = {
