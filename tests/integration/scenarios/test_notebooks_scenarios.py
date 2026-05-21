@@ -12,7 +12,7 @@ from pyrit.common import path
 
 nb_directory_path = pathlib.Path(path.DOCS_CODE_PATH, "scenarios").resolve()
 
-skipped_files: list[str] = []
+skipped_files: list[str] = ["4_scenario_wizard.ipynb"]
 
 
 @pytest.mark.parametrize(

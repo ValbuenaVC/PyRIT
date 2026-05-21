@@ -461,3 +461,128 @@ class TestSpecToPolicyInputs:
         # The placeholder signature accepts a spec list; verify the function
         # tolerates arbitrary spec inputs without affecting its return value.
         assert spec_to_policy_inputs(_EmptySchemaScenario, [_spec("alpha"), _spec("beta")]) == {}
+
+
+# ---------- Phase 8f: 4-function round-trip across first-party scenarios -----
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestFourFunctionRoundTrip:
+    """
+    Integration coverage that walks every waterfall function in sequence for
+    the three first-party scenario shapes:
+
+    * **Legacy linear** (``Encoding``) — inherits the default ``input_schema``
+      of ``[]``; the scenario is reconstructible from CLI flags alone.
+    * **Adaptive** (``TextAdaptive``) — declares 4 optional scalar inputs,
+      all with defaults; ``spec_to_policy_inputs`` returns ``{}``.
+    * **Policy-parameterized** (``BroadSweepThenDeepDive``) — declares 3
+      required OPAQUE roles; ``spec_to_policy_inputs`` is forced to return
+      ``None`` because closures and bound ``Identifiable`` instances cannot
+      be reconstructed from spec metadata alone.
+
+    For each scenario we run ``policy_to_spec → spec_to_enum → enum_to_spec``
+    and assert the spec catalog is preserved by name through the round trip,
+    then assert ``spec_to_policy_inputs`` returns the documented value.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset(self, monkeypatch: pytest.MonkeyPatch):
+        from pyrit.prompt_target import PromptTarget
+        from pyrit.registry import TargetRegistry
+
+        AttackTechniqueRegistry.reset_instance()
+        TargetRegistry.reset_instance()
+
+        adversarial = MagicMock(spec=PromptTarget)
+        adversarial.get_identifier.return_value = ComponentIdentifier(
+            class_name="MockAdversarial", class_module="tests.unit.scenario"
+        )
+        monkeypatch.setattr(
+            "pyrit.scenario.core.scenario_techniques.get_default_adversarial_target",
+            lambda: adversarial,
+        )
+        monkeypatch.setattr(
+            "pyrit.scenario.core.scenario.Scenario._get_default_objective_scorer",
+            lambda self: _make_scorer_mock(),
+        )
+
+        yield
+        AttackTechniqueRegistry.reset_instance()
+        TargetRegistry.reset_instance()
+
+    def _round_trip(self, scenario: Scenario, scenario_cls: type[Scenario]):
+        """policy_to_spec → spec_to_enum → enum_to_spec; assert catalog preserved."""
+        specs = policy_to_spec(scenario)
+        original_names = [sp.name for sp in specs]
+
+        enums = spec_to_enum(scenario_cls, specs)
+        assert enums is not None, f"{scenario_cls.__name__}: spec_to_enum returned None"
+        assert [m.value for m in enums] == original_names
+
+        rebuilt = enum_to_spec(enums)
+        # `enum_to_spec` is best-effort over the global registry; for scenarios
+        # whose catalog is fully registered (legacy linear, adaptive) this is a
+        # full round-trip.
+        assert [sp.name for sp in rebuilt] == original_names
+        return specs
+
+    def test_encoding_round_trip(self):
+        """Legacy linear scenario (non-registry catalog): spec catalog is empty by design."""
+        from pyrit.scenario.scenarios.garak.encoding import Encoding
+
+        Encoding._cached_strategy_class = None
+        strategy_cls = Encoding.get_strategy_class()
+        default = Encoding.get_default_strategy()
+        resolved = strategy_cls.resolve(None, default=default)
+
+        scenario = Encoding()
+        scenario._scenario_strategies = resolved
+
+        # Encoding doesn't participate in the AttackTechniqueRegistry catalog
+        # — its strategies map to per-encoding atomic attacks rather than
+        # registered techniques. The forward waterfall degrades to empty.
+        specs = policy_to_spec(scenario)
+        assert specs == [], "Encoding should expose no registry-catalog specs"
+
+        # spec_to_enum on an empty list is the empty list (not None).
+        enums = spec_to_enum(Encoding, specs)
+        assert enums == []
+
+        rebuilt = enum_to_spec(enums)
+        assert rebuilt == []
+
+        # Default schema → no required constructor inputs.
+        assert spec_to_policy_inputs(Encoding, specs) == {}
+
+    def test_text_adaptive_round_trip(self):
+        """Adaptive scenario: 4 optional scalars, full registry catalog."""
+        from pyrit.scenario.scenarios.adaptive.text_adaptive import TextAdaptive
+
+        TextAdaptive._cached_strategy_class = None
+        strategy_cls = TextAdaptive.get_strategy_class()
+        default = TextAdaptive.get_default_strategy()
+        resolved = strategy_cls.resolve(None, default=default)
+
+        scenario = TextAdaptive()
+        scenario._scenario_strategies = resolved
+
+        specs = self._round_trip(scenario, TextAdaptive)
+        assert specs, "TextAdaptive should expose at least one technique spec"
+
+        # All 4 input_schema roles are optional with defaults → returns {}.
+        assert spec_to_policy_inputs(TextAdaptive, specs) == {}
+
+    def test_broad_sweep_then_deep_dive_returns_none_from_policy_inputs(self):
+        """Policy-parameterized scenario: opaque-required schema forces ``None``."""
+        from pyrit.scenario.scenarios.airt.sweep_then_deep_dive import BroadSweepThenDeepDive
+
+        # The scenario's input_schema declares required OPAQUE roles. We don't
+        # need to instantiate it to assert this — spec_to_policy_inputs is a
+        # classmethod-style query over the type.
+        result = spec_to_policy_inputs(BroadSweepThenDeepDive, [])
+        assert result is None, (
+            "BroadSweepThenDeepDive declares required OPAQUE roles; "
+            "spec_to_policy_inputs must return None to signal the wizard / CLI "
+            "should fall back to --from-artifact."
+        )
