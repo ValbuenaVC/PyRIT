@@ -299,6 +299,20 @@ class _ScenarioPipelinePhaseStep(ScenarioStep):
     def drop_seed_groups_with_hashes(self, *, hashes: set[str]) -> None:
         """No-op: pipeline phases own no seed groups at the pipeline level."""
 
+    def set_scenario_result_id(self, scenario_result_id: str | None) -> None:
+        """
+        No-op: pipeline phases don't get the outer pipeline's ``scenario_result_id``.
+
+        Inner scenarios persist under their own ``scenario_result_id``s, so
+        the pipeline never propagates the outer id down to the phase step.
+        The base ``Scenario._execute_scenario_async`` guards this call with
+        ``isinstance(_step, AtomicAttack)`` today (phase steps don't subclass
+        ``AtomicAttack``), so this stub is currently unreachable from the
+        orchestrator. It exists for forward-compatibility with the planned
+        R1 follow-up that collapses the isinstance branch and dispatches
+        uniformly via ``process_async``.
+        """
+
     async def process_async(self) -> ScenarioStepResult:
         """
         Run the inner scenario (or skip via ``ConditionalPhaseSpec`` predicate).
@@ -406,11 +420,24 @@ class ScenarioPipeline(Scenario):
 
     The pipeline runs each phase's inner scenario in declaration order. Each
     inner scenario owns its own dataset, strategies, scorer, and
-    ``ScenarioResult`` — the pipeline's own ``ScenarioResult`` records the
-    composition and per-phase outcomes, not the inner ``AttackResult``s
-    themselves. To inspect per-phase results after a pipeline run, walk
-    :attr:`phase_executions` and pull ``execution.scenario_result.attack_results``
-    for each completed phase.
+    ``ScenarioResult`` (with its own ``scenario_result_id`` persisted
+    independently).
+
+    The pipeline's own ``ScenarioResult`` records only the **composition** —
+    each phase name appears as a key in ``attack_results``, but every bucket
+    is empty because the inner scenarios persist their own ``AttackResult``s
+    against their own ``scenario_result_id``s and re-emitting them under the
+    pipeline's id would duplicate-persist them.
+
+    **Per-phase outcomes are NOT persisted in v1.** They live only on
+    :attr:`phase_executions`, an in-memory log scoped to the live pipeline
+    instance. To inspect per-phase outcomes after a pipeline run, you must
+    keep a reference to the pipeline object and walk
+    ``pipeline.phase_executions``; reading the persisted outer
+    ``ScenarioResult`` back via ``get_scenario_results`` from another process
+    will show only the composition (empty phase buckets), not the outcomes.
+    See ``tests.unit.scenario.composite.test_scenario_pipeline.TestPipelineExecution``
+    for the in-process inspection pattern.
 
     Example::
 

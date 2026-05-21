@@ -276,6 +276,25 @@ class TestPhaseStep:
         step.filter_seed_groups_by_objectives(remaining_objectives=["o1"])
         step.drop_seed_groups_with_hashes(hashes={"h1"})
 
+    def test_set_scenario_result_id_is_noop_stub(self):
+        """Forward-compatibility with R1 (drop-isinstance refactor).
+
+        Today the base ``Scenario._execute_scenario_async`` guards
+        ``set_scenario_result_id`` with ``isinstance(_step, AtomicAttack)``,
+        so this method is unreachable from the orchestrator. R1 plans to
+        collapse that branch and dispatch uniformly via ``process_async``;
+        when it does, every non-AtomicAttack ``ScenarioStep`` must expose
+        ``set_scenario_result_id``. This regression pins the stub so that
+        contract change doesn't silently introduce an ``AttributeError``
+        for pipeline phase steps.
+        """
+        spec, _ = _phase_spec("alpha")
+        pipeline = ScenarioPipeline(phases=[spec])
+        step = _ScenarioPipelinePhaseStep(spec=spec, index=0, pipeline=pipeline)
+        # Stub should accept either a real id or None without raising.
+        step.set_scenario_result_id("any-id")
+        step.set_scenario_result_id(None)
+
 
 # --------------------------------------------------------------------------- #
 # Execution graph build
