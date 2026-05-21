@@ -17,6 +17,15 @@ import sys
 
 from pyrit.common.parameter import Parameter
 from pyrit.models.scenario_result import ScenarioIdentifier, ScenarioResult
+from pyrit.scenario import composite as _composite_module
+from pyrit.scenario.composite import (
+    ConditionalPhaseSpec,
+    PhaseExecution,
+    PhaseSpec,
+    PipelineContext,
+    ScenarioPipeline,
+    ScenarioPipelineStrategy,
+)
 from pyrit.scenario.core import (
     ArtifactInputCollector,
     AtomicAttack,
@@ -87,6 +96,7 @@ airt = _airt_module
 benchmark = _benchmark_module
 garak = _garak_module
 foundry = _foundry_module
+composite = _composite_module
 
 __all__ = [
     "ArtifactInputCollector",
@@ -95,6 +105,7 @@ __all__ = [
     "AttackTechniqueFactory",
     "BaselineAttackPolicy",
     "CliInputCollector",
+    "ConditionalPhaseSpec",
     "DatasetConfiguration",
     "DictInputCollector",
     "GraphArtifact",
@@ -106,6 +117,9 @@ __all__ = [
     "OpaqueInputUnresolvedError",
     "OpaqueRoleNotElicitableError",
     "Parameter",
+    "PhaseExecution",
+    "PhaseSpec",
+    "PipelineContext",
     "PolicyAction",
     "RoleDescriptor",
     "RoleTag",
@@ -114,6 +128,8 @@ __all__ = [
     "ScenarioCoreState",
     "ScenarioIdentifier",
     "ScenarioInputValidationError",
+    "ScenarioPipeline",
+    "ScenarioPipelineStrategy",
     "ScenarioResult",
     "ScenarioStateLike",
     "ScenarioStep",
@@ -128,6 +144,7 @@ __all__ = [
     "build_scenario_from_inputs",
     "build_topology_summary",
     "collect_inputs_with_retry",
+    "composite",
     "discover_input_schema",
     "discover_supported_parameters",
     "enum_to_spec",
