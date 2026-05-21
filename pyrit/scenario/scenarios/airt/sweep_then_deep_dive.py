@@ -33,6 +33,7 @@ technique selection can override ``_build_atomic_attacks_for_phases``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar, Optional, cast
@@ -313,6 +314,7 @@ class FilteredDeepDiveStep(ScenarioStep):
         atomic_attacks: Sequence[AtomicAttack],
         weak_categories_ref: Callable[[], set[str]],
         max_concurrency: int = 1,
+        max_step_concurrency: int = 1,
     ) -> None:
         """
         Initialize the filtered deep-dive step.
@@ -327,19 +329,34 @@ class FilteredDeepDiveStep(ScenarioStep):
                 set by reference) lets the sweep step build its weak-set
                 fresh on each scenario attempt without the deep-dive step
                 holding a stale reference.
-            max_concurrency (int): Forwarded to each ``AtomicAttack.run_async``.
+            max_concurrency (int): Forwarded to each ``AtomicAttack.run_async``;
+                controls the per-atomic objective-level fan-out (the existing
+                ``max_concurrency`` plumbing — unchanged semantics).
+            max_step_concurrency (int): R4 — controls how many wrapped atomics
+                may dispatch concurrently against the model. Default ``1``
+                preserves the sequential ``for atomic in self._atomics`` semantics
+                bit-for-bit. ``>1`` wraps the per-atomic dispatch in an
+                ``asyncio.Semaphore`` and runs them under ``asyncio.gather``;
+                ``dispatched_categories`` / ``attack_results`` retain input
+                order because gather preserves it.
 
         Raises:
             ValueError: If ``atomic_attacks`` is empty.
+            ValueError: If ``max_step_concurrency`` is less than ``1``.
         """
         if not atomic_attacks:
             raise ValueError("FilteredDeepDiveStep requires at least one atomic attack.")
+        if max_step_concurrency < 1:
+            raise ValueError(
+                f"max_step_concurrency must be >= 1, got {max_step_concurrency}.",
+            )
 
         self.name = atomic_attack_name
         self.outputs = list(self._OUTPUTS)
         self._atomics = list(atomic_attacks)
         self._weak_categories_ref = weak_categories_ref
         self._max_concurrency = max_concurrency
+        self._max_step_concurrency = max_step_concurrency
 
         self.atomic_attack_name = atomic_attack_name
         self.display_group = atomic_attack_name
@@ -371,30 +388,53 @@ class FilteredDeepDiveStep(ScenarioStep):
         """
         Run each wrapped atomic conditionally on its category being flagged.
 
+        With ``max_step_concurrency == 1`` (the default) the atomics dispatch
+        sequentially in input order — identical to the pre-R4 behavior.
+        With ``max_step_concurrency > 1`` the eligible atomics are dispatched
+        concurrently under an ``asyncio.Semaphore`` and awaited via
+        ``asyncio.gather``; the returned ``dispatched_categories`` and
+        ``attack_results`` lists retain input order because ``gather``
+        preserves it.
+
         Returns:
             ScenarioStepResult: Outcome is always ``"done"``. The aggregated
                 ``attack_results`` contain results from every atomic that
                 was actually dispatched. ``metadata['skipped_categories']``
                 lists categories that were not in the weak set;
                 ``metadata['dispatched_categories']`` lists the categories
-                actually exercised.
+                actually exercised; ``metadata['max_step_concurrency']``
+                records the concurrency cap used for this attempt.
         """
         weak = self._weak_categories_ref()
-        attack_results: list[AttackResult] = []
         dispatched: list[str] = []
         skipped: list[str] = []
+        eligible: list[tuple[str, AtomicAttack]] = []
 
         for atomic in self._atomics:
             category = atomic.display_group or atomic.atomic_attack_name
             if category not in weak:
                 skipped.append(category)
                 continue
-            executor_result = await atomic.run_async(
-                max_concurrency=self._max_concurrency,
-                return_partial_on_failure=True,
-            )
-            attack_results.extend(executor_result.completed_results)
+            eligible.append((category, atomic))
             dispatched.append(category)
+
+        attack_results: list[AttackResult] = []
+        if eligible:
+            semaphore = asyncio.Semaphore(self._max_step_concurrency)
+
+            async def _run_one(atomic: AtomicAttack) -> list[AttackResult]:
+                async with semaphore:
+                    executor_result = await atomic.run_async(
+                        max_concurrency=self._max_concurrency,
+                        return_partial_on_failure=True,
+                    )
+                    return list(executor_result.completed_results)
+
+            per_atomic_results = await asyncio.gather(
+                *(_run_one(atomic) for _, atomic in eligible),
+            )
+            for results in per_atomic_results:
+                attack_results.extend(results)
 
         return ScenarioStepResult(
             outcome="done",
@@ -402,6 +442,7 @@ class FilteredDeepDiveStep(ScenarioStep):
             metadata={
                 "dispatched_categories": dispatched,
                 "skipped_categories": skipped,
+                "max_step_concurrency": self._max_step_concurrency,
             },
         )
 
@@ -464,6 +505,7 @@ class BroadSweepThenDeepDive(Scenario):
         deep_dive_atomic_attacks: Sequence[AtomicAttack],
         outcome_scorer: OutcomeScorer,
         weakness_label: str = "safety_violation",
+        max_step_concurrency: int = 1,
         objective_scorer: Optional[TrueFalseScorer] = None,
         scenario_result_id: Optional[str] = None,
     ) -> None:
@@ -483,6 +525,13 @@ class BroadSweepThenDeepDive(Scenario):
             weakness_label (str): The label emitted by ``outcome_scorer``
                 that signals a category breach. Defaults to
                 ``"safety_violation"``.
+            max_step_concurrency (int): R4 — how many deep-dive atomics may
+                dispatch concurrently against the model. Default ``1``
+                preserves the sequential pre-R4 behavior bit-for-bit. ``>1``
+                wraps the deep-dive fan-out in an ``asyncio.Semaphore`` and
+                awaits via ``asyncio.gather``. Independent of the per-atomic
+                ``max_concurrency`` plumbing (which controls objective-level
+                fan-out inside each ``AtomicAttack.run_async``).
             objective_scorer (TrueFalseScorer | None): Forwarded to the
                 base ``Scenario``. Defaults to ``outcome_scorer.wrapped_scorer``
                 cast to ``TrueFalseScorer`` so dataset config bootstrap
@@ -494,9 +543,14 @@ class BroadSweepThenDeepDive(Scenario):
             ValueError: If ``deep_dive_atomic_attacks`` is empty.
             ValueError: If ``weakness_label`` is not declared as one of
                 ``outcome_scorer.outcomes``.
+            ValueError: If ``max_step_concurrency`` is less than ``1``.
         """
         if not deep_dive_atomic_attacks:
             raise ValueError("BroadSweepThenDeepDive requires at least one deep_dive_atomic_attack.")
+        if max_step_concurrency < 1:
+            raise ValueError(
+                f"max_step_concurrency must be >= 1, got {max_step_concurrency}.",
+            )
 
         # Fail fast: the inner ``CategoryAggregatingSweepStep`` performs the
         # same check, but only inside ``_build_execution_graph`` (called from
@@ -515,6 +569,7 @@ class BroadSweepThenDeepDive(Scenario):
         self._deep_dive_atomics: list[AtomicAttack] = list(deep_dive_atomic_attacks)
         self._outcome_scorer = outcome_scorer
         self._weakness_label = weakness_label
+        self._max_step_concurrency = max_step_concurrency
 
         # Shared mutable handle the sweep step updates and the deep-dive step
         # reads. Reset on each ``run_async`` via ``_build_execution_graph``.
@@ -593,6 +648,17 @@ class BroadSweepThenDeepDive(Scenario):
                 tag=RoleTag.SCALAR,
                 param_type=str,
                 default="safety_violation",
+                required=False,
+            ),
+            RoleDescriptor(
+                name="max_step_concurrency",
+                description=(
+                    "R4 — how many deep-dive atomics may dispatch concurrently against the model. "
+                    "Default 1 preserves sequential dispatch; >1 fans out via asyncio.gather under a semaphore."
+                ),
+                tag=RoleTag.SCALAR,
+                param_type=int,
+                default=1,
                 required=False,
             ),
         ]
@@ -697,6 +763,7 @@ class BroadSweepThenDeepDive(Scenario):
             atomic_attacks=self._deep_dive_atomics,
             weak_categories_ref=lambda: self._weak_categories,
             max_concurrency=self._max_concurrency,
+            max_step_concurrency=self._max_step_concurrency,
         )
 
         policy = self._build_branching_policy(sweep_step=sweep_step, deep_dive_step=deep_dive_step)

@@ -14,11 +14,15 @@ from pyrit.scenario.scenarios.airt.sweep_then_deep_dive import (
 
 
 class TestBroadSweepThenDeepDiveInputSchema:
-    """``BroadSweepThenDeepDive.input_schema()`` declares 3 OPAQUE roles + 1 SCALAR."""
+    """``BroadSweepThenDeepDive.input_schema()`` declares 3 OPAQUE roles + 2 SCALAR.
 
-    def test_returns_four_roles(self):
+    R4 added ``max_step_concurrency`` as a second SCALAR role so the wizard
+    can expose the deep-dive concurrency knob.
+    """
+
+    def test_returns_five_roles(self):
         schema = BroadSweepThenDeepDive.input_schema()
-        assert len(schema) == 4
+        assert len(schema) == 5
         assert all(isinstance(role, RoleDescriptor) for role in schema)
 
     def test_role_names_match_constructor_inputs(self):
@@ -28,16 +32,17 @@ class TestBroadSweepThenDeepDiveInputSchema:
             "deep_dive_atomic_attacks",
             "outcome_scorer",
             "weakness_label",
+            "max_step_concurrency",
         ]
 
-    def test_three_opaque_one_scalar(self):
+    def test_three_opaque_two_scalar(self):
         by_tag: dict[RoleTag, list[str]] = {tag: [] for tag in RoleTag}
         for role in BroadSweepThenDeepDive.input_schema():
             by_tag[role.tag].append(role.name)
         assert sorted(by_tag[RoleTag.OPAQUE]) == sorted(
             ["sweep_atomic_attack", "deep_dive_atomic_attacks", "outcome_scorer"]
         )
-        assert by_tag[RoleTag.SCALAR] == ["weakness_label"]
+        assert sorted(by_tag[RoleTag.SCALAR]) == sorted(["weakness_label", "max_step_concurrency"])
         # No other tags present.
         for tag, names in by_tag.items():
             if tag not in {RoleTag.OPAQUE, RoleTag.SCALAR}:
