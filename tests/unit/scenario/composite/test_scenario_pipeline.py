@@ -515,3 +515,71 @@ class TestPipelineExecution:
         await pipeline.initialize_async(objective_target=mock_objective_target)
         with pytest.raises(TypeError, match="'forgot_return'"):
             await pipeline.run_async()
+
+
+# --------------------------------------------------------------------------- #
+# Artifact round-trip limitation (v1 contract pin)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("patch_central_database")
+class TestArtifactRoundTripNotSupported:
+    """Pin the v1 contract that pipelines cannot round-trip via graph artifacts.
+
+    A :class:`PhaseSpec` holds a ``Callable`` scenario factory and a
+    :class:`types.MappingProxyType` ``init_async_kwargs`` (when defaulted) —
+    neither survives YAML serialization. The pipeline ``input_schema``
+    docstring states this explicitly; these tests pin both failure modes in
+    code so that any future change to add round-trip support must update the
+    contract intentionally (delete these tests, not flip them to
+    ``assert success``).
+
+    Related finding for the graph_artifact owner: ``_encode_init_inputs``
+    silently passes through OPAQUE values that lack ``get_identifier`` (see
+    the "Unknown opaque shape — defer to caller serialization at their own
+    risk." branch), which is what lets pipelines reach the (broken)
+    serialization path at all. A fail-loud guard there would raise a clearer
+    error than either downstream failure mode below.
+    """
+
+    async def test_default_init_async_kwargs_mappingproxy_breaks_asdict(self, mock_objective_target):
+        """PhaseSpec defaults ``init_async_kwargs`` to a MappingProxyType, which
+        ``dataclasses.asdict`` cannot ``deepcopy``. ``graph_artifact_to_yaml``
+        starts with ``asdict(artifact)`` so this is the first failure point.
+        """
+        from dataclasses import asdict
+
+        from pyrit.scenario.core.graph_artifact import build_graph_artifact
+
+        inner = _make_inner_scenario("p1")
+        spec = PhaseSpec(name="p1", scenario_factory=lambda: inner)
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        artifact = build_graph_artifact(pipeline, init_inputs={"phases": [spec]})
+        assert isinstance(artifact.init_inputs["phases"], list)
+        assert isinstance(artifact.init_inputs["phases"][0], PhaseSpec)
+
+        with pytest.raises(TypeError, match="mappingproxy"):
+            asdict(artifact)
+
+    async def test_callable_factory_breaks_yaml_dump(self, mock_objective_target, tmp_path):
+        """Even when ``init_async_kwargs`` is supplied as a plain dict so
+        ``asdict`` succeeds, YAML's ``SafeDumper`` cannot represent the
+        Callable scenario factory.
+        """
+        import yaml
+
+        from pyrit.scenario.core.graph_artifact import (
+            build_graph_artifact,
+            graph_artifact_to_yaml,
+        )
+
+        spec, _ = _phase_spec("p1")  # init_kwargs={} avoids the MappingProxy path
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+
+        artifact = build_graph_artifact(pipeline, init_inputs={"phases": [spec]})
+        out_path = tmp_path / "pipeline.yaml"
+        with pytest.raises(yaml.representer.RepresenterError, match="cannot represent"):
+            graph_artifact_to_yaml(artifact, out_path)

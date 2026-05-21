@@ -538,8 +538,12 @@ class ScenarioPipeline(Scenario):
 
         ``phases`` is opaque because each :class:`PhaseSpec` holds a callable
         factory whose closure cannot be reconstructed from primitive args.
-        Pipelines must be authored programmatically (or round-tripped via
-        a saved graph artifact).
+        Pipelines must be authored programmatically — round-tripping a
+        pipeline via a saved graph artifact is not supported in v1, because
+        neither the ``Callable`` factory nor ``PhaseSpec.init_async_kwargs``
+        (a :class:`types.MappingProxyType`) is YAML-serializable. See
+        :class:`tests.unit.scenario.composite.test_scenario_pipeline.TestArtifactRoundTripNotSupported`
+        for the regression pin.
 
         Returns:
             list[RoleDescriptor]: Two roles — ``phases`` (opaque, required)
