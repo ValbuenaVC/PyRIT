@@ -484,3 +484,34 @@ class TestPipelineExecution:
         await pipeline.initialize_async(objective_target=mock_objective_target)
         with pytest.raises(TypeError, match="'bad'"):
             await pipeline.run_async()
+
+    async def test_factory_returning_duck_typed_non_scenario_class_raises_type_error(self, mock_objective_target):
+        """Pin that the guard uses :func:`isinstance`, not duck-typing.
+
+        A class exposing ``initialize_async``/``run_async`` methods but not
+        inheriting from :class:`Scenario` must be rejected. This guards against
+        a future refactor that swaps ``isinstance(inner_scenario, Scenario)``
+        for an attribute-presence check, which would silently accept duck-typed
+        objects whose ``run_async`` returns an incompatible result shape.
+        """
+
+        class _DuckScenario:
+            async def initialize_async(self, **kwargs: Any) -> None:
+                pass
+
+            async def run_async(self, **kwargs: Any) -> Any:
+                return None
+
+        spec = PhaseSpec(name="duck", scenario_factory=lambda: _DuckScenario())
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+        with pytest.raises(TypeError, match="'duck'"):
+            await pipeline.run_async()
+
+    async def test_factory_returning_none_raises_type_error(self, mock_objective_target):
+        """A factory that returns ``None`` is a common typo (missing ``return``)."""
+        spec = PhaseSpec(name="forgot_return", scenario_factory=lambda: None)
+        pipeline = ScenarioPipeline(phases=[spec])
+        await pipeline.initialize_async(objective_target=mock_objective_target)
+        with pytest.raises(TypeError, match="'forgot_return'"):
+            await pipeline.run_async()
