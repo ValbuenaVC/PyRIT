@@ -19,6 +19,9 @@ from pyrit.datasets.seed_datasets.remote.babelscape_alert_dataset import (
 from pyrit.datasets.seed_datasets.remote.beaver_tails_dataset import (
     _BeaverTailsDataset,
 )  # noqa: F401
+from pyrit.datasets.seed_datasets.remote.categorical_harmful_qa_dataset import (
+    _CategoricalHarmfulQADataset,
+)  # noqa: F401
 from pyrit.datasets.seed_datasets.remote.cbt_bench_dataset import (
     _CBTBenchDataset,
 )  # noqa: F401
@@ -29,6 +32,9 @@ from pyrit.datasets.seed_datasets.remote.comic_jailbreak_dataset import (
     COMIC_JAILBREAK_TEMPLATES,
     ComicJailbreakTemplateConfig,
     _ComicJailbreakDataset,
+)  # noqa: F401
+from pyrit.datasets.seed_datasets.remote.dangerous_qa_dataset import (
+    _DangerousQADataset,
 )  # noqa: F401
 from pyrit.datasets.seed_datasets.remote.darkbench_dataset import (
     _DarkBenchDataset,
@@ -149,9 +155,11 @@ __all__ = [
     "_BeaverTailsDataset",
     "_CBTBenchDataset",
     "_CCPSensitivePromptsDataset",
+    "_CategoricalHarmfulQADataset",
     "_ComicJailbreakDataset",
     "COMIC_JAILBREAK_TEMPLATES",
     "ComicJailbreakTemplateConfig",
+    "_DangerousQADataset",
     "_DarkBenchDataset",
     "_EquityMedQADataset",
     "_ForbiddenQuestionsDataset",
