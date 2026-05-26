@@ -6,6 +6,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from pyrit.tools.backend import ToolBackend
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class LocalToolBackend:
+class LocalToolBackend(ToolBackend):
     """
     In-process :class:`~pyrit.tools.ToolBackend` backed by a name -> ``async def``
     mapping. Useful for unit tests and for embedding small tools inside the
@@ -117,23 +119,3 @@ class LocalToolBackend:
                 "detail": str(ex),
             }
         return result if isinstance(result, dict) else {"result": result}
-
-    async def dispatch_all_sequential_async(
-        self,
-        calls: list[ToolCall],
-    ) -> list[tuple[ToolCall, dict[str, Any]]]:
-        """
-        Dispatch *calls* sequentially in declaration order.
-
-        Args:
-            calls (list[ToolCall]): Calls to dispatch.
-
-        Returns:
-            list[tuple[ToolCall, dict[str, Any]]]: ``(call, result)`` pairs
-                in the same order as *calls*.
-        """
-        results: list[tuple[ToolCall, dict[str, Any]]] = []
-        for call in calls:
-            result = await self.dispatch_async(call)
-            results.append((call, result))
-        return results

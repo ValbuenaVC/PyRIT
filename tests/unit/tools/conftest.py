@@ -39,6 +39,7 @@ from pyrit.prompt_target.common.target_capabilities import TargetCapabilities
 from pyrit.prompt_target.common.target_configuration import TargetConfiguration
 from pyrit.tools import (
     LocalToolBackend,
+    ToolBackend,
     ToolCall,
     ToolCallParser,
     ToolEventBehavior,
@@ -144,7 +145,7 @@ class _CanonicalEnvelopeParser:
         return calls
 
 
-class _RecordingToolBackend:
+class _RecordingToolBackend(ToolBackend):
     """
     Minimal :class:`ToolBackend` that records every dispatched call and
     returns results from a scripted queue. Used to assert dispatch order,
@@ -171,16 +172,6 @@ class _RecordingToolBackend:
             return {"result": f"recorded:{call.name}:{call.call_id}"}
         nxt = self._results.popleft()
         return nxt if isinstance(nxt, dict) else {"result": nxt}
-
-    async def dispatch_all_sequential_async(
-        self,
-        calls: list[ToolCall],
-    ) -> list[tuple[ToolCall, dict[str, Any]]]:
-        results: list[tuple[ToolCall, dict[str, Any]]] = []
-        for call in calls:
-            result = await self.dispatch_async(call)
-            results.append((call, result))
-        return results
 
 
 class _FakeToolTarget(PromptTarget):

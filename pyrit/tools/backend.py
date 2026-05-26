@@ -3,16 +3,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrit.tools.models import ToolCall
 
 
-@runtime_checkable
-class ToolBackend(Protocol):
+class ToolBackend(ABC):
     """
-    Protocol for backends that dispatch tool calls produced by a target.
+    Abstract base for backends that dispatch tool calls produced by a target.
 
     A :class:`ToolBackend` is a per-target dispatch table — it owns the
     ``name -> async callable`` mapping a target uses to execute the tool
@@ -25,20 +25,18 @@ class ToolBackend(Protocol):
     * :class:`~pyrit.tools.LocalToolBackend` — in-process backend backed
       by ``async def`` callables. Useful for unit tests and for embedding
       tools inside the PyRIT process.
-    * :class:`pyrit.tools.MCPToolBackend` (lands in C3) — proxies
-      dispatch through one or more MCP servers.
+    * :class:`~pyrit.tools.MCPToolBackend` — proxies dispatch through one
+      or more MCP servers.
 
-    The :attr:`schemas` property exposes the JSON-schema descriptors the
-    target injects into its request body (e.g. ``tools=[...]`` for the
-    OpenAI APIs).
-
-    :meth:`dispatch_all_sequential_async` is the contract the tool loop
-    uses: backends that wish to parallelize dispatch should override it.
-    The default sequencing — one ``await dispatch_async`` per call, in
-    declaration order — is what every PyRIT backend ships with today.
+    Subclasses MUST implement :attr:`schemas` and :meth:`dispatch_async`.
+    :meth:`dispatch_all_sequential_async` ships with a default
+    implementation that awaits :meth:`dispatch_async` once per call in
+    declaration order; backends that wish to parallelize dispatch
+    (e.g. fan out across multiple sandbox containers) should override it.
     """
 
     @property
+    @abstractmethod
     def schemas(self) -> list[dict[str, Any]]:
         """
         The JSON-schema descriptors for every tool the backend exposes.
@@ -48,8 +46,8 @@ class ToolBackend(Protocol):
                 format that concrete targets serialize into their request
                 body.
         """
-        ...
 
+    @abstractmethod
     async def dispatch_async(self, call: ToolCall) -> dict[str, Any]:
         """
         Execute a single tool call and return the structured result.
@@ -64,7 +62,6 @@ class ToolBackend(Protocol):
         Returns:
             dict[str, Any]: The structured tool result.
         """
-        ...
 
     async def dispatch_all_sequential_async(
         self,
@@ -73,6 +70,9 @@ class ToolBackend(Protocol):
         """
         Dispatch every call in *calls* sequentially, preserving declaration order.
 
+        Default implementation: ``await dispatch_async`` once per call.
+        Backends that parallelize dispatch should override this method.
+
         Args:
             calls (list[ToolCall]): The calls to dispatch, in declaration order.
 
@@ -80,4 +80,8 @@ class ToolBackend(Protocol):
             list[tuple[ToolCall, dict[str, Any]]]: ``(call, result)`` pairs,
                 in the same order as *calls*.
         """
-        ...
+        results: list[tuple[ToolCall, dict[str, Any]]] = []
+        for call in calls:
+            envelope = await self.dispatch_async(call)
+            results.append((call, envelope))
+        return results

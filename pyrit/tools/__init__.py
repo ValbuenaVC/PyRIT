@@ -44,11 +44,25 @@ without taking a subsystem-level dependency on ``pyrit.tools``.
 
 from pyrit.tools.backend import ToolBackend
 from pyrit.tools.local_backend import LocalToolBackend
+from pyrit.tools.mcp_backend import MCPToolBackend
+from pyrit.tools.mcp_client import (
+    DockerMCPServerSpec,
+    LocalMCPServerSpec,
+    MCPClient,
+    MCPServerSpec,
+    RemoteMCPServerSpec,
+)
 from pyrit.tools.models import ToolCall, ToolEventBehavior, ToolEventPolicy, tool_loop
 from pyrit.tools.parsers import ToolCallParser
 
 __all__ = [
+    "DockerMCPServerSpec",
+    "LocalMCPServerSpec",
     "LocalToolBackend",
+    "MCPClient",
+    "MCPServerSpec",
+    "MCPToolBackend",
+    "RemoteMCPServerSpec",
     "ToolBackend",
     "ToolCall",
     "ToolCallParser",
