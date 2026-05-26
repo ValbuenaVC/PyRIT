@@ -38,7 +38,7 @@ from pyrit.prompt_target.common.prompt_target import PromptTarget
 from pyrit.prompt_target.common.target_capabilities import TargetCapabilities
 from pyrit.prompt_target.common.target_configuration import TargetConfiguration
 from pyrit.tools import (
-    CallableToolBackend,
+    LocalToolBackend,
     ToolCall,
     ToolCallParser,
     ToolEventBehavior,
@@ -290,7 +290,7 @@ def execute_policy():
 
 
 __all__ = [
-    "CallableToolBackend",
+    "LocalToolBackend",
     "ToolCall",
     "ToolEventBehavior",
     "ToolEventPolicy",

@@ -20,7 +20,7 @@ A target opts in by declaring two collaborators:
 
 When the policy is ``EXECUTE``, calls are dispatched through
 ``self.configuration.tool_backend``, an implementation of
-:class:`ToolBackend`. :class:`CallableToolBackend` is the pure-Python
+:class:`ToolBackend`. :class:`LocalToolBackend` is the in-process
 backend shipped here; :class:`MCPToolBackend` ships in C3 and proxies
 through one or more MCP servers.
 
@@ -43,12 +43,12 @@ without taking a subsystem-level dependency on ``pyrit.tools``.
 """
 
 from pyrit.tools.backend import ToolBackend
-from pyrit.tools.callable_backend import CallableToolBackend
+from pyrit.tools.local_backend import LocalToolBackend
 from pyrit.tools.models import ToolCall, ToolEventBehavior, ToolEventPolicy, tool_loop
 from pyrit.tools.parsers import ToolCallParser
 
 __all__ = [
-    "CallableToolBackend",
+    "LocalToolBackend",
     "ToolBackend",
     "ToolCall",
     "ToolCallParser",

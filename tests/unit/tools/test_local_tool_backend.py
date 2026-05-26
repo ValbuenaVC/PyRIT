@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 """
-Unit tests for :class:`pyrit.tools.CallableToolBackend`.
+Unit tests for :class:`pyrit.tools.LocalToolBackend`.
 
 Coverage map (rows from the C2 test matrix):
 
@@ -16,7 +16,7 @@ Also covers the backend's documented behavior for missing functions
 (both strict and tolerant modes), schema property defaulting, scalar
 result wrapping, and declaration-order preservation in the bulk dispatch
 path. These are required for the §10 rubber-duck guarantee that every
-public-facing branch of :class:`CallableToolBackend` is exercised
+public-facing branch of :class:`LocalToolBackend` is exercised
 before C5 wires it to a production target.
 """
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrit.tools import CallableToolBackend, ToolCall
+from pyrit.tools import LocalToolBackend, ToolCall
 
 
 def _make_call(name: str, *, call_id: str = "c1", arguments: dict | None = None) -> ToolCall:
@@ -38,7 +38,7 @@ async def test_disallowed_tool_returns_error_without_invoking_callable():
         invoked.append(args.get("text", ""))
         return {"echoed": args.get("text", "")}
 
-    backend = CallableToolBackend(
+    backend = LocalToolBackend(
         callables={"echo": echo, "off_limits": echo},
         allowed_tools={"echo"},
     )
@@ -55,7 +55,7 @@ async def test_failing_tool_yields_error_envelope():
     async def boom(args: dict) -> dict:
         raise RuntimeError("kaboom")
 
-    backend = CallableToolBackend(callables={"boom": boom})
+    backend = LocalToolBackend(callables={"boom": boom})
 
     result = await backend.dispatch_async(_make_call("boom"))
 
@@ -65,7 +65,7 @@ async def test_failing_tool_yields_error_envelope():
 
 
 async def test_missing_tool_raises_when_strict():
-    backend = CallableToolBackend(callables={}, fail_on_missing_function=True)
+    backend = LocalToolBackend(callables={}, fail_on_missing_function=True)
 
     with pytest.raises(KeyError, match="ghost"):
         await backend.dispatch_async(_make_call("ghost"))
@@ -75,7 +75,7 @@ async def test_missing_tool_returns_envelope_when_tolerant():
     async def echo(args: dict) -> dict:
         return {"ok": True}
 
-    backend = CallableToolBackend(
+    backend = LocalToolBackend(
         callables={"echo": echo},
         fail_on_missing_function=False,
     )
@@ -91,7 +91,7 @@ async def test_scalar_result_is_wrapped_in_dict():
     async def number(args: dict) -> int:
         return 42
 
-    backend = CallableToolBackend(callables={"number": number})
+    backend = LocalToolBackend(callables={"number": number})
 
     result = await backend.dispatch_async(_make_call("number"))
 
@@ -102,7 +102,7 @@ async def test_dict_result_passes_through_unchanged():
     async def named(args: dict) -> dict:
         return {"custom_key": "custom_value"}
 
-    backend = CallableToolBackend(callables={"named": named})
+    backend = LocalToolBackend(callables={"named": named})
 
     result = await backend.dispatch_async(_make_call("named"))
 
@@ -110,14 +110,14 @@ async def test_dict_result_passes_through_unchanged():
 
 
 async def test_schemas_defaults_to_empty_list():
-    backend = CallableToolBackend(callables={})
+    backend = LocalToolBackend(callables={})
 
     assert backend.schemas == []
 
 
 async def test_schemas_returned_as_copy():
     schemas_in = [{"name": "echo", "parameters": {}}]
-    backend = CallableToolBackend(callables={}, schemas=schemas_in)
+    backend = LocalToolBackend(callables={}, schemas=schemas_in)
 
     out1 = backend.schemas
     out1.append({"name": "mutated"})
@@ -130,7 +130,7 @@ async def test_dispatch_all_sequential_preserves_declaration_order():
     async def echo(args: dict) -> dict:
         return {"echoed": args["i"]}
 
-    backend = CallableToolBackend(callables={"echo": echo})
+    backend = LocalToolBackend(callables={"echo": echo})
 
     calls = [_make_call("echo", call_id=f"c{i}", arguments={"i": i}) for i in range(5)]
     pairs = await backend.dispatch_all_sequential_async(calls)
@@ -161,7 +161,7 @@ async def test_each_dummy_tool_invoked_via_prepended_conversation():
         invocations.append(("reverse", args))
         return {"reversed": args.get("text", "")[::-1]}
 
-    backend = CallableToolBackend(callables={"echo": echo, "add": add, "reverse": reverse})
+    backend = LocalToolBackend(callables={"echo": echo, "add": add, "reverse": reverse})
 
     prepended_calls = [
         _make_call("echo", call_id="e1", arguments={"text": "hello"}),

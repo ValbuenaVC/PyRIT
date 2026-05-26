@@ -22,9 +22,9 @@ class ToolBackend(Protocol):
 
     Two concrete implementations ship with PyRIT:
 
-    * :class:`~pyrit.tools.CallableToolBackend` — pure-Python backend
-      backed by ``async def`` callables. Useful for unit tests and for
-      embedding tools inside the PyRIT process.
+    * :class:`~pyrit.tools.LocalToolBackend` — in-process backend backed
+      by ``async def`` callables. Useful for unit tests and for embedding
+      tools inside the PyRIT process.
     * :class:`pyrit.tools.MCPToolBackend` (lands in C3) — proxies
       dispatch through one or more MCP servers.
 

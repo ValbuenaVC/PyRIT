@@ -14,11 +14,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class CallableToolBackend:
+class LocalToolBackend:
     """
-    Pure-Python :class:`~pyrit.tools.ToolBackend` backed by a name -> ``async def``
+    In-process :class:`~pyrit.tools.ToolBackend` backed by a name -> ``async def``
     mapping. Useful for unit tests and for embedding small tools inside the
     PyRIT process without standing up an MCP server.
+
+    "Local" here means tools run in PyRIT's own Python process — no
+    subprocess, no IPC, no wire protocol. Contrast with
+    :class:`~pyrit.tools.MCPToolBackend` (lands in C3), which proxies
+    dispatch through one or more MCP servers reached via JSON-RPC.
 
     The backend dispatches sequentially in declaration order. Tool-side
     failures (raised exceptions, missing names, allow-list rejections)
