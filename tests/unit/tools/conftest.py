@@ -44,7 +44,6 @@ from pyrit.tools import (
     ToolCallParser,
     ToolEventBehavior,
     ToolEventPolicy,
-    tool_loop,
 )
 
 
@@ -180,14 +179,12 @@ class _FakeToolTarget(PromptTarget):
     pops scripted responses off a queue. ``_get_normalized_conversation_async``
     is overridden to return ``[message]`` directly, isolating decorator
     behavior from the memory + normalization pipeline.
-    """
 
-    _DEFAULT_CONFIGURATION = TargetConfiguration(
-        capabilities=TargetCapabilities(
-            supports_multi_turn=True,
-            supports_multi_message_pieces=True,
-        )
-    )
+    Inherits the base class's ``@final @tool_loop send_prompt_async``; the
+    policy + backend are wired through :class:`TargetConfiguration` so the
+    wrapper finds them via ``self.configuration.tool_event_policy`` and
+    ``self.configuration.tool_backend``.
+    """
 
     def __init__(
         self,
@@ -197,15 +194,27 @@ class _FakeToolTarget(PromptTarget):
         backend: Any = None,
         parser: ToolCallParser | None = None,
     ) -> None:
-        super().__init__()
+        # ``supports_tool_use`` is forced on whenever a policy is configured so
+        # the TargetConfiguration validator accepts the backend.
+        caps = TargetCapabilities(
+            supports_multi_turn=True,
+            supports_multi_message_pieces=True,
+            supports_tool_use=policy is not None,
+        )
+        config = TargetConfiguration(
+            capabilities=caps,
+            tool_event_policy=policy,
+            tool_backend=backend,
+        )
+        super().__init__(custom_configuration=config)
         self._scripted_responses: deque[Message] = deque(scripted_responses)
         self.call_count: int = 0
         self.normalized_conversations_seen: list[list[Message]] = []
-        # The C2 decorator reads these via getattr; production code wires them
-        # through TargetConfiguration in C4.
-        self._configuration.tool_event_policy = policy
-        self._configuration.tool_backend = backend
-        self._tool_parser = parser if parser is not None else _CanonicalEnvelopeParser()
+        self._parser_instance: ToolCallParser | None = parser if parser is not None else _CanonicalEnvelopeParser()
+
+    @property
+    def _tool_parser(self) -> ToolCallParser | None:
+        return self._parser_instance
 
     async def _get_normalized_conversation_async(self, *, message: Message) -> list[Message]:
         return [message]
@@ -219,14 +228,6 @@ class _FakeToolTarget(PromptTarget):
         if not self._scripted_responses:
             raise AssertionError(f"Fake target ran out of scripted responses on iteration {self.call_count}.")
         return [self._scripted_responses.popleft()]
-
-    @tool_loop
-    async def send_prompt_async(self, *, message: Message) -> list[Message]:
-        # Passthrough path: only invoked when ToolEventPolicy is None. The
-        # decorator replaces this body entirely when a policy is set.
-        message.validate()
-        normalized = await self._get_normalized_conversation_async(message=message)
-        return await self._send_prompt_to_target_async(normalized_conversation=normalized)
 
 
 @pytest.fixture
