@@ -43,6 +43,7 @@ without taking a subsystem-level dependency on ``pyrit.tools``.
 """
 
 from pyrit.tools.backend import ToolBackend
+from pyrit.tools.inline_parser import InlineToolCallParser, InlineToolCallParserMode
 from pyrit.tools.local_backend import LocalToolBackend
 from pyrit.tools.mcp_backend import MCPToolBackend
 from pyrit.tools.mcp_client import (
@@ -58,6 +59,8 @@ from pyrit.tools.parsers import CanonicalEnvelopeParser, ToolCallParser
 __all__ = [
     "CanonicalEnvelopeParser",
     "DockerMCPServerSpec",
+    "InlineToolCallParser",
+    "InlineToolCallParserMode",
     "LocalMCPServerSpec",
     "LocalToolBackend",
     "MCPClient",
