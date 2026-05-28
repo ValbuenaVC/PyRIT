@@ -27,9 +27,9 @@ class ToolCall:
     """
     A parsed tool call extracted from a target response.
 
-    Concrete :class:`~pyrit.tools.ToolCallParser` implementations build
-    :class:`ToolCall` instances by walking the response message pieces.
-    The :attr:`raw_envelope` carries the original target-specific dict
+    Concrete ``ToolCallParser`` implementations build
+    ``ToolCall`` instances by walking the response message pieces.
+    The ``raw_envelope`` carries the original target-specific dict
     (e.g. the function_call JSON section) so dispatchers and observers
     can recover provider-specific fields without re-parsing.
 
@@ -56,7 +56,7 @@ class ToolEventBehavior(enum.Enum):
         EXECUTE: Dispatch the call via ``configuration.tool_backend``
             and re-enter the target with the tool output appended.
             This is the standard agentic loop behavior.
-        RAISE: Raise :class:`~pyrit.exceptions.ToolCallNotSupported` with
+        RAISE: Raise ``ToolCallNotSupported`` with
             the partial conversation attached. Useful for red-team
             attacks that want to observe attempted tool use without
             allowing execution.
@@ -80,7 +80,7 @@ class ToolEventPolicy:
     Attributes:
         behavior (ToolEventBehavior): What to do on each detected tool call.
         max_tool_iterations (int): Maximum number of model<->tool round-trips
-            before the loop raises :class:`ToolCallLoopLimitExceeded`. Each
+            before the loop raises ``ToolCallLoopLimitExceeded``. Each
             iteration is one ``_send_prompt_to_target_async`` call.
     """
 
@@ -97,8 +97,8 @@ def _build_function_call_output_message(
     Build the canonical ``tool`` message produced after dispatching one or more
     tool calls in a single iteration.
 
-    The returned :class:`Message` contains one
-    :class:`MessagePiece` per ``(call, result)`` pair, in declaration order.
+    The returned ``Message`` contains one
+    ``MessagePiece`` per ``(call, result)`` pair, in declaration order.
     Every piece has ``role="tool"`` and ``original_value_data_type="function_call_output"``,
     with the JSON envelope ``{"type": "function_call_output", "call_id": ..., "output": ...}``.
 
@@ -112,7 +112,7 @@ def _build_function_call_output_message(
             copied onto every output piece. Pass the first piece of the
             assistant message that produced the calls.
         outputs (list[tuple[ToolCall, Any]]): ``(call, result)`` pairs in
-            declaration order. *result* is serialized via :func:`json.dumps`
+            declaration order. *result* is serialized via ``json.dumps``
             unless it is already a string.
 
     Returns:
@@ -142,7 +142,7 @@ def tool_loop(
     method: Callable[..., Awaitable[list[Message]]],
 ) -> Callable[..., Awaitable[list[Message]]]:
     """
-    Wrap a :class:`~pyrit.prompt_target.PromptTarget`-style
+    Wrap a ``PromptTarget``-style
     ``send_prompt_async`` to run an agentic tool-use loop.
 
     When the target's ``configuration.tool_event_policy`` is ``None`` the
@@ -155,21 +155,21 @@ def tool_loop(
     3. After each call, parse the last response via ``self._tool_parser``.
        Exit on empty parse (model issued a stop response).
     4. On a non-empty parse, branch on ``policy.behavior``:
-       ``RAISE`` raises :class:`ToolCallNotSupported`; ``RETURN_RAW``
+       ``RAISE`` raises ``ToolCallNotSupported``; ``RETURN_RAW``
        returns the chain as-is; ``EXECUTE`` dispatches the calls via
        ``configuration.tool_backend`` and appends the tool message.
-    5. Raise :class:`ToolCallLoopLimitExceeded` if the loop runs past
+    5. Raise ``ToolCallLoopLimitExceeded`` if the loop runs past
        ``policy.max_tool_iterations`` without the model stopping.
 
     The decorator deliberately knows nothing about MCP, OpenAI, or any
     specific transport. The two collaborators it requires —
     ``self._tool_parser`` and ``self.configuration.tool_backend`` — are
-    plain protocols (:class:`ToolCallParser`, :class:`ToolBackend`).
+    plain protocols (``ToolCallParser``, ``ToolBackend``).
 
     Args:
         method (Callable): The async method to wrap. Must have the
             ``async def f(self, *, message: Message) -> list[Message]``
-            signature of :meth:`PromptTarget.send_prompt_async`.
+            signature of ``PromptTarget.send_prompt_async``.
 
     Returns:
         Callable: The wrapped method.

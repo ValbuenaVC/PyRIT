@@ -18,7 +18,7 @@ class ToolCallParser(Protocol):
 
     Concrete parsers live next to the target whose response shape they
     understand (the canonical-envelope parser shipped here is shared by
-    :class:`OpenAIResponseTarget`; per-model-family parsers for non-OpenAI
+    ``OpenAIResponseTarget``; per-model-family parsers for non-OpenAI
     targets ship in a follow-up, see plan §12.9). Parsers MUST return an
     empty list when the model has issued a stop response — the tool loop
     uses the empty list as the signal to exit.
@@ -40,7 +40,7 @@ class ToolCallParser(Protocol):
 
 def _extract_function_call_pieces(message: Message) -> list[MessagePiece]:
     """
-    Return every :class:`MessagePiece` in *message* whose
+    Return every ``MessagePiece`` in *message* whose
     ``original_value_data_type`` is ``"function_call"``.
 
     This is the canonical envelope used by every PyRIT-supported tool-emitting
@@ -59,9 +59,9 @@ def _extract_function_call_pieces(message: Message) -> list[MessagePiece]:
 
 class CanonicalEnvelopeParser:
     """
-    Reference :class:`ToolCallParser` for the canonical function_call envelope.
+    Reference ``ToolCallParser`` for the canonical function_call envelope.
 
-    Walks every :class:`MessagePiece` whose ``original_value_data_type`` is
+    Walks every ``MessagePiece`` whose ``original_value_data_type`` is
     ``"function_call"`` and decodes the canonical JSON shape::
 
         {
@@ -71,7 +71,7 @@ class CanonicalEnvelopeParser:
             "arguments": "<JSON-encoded arguments>"
         }
 
-    into :class:`ToolCall` instances. Pieces of other data types -- reasoning,
+    into ``ToolCall`` instances. Pieces of other data types -- reasoning,
     mcp_call, web_search_call, etc. -- are ignored (they pass through to
     Memory but are not client-side dispatchable). Per-model-family parsers
     for non-OpenAI targets ship in a follow-up PR (see plan §12.9).
@@ -79,13 +79,13 @@ class CanonicalEnvelopeParser:
 
     def parse(self, message: Message) -> list[ToolCall]:
         """
-        Decode canonical ``function_call`` pieces in *message* into :class:`ToolCall`.
+        Decode canonical ``function_call`` pieces in *message* into ``ToolCall``.
 
         Args:
             message (Message): The most recent assistant response.
 
         Returns:
-            list[ToolCall]: One :class:`ToolCall` per ``function_call``
+            list[ToolCall]: One ``ToolCall`` per ``function_call``
                 piece, in declaration order. Empty if the message contains
                 no ``function_call`` pieces (model stop).
         """

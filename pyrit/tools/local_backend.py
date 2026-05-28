@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 
 class LocalToolBackend(ToolBackend):
     """
-    In-process :class:`~pyrit.tools.ToolBackend` backed by a name -> ``async def``
+    In-process ``ToolBackend`` backed by a name -> ``async def``
     mapping. Useful for unit tests and for embedding small tools inside the
     PyRIT process without standing up an MCP server.
 
     "Local" here means tools run in PyRIT's own Python process — no
     subprocess, no IPC, no wire protocol. Contrast with
-    :class:`~pyrit.tools.MCPToolBackend` (lands in C3), which proxies
-    dispatch through one or more MCP servers reached via JSON-RPC.
+    ``MCPToolBackend``, which proxies dispatch through one or more MCP
+    servers reached via JSON-RPC.
 
     The backend dispatches sequentially in declaration order. Tool-side
     failures (raised exceptions, missing names, allow-list rejections)
@@ -49,7 +49,7 @@ class LocalToolBackend(ToolBackend):
             callables (dict[str, Callable[[dict[str, Any]], Awaitable[Any]]]):
                 Map from tool name to an ``async def`` that accepts a parsed
                 arguments dict and returns the tool result. Results are
-                serialized by the tool loop via :func:`json.dumps`.
+                serialized by the tool loop via ``json.dumps``.
             schemas (list[dict[str, Any]] | None): JSON-schema descriptors
                 injected into the target's request body. Defaults to an empty
                 list when omitted.
@@ -59,7 +59,7 @@ class LocalToolBackend(ToolBackend):
                 Defaults to None (no allow-list; every registered tool is
                 callable).
             fail_on_missing_function (bool): When True (default), an unknown
-                tool name raises :class:`KeyError`. When False, the backend
+                tool name raises ``KeyError``. When False, the backend
                 returns a ``tool_not_registered`` envelope so the model can
                 recover.
         """

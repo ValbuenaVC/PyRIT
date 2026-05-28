@@ -5,14 +5,14 @@
 Multi-server tool backend that proxies dispatch through one or more
 MCP servers.
 
-This is the :class:`~pyrit.tools.ToolBackend` implementation that real
+This is the ``ToolBackend`` implementation that real
 red-team configurations use. It composes one
-:class:`~pyrit.tools.MCPClient` per :class:`~pyrit.tools.MCPServerSpec`,
+``MCPClient`` per ``MCPServerSpec``,
 aggregates their advertised schemas, routes incoming
-:class:`~pyrit.tools.ToolCall` instances to the correct underlying
+``ToolCall`` instances to the correct underlying
 client, and enforces an optional ``allowed_tools`` allow-list.
 
-Contrast with :class:`~pyrit.tools.LocalToolBackend`, which dispatches
+Contrast with ``LocalToolBackend``, which dispatches
 to Python ``async def`` callables inside PyRIT's own process.
 """
 
@@ -37,16 +37,16 @@ logger = logging.getLogger(__name__)
 
 class MCPToolBackend(ToolBackend):
     """
-    :class:`~pyrit.tools.ToolBackend` backed by one or more MCP servers.
+    ``ToolBackend`` backed by one or more MCP servers.
 
-    On :meth:`__aenter__`, the backend spawns / connects each server in
-    its :attr:`_servers` list (sequentially) through a single
-    :class:`contextlib.AsyncExitStack`, runs the MCP handshake, caches
+    On ``__aenter__``, the backend spawns / connects each server in
+    its ``_servers`` list (sequentially) through a single
+    ``contextlib.AsyncExitStack``, runs the MCP handshake, caches
     schemas, and builds an advertised-name → ``(client, server_name)``
-    routing table. Collisions raise :class:`ValueError` unless the
-    colliding specs set :attr:`~pyrit.tools.LocalMCPServerSpec.name_prefix`.
+    routing table. Collisions raise ``ValueError`` unless the
+    colliding specs set ``name_prefix``.
 
-    A single shared :class:`AsyncExitStack` (rather than one per client)
+    A single shared ``AsyncExitStack`` (rather than one per client)
     is required so anyio's nested cancel scopes — opened by the ``mcp``
     SDK's ``stdio_client`` and ``ClientSession`` context managers — are
     closed in strict LIFO order from the entering task. Closing
@@ -54,7 +54,7 @@ class MCPToolBackend(ToolBackend):
     ``"Attempted to exit a cancel scope that isn't the current task's
     current cancel scope"``.
 
-    Dispatch is serialized through an :class:`asyncio.Lock` per backend
+    Dispatch is serialized through an ``asyncio.Lock`` per backend
     instance — multiple concurrent coroutines sharing the same backend
     (e.g. parallel attack runs) will not interleave JSON-RPC frames on
     the same stdio pipe.
@@ -70,12 +70,12 @@ class MCPToolBackend(ToolBackend):
         Initialize the backend.
 
         Args:
-            servers: One or more :class:`MCPServerSpec` instances describing
+            servers: One or more ``MCPServerSpec`` instances describing
                 where each server runs.
             allowed_tools: Optional allow-list of tool names. Names not in
-                the list are filtered from :attr:`schemas` AND
+                the list are filtered from ``schemas`` AND
                 short-circuit dispatch with a ``tool_not_allowed`` envelope.
-                Names are matched after :attr:`~LocalMCPServerSpec.name_prefix`
+                Names are matched after ``name_prefix``
                 has been applied. Defaults to None (every advertised tool is
                 callable).
 
@@ -105,7 +105,7 @@ class MCPToolBackend(ToolBackend):
 
     async def __aenter__(self) -> MCPToolBackend:
         """
-        Connect each underlying client through a shared :class:`AsyncExitStack` and build the routing table.
+        Connect each underlying client through a shared ``AsyncExitStack`` and build the routing table.
 
         Returns:
             MCPToolBackend: *self*, ready to dispatch.
@@ -154,7 +154,7 @@ class MCPToolBackend(ToolBackend):
         """
         Route *call* to the correct client and dispatch.
 
-        See :class:`MCPClient.dispatch_async` for the envelope shape.
+        See ``MCPClient.dispatch_async`` for the envelope shape.
         Allow-list rejections and unknown-tool calls return error
         envelopes; only "backend not entered" raises.
 
@@ -164,7 +164,7 @@ class MCPToolBackend(ToolBackend):
         Returns:
             dict[str, Any]: A structured envelope (success, ``tool_not_allowed``,
                 ``tool_not_registered``, or the underlying
-                :meth:`MCPClient.dispatch_async` envelope).
+                ``MCPClient.dispatch_async`` envelope).
 
         Raises:
             RuntimeError: When the backend has not been entered via ``async with``.

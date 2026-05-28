@@ -14,23 +14,23 @@ class ToolBackend(ABC):
     """
     Abstract base for backends that dispatch tool calls produced by a target.
 
-    A :class:`ToolBackend` is a per-target dispatch table — it owns the
+    A ``ToolBackend`` is a per-target dispatch table — it owns the
     ``name -> async callable`` mapping a target uses to execute the tool
     calls extracted from a model response. This is intentionally distinct
-    from :mod:`pyrit.registry`, whose ``Registry`` classes register named
+    from ``pyrit.registry``, whose ``Registry`` classes register named
     framework singletons (targets, scorers, attacks) for CLI lookup.
 
     Two concrete implementations ship with PyRIT:
 
-    * :class:`~pyrit.tools.LocalToolBackend` — in-process backend backed
+    * ``LocalToolBackend`` — in-process backend backed
       by ``async def`` callables. Useful for unit tests and for embedding
       tools inside the PyRIT process.
-    * :class:`~pyrit.tools.MCPToolBackend` — proxies dispatch through one
+    * ``MCPToolBackend`` — proxies dispatch through one
       or more MCP servers.
 
-    Subclasses MUST implement :attr:`schemas` and :meth:`dispatch_async`.
-    :meth:`dispatch_all_sequential_async` ships with a default
-    implementation that awaits :meth:`dispatch_async` once per call in
+    Subclasses MUST implement ``schemas`` and ``dispatch_async``.
+    ``dispatch_all_sequential_async`` ships with a default
+    implementation that awaits ``dispatch_async`` once per call in
     declaration order; backends that wish to parallelize dispatch
     (e.g. fan out across multiple sandbox containers) should override it.
     """

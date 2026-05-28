@@ -5,19 +5,19 @@
 Stdio-transport client for the Model Context Protocol (MCP).
 
 This module is the wire-protocol half of PyRIT's MCP integration. It
-sits below :class:`~pyrit.tools.MCPToolBackend` (which composes one
-:class:`MCPClient` per configured server and handles cross-server
+sits below ``MCPToolBackend`` (which composes one
+``MCPClient`` per configured server and handles cross-server
 routing) and above the upstream ``mcp`` Python SDK (which owns the
 JSON-RPC framing, capability negotiation, and asyncio task plumbing).
 
-The three :class:`MCPServerSpec` variants describe *where* the server
-runs. Only :class:`LocalMCPServerSpec` is implemented in this commit:
+The three ``MCPServerSpec`` variants describe *where* the server
+runs. Only ``LocalMCPServerSpec`` is implemented in this commit:
 
-* :class:`LocalMCPServerSpec` — spawn the server as a child process and
+* ``LocalMCPServerSpec`` — spawn the server as a child process and
   speak JSON-RPC over its stdin/stdout.
-* :class:`RemoteMCPServerSpec` — HTTP/SSE transport against a hosted
+* ``RemoteMCPServerSpec`` — HTTP/SSE transport against a hosted
   server. Stub: ``connect_async`` raises ``NotImplementedError``.
-* :class:`DockerMCPServerSpec` — stdio over ``docker run -i`` against a
+* ``DockerMCPServerSpec`` — stdio over ``docker run -i`` against a
   hardened sandbox container. Stub: ``connect_async`` raises
   ``NotImplementedError``. Implementation lands in the follow-up
   sandbox PR.
@@ -57,10 +57,10 @@ class LocalMCPServerSpec:
             process. ``None`` (default) inherits PyRIT's environment.
         name_prefix (str | None): When set, every tool advertised by the
             server is registered as ``f"{name_prefix}{tool_name}"`` in
-            the parent :class:`~pyrit.tools.MCPToolBackend`. Used to
+            the parent ``MCPToolBackend``. Used to
             disambiguate two servers that expose the same tool name.
         timeout_seconds (float): Per-call timeout, enforced by
-            :meth:`MCPClient.dispatch_async`. Defaults to 30 seconds.
+            ``MCPClient.dispatch_async``. Defaults to 30 seconds.
     """
 
     command: str
@@ -74,13 +74,13 @@ class LocalMCPServerSpec:
 class RemoteMCPServerSpec:
     """
     Spec for an MCP server reached over HTTP / SSE. **Not implemented**
-    in this PR — :meth:`MCPClient.connect_async` raises
-    :class:`NotImplementedError`. Tracked by ``# TODO(mcp-http-transport)``.
+    in this PR — ``MCPClient.connect_async`` raises
+    ``NotImplementedError``. Tracked by ``# TODO(mcp-http-transport)``.
 
     Attributes:
         url (str): The base URL of the MCP server.
         name_prefix (str | None): Same semantics as
-            :attr:`LocalMCPServerSpec.name_prefix`.
+            ``LocalMCPServerSpec.name_prefix``.
         timeout_seconds (float): Per-call timeout.
     """
 
@@ -117,7 +117,7 @@ class DockerMCPServerSpec:
         network_profile (str): ``NetworkProfile`` name; ``"none"`` (default)
             launches the container with ``--network=none``.
         name_prefix (str | None): Same semantics as
-            :attr:`LocalMCPServerSpec.name_prefix`.
+            ``LocalMCPServerSpec.name_prefix``.
         timeout_seconds (float): Per-call timeout.
 
     Future fields (deferred to the follow-up sandbox PR): ``memory_limit``,
@@ -172,19 +172,19 @@ class MCPClient:
     A single MCP-server session.
 
     The client owns the lifetime of one server's transport stack and
-    exposes a uniform :meth:`dispatch_async` regardless of which
-    :class:`MCPServerSpec` variant it was constructed from. Composition
+    exposes a uniform ``dispatch_async`` regardless of which
+    ``MCPServerSpec`` variant it was constructed from. Composition
     across multiple servers (routing, schema aggregation, allow-lists)
-    is the responsibility of :class:`~pyrit.tools.MCPToolBackend`.
+    is the responsibility of ``MCPToolBackend``.
 
     Lifecycle:
 
-    * :meth:`connect_async` spawns the subprocess (for
-      :class:`LocalMCPServerSpec`), runs the MCP handshake, and caches
+    * ``connect_async`` spawns the subprocess (for
+      ``LocalMCPServerSpec``), runs the MCP handshake, and caches
       ``tools/list`` results.
-    * :meth:`dispatch_async` issues one ``tools/call`` and returns a
+    * ``dispatch_async`` issues one ``tools/call`` and returns a
       structured envelope (success or error).
-    * :meth:`close_async` tears down the transport stack.
+    * ``close_async`` tears down the transport stack.
 
     The class is usable as an async context manager.
     """
@@ -192,7 +192,7 @@ class MCPClient:
     def __init__(self, *, spec: MCPServerSpec) -> None:
         """
         Initialize the client around *spec*. Does not connect; call
-        :meth:`connect_async` (or use the async context-manager form) to start
+        ``connect_async`` (or use the async context-manager form) to start
         the transport stack.
         """
         self._spec = spec
@@ -202,7 +202,7 @@ class MCPClient:
 
     @property
     def spec(self) -> MCPServerSpec:
-        """The :class:`MCPServerSpec` this client was constructed with."""
+        """The ``MCPServerSpec`` this client was constructed with."""
         return self._spec
 
     @property
@@ -211,7 +211,7 @@ class MCPClient:
         JSON schemas for every tool the server advertises.
 
         Each schema is shaped ``{"name", "description", "parameters"}``.
-        The optional :attr:`LocalMCPServerSpec.name_prefix` is applied
+        The optional ``LocalMCPServerSpec.name_prefix`` is applied
         here so a backend that owns this client sees the prefixed name.
         """
         prefix = getattr(self._spec, "name_prefix", None) or ""
@@ -226,7 +226,7 @@ class MCPClient:
 
     @property
     def tool_names(self) -> list[str]:
-        """Tool names with the spec's :attr:`name_prefix` applied."""
+        """Tool names with the spec's ``name_prefix`` applied."""
         return [s["name"] for s in self.schemas]
 
     def _strip_prefix(self, name: str) -> str:
@@ -300,7 +300,7 @@ class MCPClient:
         * Server-reported error: ``{"is_error": True, "error": "tool_execution_failed", "tool": name, ...}``.
 
         Tool-side failures are converted to envelopes; only programmer
-        errors (calling before :meth:`connect_async`) raise.
+        errors (calling before ``connect_async``) raise.
 
         Args:
             call (ToolCall): The call to dispatch. The advertised
