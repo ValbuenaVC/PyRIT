@@ -319,3 +319,134 @@ class TestChatMessageNormalizerToDictsAsync:
         assert isinstance(result[0], dict)
         assert result[0]["role"] == "user"
         assert result[0]["content"] == "Hello"
+
+
+class TestChatMessageNormalizerToolPieces:
+    """Tool-call piece coverage: function_call -> assistant.tool_calls,
+    function_call_output -> role=tool message with tool_call_id."""
+
+    async def test_function_call_piece_becomes_assistant_tool_call_message(self):
+        normalizer = ChatMessageNormalizer()
+        envelope = {
+            "type": "function_call",
+            "call_id": "call_0",
+            "name": "echo",
+            "arguments": '{"text":"hi"}',
+        }
+        fc_piece = MessagePiece(
+            role="assistant",
+            original_value=json.dumps(envelope),
+            original_value_data_type="function_call",
+            converted_value_data_type="function_call",
+        )
+        messages = [Message(message_pieces=[fc_piece])]
+
+        result = await normalizer.normalize_async(messages)
+
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].content is None
+        assert result[0].tool_calls is not None
+        assert len(result[0].tool_calls) == 1
+        assert result[0].tool_calls[0].id == "call_0"
+        assert result[0].tool_calls[0].type == "function"
+        assert result[0].tool_calls[0].function.name == "echo"
+        assert result[0].tool_calls[0].function.arguments == '{"text":"hi"}'
+
+    async def test_function_call_output_piece_becomes_tool_role_message(self):
+        normalizer = ChatMessageNormalizer()
+        envelope = {
+            "type": "function_call_output",
+            "call_id": "call_0",
+            "output": '{"echoed":"hi"}',
+        }
+        fco_piece = MessagePiece(
+            role="tool",
+            original_value=json.dumps(envelope),
+            original_value_data_type="function_call_output",
+            converted_value_data_type="function_call_output",
+        )
+        messages = [Message(message_pieces=[fco_piece], skip_validation=True)]
+
+        result = await normalizer.normalize_async(messages)
+
+        assert len(result) == 1
+        assert result[0].role == "tool"
+        assert result[0].tool_call_id == "call_0"
+        assert result[0].content == '{"echoed":"hi"}'
+
+    async def test_full_tool_conversation_round_trip(self):
+        """A user -> assistant fc -> tool fco -> assistant text conversation
+        normalizes into the canonical OpenAI Chat Completions wire shape."""
+        normalizer = ChatMessageNormalizer()
+
+        user = _make_message("user", "Use the echo tool to repeat 'hi'.")
+
+        fc_envelope = {
+            "type": "function_call",
+            "call_id": "call_0",
+            "name": "echo",
+            "arguments": '{"text":"hi"}',
+        }
+        assistant_fc = Message(
+            message_pieces=[
+                MessagePiece(
+                    role="assistant",
+                    original_value=json.dumps(fc_envelope),
+                    original_value_data_type="function_call",
+                    converted_value_data_type="function_call",
+                )
+            ]
+        )
+
+        fco_envelope = {
+            "type": "function_call_output",
+            "call_id": "call_0",
+            "output": '{"echoed":"hi"}',
+        }
+        tool_msg = Message(
+            message_pieces=[
+                MessagePiece(
+                    role="tool",
+                    original_value=json.dumps(fco_envelope),
+                    original_value_data_type="function_call_output",
+                    converted_value_data_type="function_call_output",
+                )
+            ],
+            skip_validation=True,
+        )
+
+        assistant_final = _make_message("assistant", "The echoed text is: hi")
+
+        result = await normalizer.normalize_async([user, assistant_fc, tool_msg, assistant_final])
+
+        assert [m.role for m in result] == ["user", "assistant", "tool", "assistant"]
+        assert result[0].content == "Use the echo tool to repeat 'hi'."
+        assert result[1].content is None
+        assert result[1].tool_calls[0].function.name == "echo"
+        assert result[2].tool_call_id == "call_0"
+        assert result[2].content == '{"echoed":"hi"}'
+        assert result[3].content == "The echoed text is: hi"
+
+    async def test_function_call_output_serialized_to_dict_excludes_content_when_none(self):
+        """An assistant tool-call-only message must serialize without a content key."""
+        normalizer = ChatMessageNormalizer()
+        envelope = {
+            "type": "function_call",
+            "call_id": "c1",
+            "name": "f",
+            "arguments": "{}",
+        }
+        msg = Message(
+            message_pieces=[
+                MessagePiece(
+                    role="assistant",
+                    original_value=json.dumps(envelope),
+                    original_value_data_type="function_call",
+                    converted_value_data_type="function_call",
+                )
+            ]
+        )
+        dicts = await normalizer.normalize_to_dicts_async([msg])
+        assert "content" not in dicts[0]
+        assert dicts[0]["tool_calls"][0]["function"]["name"] == "f"

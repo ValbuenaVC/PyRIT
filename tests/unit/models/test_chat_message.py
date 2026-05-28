@@ -10,19 +10,30 @@ from pyrit.models.chat_message import (
     ChatMessage,
     ChatMessagesDataset,
     ToolCall,
+    ToolCallFunction,
 )
 
 
 def test_tool_call_init():
-    tc = ToolCall(id="call_1", type="function", function="get_weather")
+    tc = ToolCall(
+        id="call_1",
+        type="function",
+        function=ToolCallFunction(name="get_weather", arguments='{"city":"NYC"}'),
+    )
     assert tc.id == "call_1"
     assert tc.type == "function"
-    assert tc.function == "get_weather"
+    assert tc.function.name == "get_weather"
+    assert tc.function.arguments == '{"city":"NYC"}'
 
 
 def test_tool_call_forbids_extra_fields():
     with pytest.raises(ValidationError):
-        ToolCall(id="call_1", type="function", function="get_weather", extra="bad")
+        ToolCall(
+            id="call_1",
+            type="function",
+            function=ToolCallFunction(name="get_weather", arguments="{}"),
+            extra="bad",
+        )
 
 
 def test_chat_message_init_with_string_content():
@@ -41,7 +52,7 @@ def test_chat_message_init_with_list_content():
 
 
 def test_chat_message_init_with_all_fields():
-    tc = ToolCall(id="call_1", type="function", function="lookup")
+    tc = ToolCall(id="call_1", type="function", function=ToolCallFunction(name="lookup", arguments="{}"))
     msg = ChatMessage(
         role="assistant",
         content="result",
@@ -91,11 +102,24 @@ def test_chat_message_model_validate_json_roundtrip():
 
 
 def test_chat_message_model_validate_json_roundtrip_with_tool_calls():
-    tc = ToolCall(id="c1", type="function", function="fn")
+    tc = ToolCall(id="c1", type="function", function=ToolCallFunction(name="fn", arguments="{}"))
     original = ChatMessage(role="assistant", content="ok", tool_calls=[tc], tool_call_id="c1")
     restored = ChatMessage.model_validate_json(original.model_dump_json())
     assert restored.tool_calls[0].id == "c1"
+    assert restored.tool_calls[0].function.name == "fn"
     assert restored.tool_call_id == "c1"
+
+
+def test_chat_message_content_allows_none_for_tool_call_only_assistant_message():
+    """OpenAI Chat Completions allows assistant messages with content=null when tool_calls is set."""
+    tc = ToolCall(id="c1", type="function", function=ToolCallFunction(name="fn", arguments="{}"))
+    msg = ChatMessage(role="assistant", content=None, tool_calls=[tc])
+    assert msg.content is None
+    assert msg.tool_calls == [tc]
+    dumped = msg.to_dict()
+    # content is None so it should be excluded from the serialized dict.
+    assert "content" not in dumped
+    assert dumped["tool_calls"][0]["function"]["name"] == "fn"
 
 
 @pytest.mark.parametrize("role", ["system", "user", "assistant", "simulated_assistant", "tool", "developer"])

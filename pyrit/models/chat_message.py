@@ -10,13 +10,28 @@ from pyrit.models.literals import ChatMessageRole
 ALLOWED_CHAT_MESSAGE_ROLES = ["system", "user", "assistant", "simulated_assistant", "tool", "developer"]
 
 
+class ToolCallFunction(BaseModel):
+    """The ``function`` payload of an OpenAI Chat Completions tool call."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    arguments: str
+
+
 class ToolCall(BaseModel):
-    """Represents a tool invocation requested by the assistant."""
+    """
+    Represents a tool invocation requested by the assistant.
+
+    Matches the OpenAI Chat Completions API ``tool_calls`` shape: each entry
+    has a provider-issued ``id``, a ``type`` string (currently always
+    ``"function"``), and a nested ``function`` object carrying the tool
+    ``name`` and JSON-encoded ``arguments``.
+    """
 
     model_config = ConfigDict(extra="forbid")
     id: str
     type: str
-    function: str
+    function: ToolCallFunction
 
 
 class ChatMessage(BaseModel):
@@ -26,11 +41,12 @@ class ChatMessage(BaseModel):
     The content field can be:
     - A simple string for single-part text messages
     - A list of dicts for multipart messages (e.g., text + images)
+    - ``None`` for assistant messages whose payload is a tool-call only
     """
 
     model_config = ConfigDict(extra="forbid")
     role: ChatMessageRole
-    content: Union[str, list[dict[str, Any]]]
+    content: Optional[Union[str, list[dict[str, Any]]]] = None
     name: Optional[str] = None
     tool_calls: Optional[list[ToolCall]] = None
     tool_call_id: Optional[str] = None

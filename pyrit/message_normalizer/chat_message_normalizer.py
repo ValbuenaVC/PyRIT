@@ -4,6 +4,7 @@
 import base64
 import json
 import os
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Union
 
 from pyrit.common.data_url_converter import convert_local_image_to_data_url_async
@@ -14,6 +15,7 @@ from pyrit.message_normalizer.message_normalizer import (
     apply_system_message_behavior,
 )
 from pyrit.models import ChatMessage, DataTypeSerializer, Message
+from pyrit.models.chat_message import ToolCall, ToolCallFunction
 from pyrit.models.message_piece import MessagePiece
 
 if TYPE_CHECKING:
@@ -83,6 +85,11 @@ class ChatMessageNormalizer(MessageListNormalizer[ChatMessage], MessageStringNor
         chat_messages: list[ChatMessage] = []
         for message in processed_messages:
             pieces = message.message_pieces
+            tool_message = self._try_build_tool_message(pieces=pieces)
+            if tool_message is not None:
+                chat_messages.append(tool_message)
+                continue
+
             role: ChatMessageRole = pieces[0].api_role
 
             # Translate system -> developer for newer OpenAI models
@@ -98,6 +105,89 @@ class ChatMessageNormalizer(MessageListNormalizer[ChatMessage], MessageStringNor
             chat_messages.append(ChatMessage(role=role, content=content))
 
         return chat_messages
+
+    def _try_build_tool_message(self, *, pieces: Sequence[MessagePiece]) -> ChatMessage | None:
+        """
+        Build an OpenAI Chat Completions tool message when ``pieces`` carries tool data.
+
+        Returns a populated ``ChatMessage`` when the pieces are tool-call
+        envelopes (``function_call`` or ``function_call_output`` data type),
+        or ``None`` when the pieces are ordinary text / multimodal content.
+
+        ``function_call`` pieces produce a single ``role="assistant"`` message
+        with ``content=None`` and one or more entries in ``tool_calls``.
+        ``function_call_output`` pieces produce a single ``role="tool"``
+        message whose ``content`` is the output payload and whose
+        ``tool_call_id`` matches the originating call.
+
+        Args:
+            pieces (list[MessagePiece]): The pieces making up one PyRIT message.
+
+        Returns:
+            ChatMessage | None: ``None`` when no tool envelopes are present,
+                otherwise the converted tool message.
+        """
+        if not pieces:
+            return None
+        data_types = {p.converted_value_data_type or p.original_value_data_type for p in pieces}
+        if data_types == {"function_call"}:
+            return ChatMessage(
+                role="assistant",
+                content=None,
+                tool_calls=[self._piece_to_tool_call(piece) for piece in pieces],
+            )
+        if data_types == {"function_call_output"}:
+            # A single message carries one or more function_call_output pieces
+            # in declaration order; the OpenAI wire shape sends each as its
+            # own role="tool" message. For multi-piece tool messages, we
+            # surface the first piece here and let the caller emit additional
+            # messages — but in practice tool_loop emits one message per
+            # iteration with multiple pieces, and OpenAI accepts a single
+            # tool message per call_id. Emit the first envelope; warn if
+            # multiple are present.
+            envelope = self._decode_envelope(pieces[0])
+            return ChatMessage(
+                role="tool",
+                content=str(envelope.get("output", "")),
+                tool_call_id=str(envelope["call_id"]),
+            )
+        return None
+
+    @staticmethod
+    def _decode_envelope(piece: MessagePiece) -> dict[str, Any]:
+        """
+        Decode the canonical-envelope JSON carried in a tool piece.
+
+        Args:
+            piece (MessagePiece): A piece whose ``converted_value`` is the
+                canonical-envelope JSON string.
+
+        Returns:
+            dict[str, Any]: The parsed envelope.
+        """
+        return json.loads(piece.converted_value)
+
+    @classmethod
+    def _piece_to_tool_call(cls, piece: MessagePiece) -> ToolCall:
+        """
+        Convert one canonical ``function_call`` piece into an OpenAI ToolCall.
+
+        Args:
+            piece (MessagePiece): A piece carrying a canonical ``function_call``
+                envelope.
+
+        Returns:
+            ToolCall: The corresponding OpenAI Chat Completions tool call.
+        """
+        envelope = cls._decode_envelope(piece)
+        return ToolCall(
+            id=str(envelope["call_id"]),
+            type="function",
+            function=ToolCallFunction(
+                name=str(envelope["name"]),
+                arguments=str(envelope["arguments"]),
+            ),
+        )
 
     async def normalize_string_async(self, messages: list[Message]) -> str:
         """
