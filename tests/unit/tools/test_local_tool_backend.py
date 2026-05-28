@@ -4,11 +4,11 @@
 """
 Unit tests for :class:`pyrit.tools.LocalToolBackend`.
 
-Coverage map (rows from the C2 test matrix):
+Coverage map:
 
-* **U10** (partial; the MCP counterpart lands in C3) —
+* **U10** (partial; the MCP counterpart) —
   ``test_each_dummy_tool_invoked_via_prepended_conversation``
-* **U17** (partial; the MCP-timeout counterpart lands in C3) —
+* **U17** (partial; the MCP-timeout counterpart) —
   ``test_failing_tool_yields_error_envelope``
 * **U18** — ``test_disallowed_tool_returns_error_without_invoking_callable``
 
@@ -16,8 +16,7 @@ Also covers the backend's documented behavior for missing functions
 (both strict and tolerant modes), schema property defaulting, scalar
 result wrapping, and declaration-order preservation in the bulk dispatch
 path. These are required for the §10 rubber-duck guarantee that every
-public-facing branch of :class:`LocalToolBackend` is exercised
-before C5 wires it to a production target.
+public-facing branch of :class:`LocalToolBackend` is exercised end-to-end.
 """
 
 from __future__ import annotations
@@ -144,7 +143,7 @@ async def test_each_dummy_tool_invoked_via_prepended_conversation():
     U10 (partial). Each dummy tool resolves on first dispatch (single
     forward step, no model reasoning trace), confirming the backend can
     short-circuit a prepended conversation where every call is already
-    decided. The MCP counterpart in C3 exercises the same shape against
+    decided. The MCP counterpart exercises the same shape against
     a real stdio server.
     """
     invocations: list[tuple[str, dict]] = []

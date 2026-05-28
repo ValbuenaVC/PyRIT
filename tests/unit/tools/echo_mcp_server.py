@@ -3,15 +3,14 @@
 
 """
 Deterministic echo MCP server used as a stdio subprocess fixture by
-``tests/unit/tools/test_mcp_client.py`` (C3) and the integration tests
-(C9).
+``tests/unit/tools/test_mcp_client.py`` and the tools integration tests.
 
-Lands in C2 so subsequent commits don't shuffle test plumbing; C2's own
-tests do not import this module (the :class:`CallableToolRegistry` is
-exercised in-process).
+The harness imports this module via the ``mcp.client.stdio.stdio_client``
+launcher, so it does not need to be importable as a Python module from
+``tests/unit/tools/`` callers.
 
 Run directly as ``python echo_mcp_server.py`` to expose the four tools
-over stdio. The MCP client harness in C3 launches this file with
+over stdio. The MCP client harness launches this file with
 ``mcp.client.stdio.stdio_client`` and asserts behavior end to end.
 """
 

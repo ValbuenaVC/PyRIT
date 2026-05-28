@@ -5,7 +5,7 @@
 Unit tests for :class:`pyrit.tools.MCPClient` and the
 :class:`pyrit.tools.MCPServerSpec` union.
 
-Coverage map (rows from the C2/C3 test matrix):
+Coverage map:
 
 * **U10** — ``test_real_subprocess_dispatch_returns_text_content``,
   ``test_sequential_dispatch_against_real_server``.
@@ -23,6 +23,7 @@ over the SDK rather than to re-test the SDK itself.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -52,7 +53,6 @@ def _make_call(name: str, *, call_id: str = "c1", arguments: dict | None = None)
     return ToolCall(call_id=call_id, name=name, arguments=arguments or {})
 
 
-@pytest.mark.asyncio
 async def test_real_subprocess_dispatch_returns_text_content() -> None:
     """U10: dispatching a single tool call returns the echo server's text response."""
     client = MCPClient(spec=_local_spec())
@@ -62,7 +62,6 @@ async def test_real_subprocess_dispatch_returns_text_content() -> None:
     assert envelope["content"] == "hi"
 
 
-@pytest.mark.asyncio
 async def test_sequential_dispatch_against_real_server() -> None:
     """U10: multiple sequential calls round-trip through the same session."""
     client = MCPClient(spec=_local_spec())
@@ -76,7 +75,6 @@ async def test_sequential_dispatch_against_real_server() -> None:
     assert contents == ["first", "5", "cba"]
 
 
-@pytest.mark.asyncio
 async def test_connect_async_populates_schemas_via_tools_list() -> None:
     """U14: schemas are discovered via tools/list during connect_async."""
     client = MCPClient(spec=_local_spec())
@@ -89,7 +87,6 @@ async def test_connect_async_populates_schemas_via_tools_list() -> None:
     assert echo_schema["parameters"]["properties"]["text"]["type"] == "string"
 
 
-@pytest.mark.asyncio
 async def test_dispatch_timeout_returns_error_envelope() -> None:
     """U17: a tool call that exceeds the spec's timeout produces an error envelope."""
     client = MCPClient(spec=_local_spec(timeout_seconds=0.05))
@@ -102,7 +99,6 @@ async def test_dispatch_timeout_returns_error_envelope() -> None:
     assert envelope["tool"] == "slow_echo"
 
 
-@pytest.mark.asyncio
 async def test_dispatch_async_returns_error_envelope_on_unknown_tool() -> None:
     """Server-side errors (unknown tool name) surface as is_error envelopes."""
     client = MCPClient(spec=_local_spec())
@@ -116,11 +112,10 @@ def test_remote_mcp_server_spec_is_frozen_dataclass() -> None:
     """U20: RemoteMCPServerSpec exists in the type system as a frozen dataclass."""
     spec = RemoteMCPServerSpec(url="https://example.com/mcp")
     assert spec.url == "https://example.com/mcp"
-    with pytest.raises((AttributeError, Exception)):  # frozen dataclass guard
+    with pytest.raises(dataclasses.FrozenInstanceError):
         spec.url = "other"  # type: ignore[misc]
 
 
-@pytest.mark.asyncio
 async def test_remote_mcp_server_spec_raises_not_implemented() -> None:
     """U20: connecting to a RemoteMCPServerSpec raises NotImplementedError."""
     client = MCPClient(spec=RemoteMCPServerSpec(url="https://example.com/mcp"))
@@ -137,7 +132,6 @@ def test_docker_mcp_server_spec_dataclass_fields() -> None:
     assert spec.timeout_seconds == 30.0
 
 
-@pytest.mark.asyncio
 async def test_docker_mcp_server_spec_raises_not_implemented() -> None:
     """U20: connecting to a DockerMCPServerSpec raises NotImplementedError."""
     client = MCPClient(spec=DockerMCPServerSpec(image="pyrit-sandbox:base"))
@@ -145,7 +139,6 @@ async def test_docker_mcp_server_spec_raises_not_implemented() -> None:
         await client.connect_async()
 
 
-@pytest.mark.asyncio
 async def test_dispatch_before_connect_raises_runtime_error() -> None:
     """Calling dispatch_async before connect_async is a programmer error."""
     client = MCPClient(spec=_local_spec())
@@ -153,7 +146,6 @@ async def test_dispatch_before_connect_raises_runtime_error() -> None:
         await client.dispatch_async(_make_call("echo", arguments={"text": "hi"}))
 
 
-@pytest.mark.asyncio
 async def test_close_async_is_idempotent() -> None:
     """Calling close_async twice (or before connect) does not raise."""
     client = MCPClient(spec=_local_spec())
@@ -163,9 +155,8 @@ async def test_close_async_is_idempotent() -> None:
     await client.close_async()  # double-close — no-op.
 
 
-@pytest.mark.asyncio
 async def test_local_mcp_server_spec_is_frozen() -> None:
     """LocalMCPServerSpec is a frozen dataclass."""
     spec = LocalMCPServerSpec(command="python", args=("a.py",))
-    with pytest.raises((AttributeError, Exception)):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         spec.command = "other"  # type: ignore[misc]

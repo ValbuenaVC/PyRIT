@@ -8,7 +8,7 @@ Unit tests for the wiring between :class:`TargetCapabilities.supports_tool_use`,
 :func:`pyrit.tools.tool_loop` decorator that lives on
 :class:`PromptTarget.send_prompt_async`.
 
-These tests are the §7 U7 row plus the construction-time validator added in C4.
+These tests are the §7 U7 row plus the construction-time validator.
 They assert the *capability flag* axis only -- that targets which declare
 ``supports_tool_use=True`` and configure a policy + backend route through
 the loop, that targets without a policy short-circuit, and that the
@@ -87,7 +87,6 @@ class TestCapabilityFlagWiringIntoToolLoop:
     ``supports_tool_use`` AND a policy is configured.
     """
 
-    @pytest.mark.asyncio
     async def test_target_with_tool_use_capability_uses_tool_loop(
         self, make_fake_target, recording_backend, execute_policy
     ):
@@ -107,7 +106,6 @@ class TestCapabilityFlagWiringIntoToolLoop:
         assert [c.name for c in backend.recorded_calls] == ["echo"]
         assert len(responses) == 3, "user expects asst_fc, tool_msg, asst_final."
 
-    @pytest.mark.asyncio
     async def test_target_without_tool_use_capability_skips_dispatch(self, make_fake_target):
         target = make_fake_target(
             scripted_responses=[_make_assistant_text_message("plain response, no tool call")],

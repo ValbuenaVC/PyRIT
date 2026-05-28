@@ -4,9 +4,9 @@
 """
 Unit tests for :func:`pyrit.tools.tool_loop`.
 
-Coverage map (rows from the C2 test matrix):
+Coverage map:
 
-* **U2** (partial; full-DB end lands in C5) — ``test_loop_returns_full_chain_in_order``
+* **U2** (partial; full-DB end) — ``test_loop_returns_full_chain_in_order``
 * **U3** — ``test_loop_exits_on_first_response_when_no_tool_calls``,
   ``test_loops_until_no_pending_tool_call``
 * **U4** — ``test_raises_after_max_tool_iterations``,

@@ -2,12 +2,12 @@
 # Licensed under the MIT license.
 
 """
-Unit tests for ``@tool_loop`` wired into :meth:`PromptTarget.send_prompt_async`.
+Unit tests for ``@tool_loop`` wired into ``PromptTarget.send_prompt_async``.
 
-C4 lands the wiring: ``send_prompt_async`` becomes ``@final @tool_loop``
-on the base class, ``_tool_parser`` and ``_tool_schemas()`` get default
-no-op implementations, and ``TargetConfiguration`` grows ``tool_event_policy``
-+ ``tool_backend`` kwargs.
+The base class decorates ``send_prompt_async`` with ``@final @tool_loop``,
+exposes ``_tool_parser`` and ``_tool_schemas()`` as default no-op hooks,
+and ``TargetConfiguration`` carries the ``tool_event_policy`` and
+``tool_backend`` kwargs the decorator consults.
 
 These tests use the production ``_get_normalized_conversation_async`` path
 (memory round-trip through :class:`SQLiteMemory` via ``patch_central_database``)
@@ -126,9 +126,8 @@ def execute_policy_fixture():
 class TestToolLoopWiredIntoBaseClass:
     """Verifies ``@tool_loop`` runs on every ``send_prompt_async`` call."""
 
-    @pytest.mark.asyncio
     async def test_decorator_passthrough_when_no_policy(self, make_production_target):
-        """U11 -- target without a policy behaves exactly like pre-C4 ``send_prompt_async``."""
+        """U11 -- target without a policy behaves like a single-pass ``send_prompt_async``."""
         target = make_production_target(
             scripted_responses=[_make_assistant_text_message("plain")],
             policy=None,
@@ -140,7 +139,6 @@ class TestToolLoopWiredIntoBaseClass:
         assert len(responses) == 1
         assert responses[0].message_pieces[0].original_value == "plain"
 
-    @pytest.mark.asyncio
     async def test_tool_loop_order_after_normalize_before_memory(self, make_production_target, execute_policy_fixture):
         """U1 -- validate + normalize happen exactly once before the loop iterates."""
         backend = _RecordingToolBackend(scripted_results=[{"result": "echoed"}])
@@ -162,7 +160,6 @@ class TestToolLoopWiredIntoBaseClass:
         assert responses[1].message_pieces[0].original_value_data_type == "function_call_output"
         assert responses[2].message_pieces[0].original_value_data_type == "text"
 
-    @pytest.mark.asyncio
     async def test_tool_message_has_one_function_call_output_piece_per_call(
         self, make_production_target, execute_policy_fixture
     ):
@@ -201,7 +198,6 @@ class TestDbTranscriptAfterToolLoop:
     in order.
     """
 
-    @pytest.mark.asyncio
     async def test_db_insert_order_user_then_asst_fc_then_tool_then_final_asst(
         self, make_production_target, execute_policy_fixture
     ):
@@ -221,7 +217,6 @@ class TestDbTranscriptAfterToolLoop:
         data_types_in_order = [r.message_pieces[0].original_value_data_type for r in responses]
         assert data_types_in_order == ["function_call", "function_call_output", "text"]
 
-    @pytest.mark.asyncio
     async def test_db_roles_and_data_types_match_canonical_envelope(
         self, make_production_target, execute_policy_fixture
     ):
@@ -259,7 +254,7 @@ class TestDbTranscriptAfterToolLoop:
 
 class TestFinalAndAbstractMethodContract:
     """
-    Asserts the base-class shape changes that C4 introduces but doesn't
+    Asserts the base-class shape that ``@tool_loop`` requires but does not
     exercise via end-to-end runs: ``_tool_parser`` defaults to ``None``,
     ``_tool_schemas`` defaults to ``[]``.
     """

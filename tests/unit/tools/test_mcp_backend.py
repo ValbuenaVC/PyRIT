@@ -48,7 +48,6 @@ def _make_call(name: str, *, call_id: str = "c1", arguments: dict | None = None)
     return ToolCall(call_id=call_id, name=name, arguments=arguments or {})
 
 
-@pytest.mark.asyncio
 async def test_backend_aggregates_schemas_across_servers() -> None:
     """Schemas from every connected server show up in :attr:`schemas`."""
     backend = MCPToolBackend(servers=[_spec()])
@@ -57,7 +56,6 @@ async def test_backend_aggregates_schemas_across_servers() -> None:
     assert names == {"echo", "add", "reverse", "slow_echo"}
 
 
-@pytest.mark.asyncio
 async def test_dispatch_routes_to_correct_server() -> None:
     """A :class:`ToolCall` is routed to the server that registered the name."""
     backend = MCPToolBackend(servers=[_spec()])
@@ -67,7 +65,6 @@ async def test_dispatch_routes_to_correct_server() -> None:
     assert envelope["content"] == "routed"
 
 
-@pytest.mark.asyncio
 async def test_name_collision_raises_value_error() -> None:
     """Two servers exposing the same tool name without prefixes raise."""
     backend = MCPToolBackend(servers=[_spec(), _spec()])
@@ -76,7 +73,6 @@ async def test_name_collision_raises_value_error() -> None:
     # __aexit__ is the cleanup path; __aenter__ failing leaves nothing to clean.
 
 
-@pytest.mark.asyncio
 async def test_name_prefix_disambiguates_colliding_servers() -> None:
     """Setting :attr:`LocalMCPServerSpec.name_prefix` disambiguates duplicates."""
     backend = MCPToolBackend(
@@ -95,7 +91,6 @@ async def test_name_prefix_disambiguates_colliding_servers() -> None:
         assert envelope_b["content"] == "beta"
 
 
-@pytest.mark.asyncio
 async def test_disallowed_tool_returns_error_envelope_without_invoking_server() -> None:
     """U18: allowed_tools blocks both schema advertisement AND dispatch."""
     backend = MCPToolBackend(servers=[_spec()], allowed_tools=["echo"])
@@ -110,7 +105,6 @@ async def test_disallowed_tool_returns_error_envelope_without_invoking_server() 
     assert envelope["allowed_tools"] == ["echo"]
 
 
-@pytest.mark.asyncio
 async def test_unknown_tool_returns_error_envelope() -> None:
     """A call to a name no connected server exposes returns an error envelope."""
     backend = MCPToolBackend(servers=[_spec()])
@@ -121,7 +115,6 @@ async def test_unknown_tool_returns_error_envelope() -> None:
     assert envelope["tool"] == "never_registered"
 
 
-@pytest.mark.asyncio
 async def test_concurrent_dispatch_is_serialized_by_lock() -> None:
     """U21: two coroutines dispatching against the same backend do not interleave.
 
@@ -141,7 +134,6 @@ async def test_concurrent_dispatch_is_serialized_by_lock() -> None:
     assert {r["content"] for r in results} == {"A", "B"}
 
 
-@pytest.mark.asyncio
 async def test_dispatch_all_sequential_async_preserves_order() -> None:
     """Bulk dispatch returns (call, envelope) pairs in declaration order."""
     backend = MCPToolBackend(servers=[_spec()])

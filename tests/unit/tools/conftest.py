@@ -21,7 +21,7 @@ or MCP transports:
 Helper message builders (``_make_user_message``,
 ``_make_assistant_text_message``, ``_make_assistant_function_call_message``)
 produce the canonical envelope shape used by the OpenAI targets after the
-C6 normalization commit.
+normalization commit.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ class _CanonicalEnvelopeParser:
     (``original_value_data_type == "function_call"`` carrying a JSON object
     with ``type``/``call_id``/``name``/``arguments``).
 
-    Per-target parsers shipped in C7/C8 will reuse this shape; this stand-in
+    Per-target parsers shipped will reuse this shape; this stand-in
     keeps decorator tests independent of the real OpenAI parsers.
     """
 
