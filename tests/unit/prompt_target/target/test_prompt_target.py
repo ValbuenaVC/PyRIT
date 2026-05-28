@@ -22,6 +22,7 @@ from pyrit.prompt_target.common.target_capabilities import (
     UnsupportedCapabilityBehavior,
 )
 from pyrit.prompt_target.common.target_configuration import TargetConfiguration
+from pyrit.tools import LocalToolBackend, ToolEventBehavior, ToolEventPolicy
 
 
 @pytest.fixture
@@ -534,7 +535,13 @@ def test_identifier_includes_capability_params():
     # Config-derived fields are nested under ``target_configuration``, not
     # spread at the top level — guards against accidental re-flattening.
     assert "supports_multi_turn" not in params
-    assert set(target_config.keys()) == {"capabilities", "capability_policy", "normalization_pipeline"}
+    assert set(target_config.keys()) == {
+        "capabilities",
+        "capability_policy",
+        "normalization_pipeline",
+        "tool_event_policy",
+        "tool_backend",
+    }
 
     assert capabilities["supports_multi_turn"] is True
     assert capabilities["supports_multi_message_pieces"] is True
@@ -546,6 +553,8 @@ def test_identifier_includes_capability_params():
     assert capabilities["output_modalities"] == [["text"]]
     assert isinstance(target_config["capability_policy"], dict)
     assert isinstance(target_config["normalization_pipeline"], list)
+    assert target_config["tool_event_policy"] is None
+    assert target_config["tool_backend"] is None
 
 
 @pytest.mark.usefixtures("patch_central_database")
@@ -575,6 +584,62 @@ def test_identifier_differs_when_policy_differs():
                 CapabilityName.MULTI_TURN: UnsupportedCapabilityBehavior.ADAPT,
                 CapabilityName.SYSTEM_PROMPT: UnsupportedCapabilityBehavior.RAISE,
             }
+        ),
+    )
+
+    assert a.get_identifier().hash != b.get_identifier().hash
+
+
+@pytest.mark.usefixtures("patch_central_database")
+def test_identifier_differs_when_tool_backend_differs():
+    async def _f(_: dict) -> dict:
+        return {}
+
+    capabilities = TargetCapabilities(supports_tool_use=True)
+    backend_a = LocalToolBackend(
+        callables={"alpha": _f},
+        schemas=[{"name": "alpha", "parameters": {"type": "object"}}],
+    )
+    backend_b = LocalToolBackend(
+        callables={"beta": _f},
+        schemas=[{"name": "beta", "parameters": {"type": "object"}}],
+    )
+
+    a = OpenAIChatTarget(
+        model_name="gpt-4o",
+        endpoint="https://mock.azure.com/",
+        api_key="mock-api-key",
+        custom_configuration=TargetConfiguration(capabilities=capabilities, tool_backend=backend_a),
+    )
+    b = OpenAIChatTarget(
+        model_name="gpt-4o",
+        endpoint="https://mock.azure.com/",
+        api_key="mock-api-key",
+        custom_configuration=TargetConfiguration(capabilities=capabilities, tool_backend=backend_b),
+    )
+
+    assert a.get_identifier().hash != b.get_identifier().hash
+
+
+@pytest.mark.usefixtures("patch_central_database")
+def test_identifier_differs_when_tool_event_policy_differs():
+    capabilities = TargetCapabilities(supports_tool_use=True)
+    a = OpenAIChatTarget(
+        model_name="gpt-4o",
+        endpoint="https://mock.azure.com/",
+        api_key="mock-api-key",
+        custom_configuration=TargetConfiguration(
+            capabilities=capabilities,
+            tool_event_policy=ToolEventPolicy(behavior=ToolEventBehavior.EXECUTE),
+        ),
+    )
+    b = OpenAIChatTarget(
+        model_name="gpt-4o",
+        endpoint="https://mock.azure.com/",
+        api_key="mock-api-key",
+        custom_configuration=TargetConfiguration(
+            capabilities=capabilities,
+            tool_event_policy=ToolEventPolicy(behavior=ToolEventBehavior.RAISE),
         ),
     )
 

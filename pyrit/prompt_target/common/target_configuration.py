@@ -208,14 +208,20 @@ class TargetConfiguration:
         suitable for inclusion in a ``ComponentIdentifier``.
 
         The returned dict preserves the structure of ``TargetConfiguration``
-        — capabilities, policy, and pipeline are kept as nested sub-dicts rather
-        than flattened into the caller — so the identifier reflects the shape of
-        the object it describes.
+        — capabilities, policy, pipeline, tool-event policy, and tool backend
+        are kept as nested sub-dicts rather than flattened into the caller —
+        so the identifier reflects the shape of the object it describes.
 
         Two configurations that behave identically must produce equal dicts;
         configurations that differ in any identity-bearing field must produce
-        unequal dicts. Modality sets are flattened to sorted lists of sorted
-        lists so ordering is stable across runs.
+        unequal dicts. The tool-backend snapshot uses the backend class plus
+        the sorted list of advertised tool names; this means two backends of
+        the same type exposing the same tool set are treated as equivalent
+        for identifier purposes (their exact callables / transports are not
+        deterministically serializable).
+
+        Modality sets are flattened to sorted lists of sorted lists so
+        ordering is stable across runs.
 
         Returns:
             dict[str, Any]: The identifier parameters for this configuration.
@@ -223,23 +229,81 @@ class TargetConfiguration:
         caps = self._capabilities
         return {
             "capabilities": self._capabilities_to_identifier_params(caps),
-            # Only unsupported capabilities appear here. Policy entries for
-            # natively-supported capabilities are moot (the behavior never
-            # fires), and omitting them keeps identifiers stable when default
-            # policies expand to cover more capabilities.
             "capability_policy": {
                 capability.value: behavior.value
                 for capability, behavior in self._policy.behaviors.items()
                 if not caps.includes(capability=capability)
             },
-            # Stable, ordered representation of the resolved normalization
-            # pipeline. Captures the effect of ``normalizer_overrides`` since
-            # the pipeline is built from defaults + overrides.
             "normalization_pipeline": [
                 f"{type(normalizer).__module__}.{type(normalizer).__qualname__}"
                 for normalizer in self._pipeline.normalizers
             ],
+            "tool_event_policy": self._tool_event_policy_to_identifier_params(),
+            "tool_backend": self._tool_backend_to_identifier_params(),
         }
+
+    def _tool_event_policy_to_identifier_params(self) -> dict[str, Any] | None:
+        """
+        Snapshot the active tool-event policy as identifier params.
+
+        Returns:
+            dict[str, Any] | None: ``None`` when no policy is configured;
+                otherwise ``behavior`` and ``max_tool_iterations`` as plain
+                values.
+        """
+        if self._tool_event_policy is None:
+            return None
+        return {
+            "behavior": self._tool_event_policy.behavior.value,
+            "max_tool_iterations": self._tool_event_policy.max_tool_iterations,
+        }
+
+    def _tool_backend_to_identifier_params(self) -> dict[str, Any] | None:
+        """
+        Snapshot the active tool backend as identifier params.
+
+        Returns the backend's fully-qualified class name plus the sorted
+        list of tool names it advertises. Exact callables / transports are
+        not serialized; two backends of the same type exposing the same
+        tool set therefore produce equal identifier dicts.
+
+        Returns:
+            dict[str, Any] | None: ``None`` when no backend is configured;
+                otherwise ``type`` (fully-qualified class name) and
+                ``tools`` (sorted list of advertised tool names).
+        """
+        if self._tool_backend is None:
+            return None
+        backend_type = type(self._tool_backend)
+        return {
+            "type": f"{backend_type.__module__}.{backend_type.__qualname__}",
+            "tools": sorted(self._extract_tool_names(self._tool_backend.schemas)),
+        }
+
+    @staticmethod
+    def _extract_tool_names(schemas: list[dict[str, Any]]) -> list[str]:
+        """
+        Pull the ``name`` field from each schema, supporting both flat and
+        nested ``function`` envelopes.
+
+        Args:
+            schemas (list[dict[str, Any]]): The backend-provided schema list.
+
+        Returns:
+            list[str]: One name per schema. Schemas without a recoverable
+                name are skipped silently — the identifier is best-effort
+                for shape-quirky backends.
+        """
+        names: list[str] = []
+        for schema in schemas:
+            if not isinstance(schema, dict):
+                continue
+            name = schema.get("name")
+            if not name and isinstance(schema.get("function"), dict):
+                name = schema["function"].get("name")
+            if isinstance(name, str):
+                names.append(name)
+        return names
 
     @staticmethod
     def _capabilities_to_identifier_params(capabilities: TargetCapabilities) -> dict[str, Any]:
