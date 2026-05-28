@@ -53,9 +53,10 @@ from pyrit.tools.mcp_client import (
     RemoteMCPServerSpec,
 )
 from pyrit.tools.models import ToolCall, ToolEventBehavior, ToolEventPolicy, tool_loop
-from pyrit.tools.parsers import ToolCallParser
+from pyrit.tools.parsers import CanonicalEnvelopeParser, ToolCallParser
 
 __all__ = [
+    "CanonicalEnvelopeParser",
     "DockerMCPServerSpec",
     "LocalMCPServerSpec",
     "LocalToolBackend",
