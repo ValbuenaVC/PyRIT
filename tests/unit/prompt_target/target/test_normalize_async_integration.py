@@ -229,7 +229,7 @@ async def test_azure_ml_target_calls_normalize_async():
 
     with (
         patch.object(target.configuration, "normalize_async", new_callable=AsyncMock) as mock_normalize,
-        patch.object(target, "_complete_chat_async", new_callable=AsyncMock, return_value="response"),
+        patch.object(target, "_complete_chat_async", new_callable=AsyncMock, return_value={"output": "response"}),
     ):
         mock_normalize.return_value = [user_msg]
         await target.send_prompt_async(message=user_msg)
@@ -254,7 +254,9 @@ async def test_azure_ml_target_sends_normalized_to_complete_chat():
 
     with (
         patch.object(target.configuration, "normalize_async", new_callable=AsyncMock, return_value=[adapted_msg]),
-        patch.object(target, "_complete_chat_async", new_callable=AsyncMock, return_value="response") as mock_chat,
+        patch.object(
+            target, "_complete_chat_async", new_callable=AsyncMock, return_value={"output": "response"}
+        ) as mock_chat,
     ):
         await target.send_prompt_async(message=user_msg)
 
@@ -294,7 +296,7 @@ async def test_azure_ml_target_memory_not_mutated():
     mock_memory.get_conversation.return_value = memory_conversation
     target._memory = mock_memory
 
-    with patch.object(target, "_complete_chat_async", new_callable=AsyncMock, return_value="response"):
+    with patch.object(target, "_complete_chat_async", new_callable=AsyncMock, return_value={"output": "response"}):
         await target.send_prompt_async(message=user_msg)
 
     # Memory must still have original system message only (not mutated)
@@ -386,7 +388,9 @@ async def test_azure_ml_system_squash_via_configuration_pipeline():
     mock_memory.get_conversation.return_value = [system_msg]
     target._memory = mock_memory
 
-    with patch.object(target, "_complete_chat_async", new_callable=AsyncMock, return_value="response") as mock_chat:
+    with patch.object(
+        target, "_complete_chat_async", new_callable=AsyncMock, return_value={"output": "response"}
+    ) as mock_chat:
         await target.send_prompt_async(message=user_msg)
 
         # _complete_chat_async should receive normalized messages (system squashed into user)

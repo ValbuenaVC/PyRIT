@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import json
 import logging
 from typing import Any
 
@@ -18,6 +19,7 @@ from pyrit.identifiers import ComponentIdentifier
 from pyrit.message_normalizer import ChatMessageNormalizer, MessageListNormalizer
 from pyrit.models import (
     Message,
+    MessagePiece,
     construct_response_from_request,
 )
 from pyrit.prompt_target.common.prompt_target import PromptTarget
@@ -29,6 +31,7 @@ from pyrit.prompt_target.common.target_capabilities import (
 )
 from pyrit.prompt_target.common.target_configuration import TargetConfiguration
 from pyrit.prompt_target.common.utils import limit_requests_per_minute, validate_temperature, validate_top_p
+from pyrit.tools import ToolBackend, ToolCallParser
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,8 @@ class AzureMLChatTarget(PromptTarget):
         repetition_penalty: float = 1.0,
         max_requests_per_minute: int | None = None,
         custom_configuration: TargetConfiguration | None = None,
+        tool_parser: ToolCallParser | None = None,
+        tool_backend: ToolBackend | None = None,
         **param_kwargs: Any,
     ) -> None:
         """
@@ -100,6 +105,17 @@ class AzureMLChatTarget(PromptTarget):
                 will be capped at the value provided.
             custom_configuration (TargetConfiguration | None): Override the default configuration for this target
                 instance. Useful for targets whose capabilities depend on deployment configuration.
+            tool_parser (ToolCallParser | None): When supplied, the target opts into PyRIT's
+                ``@tool_loop`` and uses this parser to extract pending tool calls from the
+                response. Supplying a parser also enables the ``supports_tool_use`` capability
+                on the default configuration so callers don't have to construct a custom
+                configuration just to enable the loop. The parser's expectations about the
+                deployment's response shape MUST line up with the contract documented in
+                ``doc/code/targets/`` for tool-capable Azure ML deployments.
+            tool_backend (ToolBackend | None): Convenience kwarg that wires a tool backend
+                onto ``custom_configuration.tool_backend``. Equivalent to constructing a
+                ``TargetConfiguration`` with the backend assigned. When ``custom_configuration``
+                already specifies a backend, the kwarg is rejected.
             **param_kwargs: Additional parameters to pass to the model for generating responses. Example
                 parameters can be found here: https://huggingface.co/docs/api-inference/tasks/text-generation.
                 Note that the link above may not be comprehensive, and specific acceptable parameters may be
@@ -145,6 +161,18 @@ class AzureMLChatTarget(PromptTarget):
                 normalizer_overrides={CapabilityName.SYSTEM_PROMPT: message_normalizer},
             )
 
+        # Enable tool-use capability when a parser is supplied so callers
+        # don't need to construct a custom_configuration just to opt in.
+        if tool_parser is not None:
+            custom_configuration = self._enable_tool_use(configuration=custom_configuration)
+
+        # tool_backend is a convenience kwarg; install it into the configuration.
+        if tool_backend is not None:
+            custom_configuration = self._install_tool_backend(
+                configuration=custom_configuration,
+                tool_backend=tool_backend,
+            )
+
         PromptTarget.__init__(
             self,
             max_requests_per_minute=max_requests_per_minute,
@@ -163,6 +191,76 @@ class AzureMLChatTarget(PromptTarget):
         self._top_p = top_p
         self._repetition_penalty = repetition_penalty
         self._extra_parameters = param_kwargs
+        self._tool_parser_instance = tool_parser
+
+    def _enable_tool_use(self, *, configuration: TargetConfiguration | None) -> TargetConfiguration:
+        """
+        Return a configuration whose capabilities include ``supports_tool_use=True``.
+
+        When ``configuration`` already has the capability set, returns it as-is.
+        Otherwise rebuilds the capabilities with ``supports_tool_use=True`` flipped
+        on and preserves every other field.
+
+        Args:
+            configuration (TargetConfiguration | None): The user-supplied configuration,
+                or ``None`` to start from the class default.
+
+        Returns:
+            TargetConfiguration: A configuration whose capabilities include
+                ``supports_tool_use=True``.
+        """
+        source = configuration if configuration is not None else self._DEFAULT_CONFIGURATION
+        caps = source.capabilities
+        if caps.includes(capability=CapabilityName.TOOL_USE):
+            return source
+        updated_caps = TargetCapabilities(
+            supports_multi_message_pieces=caps.supports_multi_message_pieces,
+            supports_editable_history=caps.supports_editable_history,
+            supports_multi_turn=caps.supports_multi_turn,
+            supports_system_prompt=caps.supports_system_prompt,
+            supports_tool_use=True,
+            input_modalities=caps.input_modalities,
+            output_modalities=caps.output_modalities,
+        )
+        return TargetConfiguration(
+            capabilities=updated_caps,
+            policy=source.policy,
+            tool_event_policy=source.tool_event_policy,
+            tool_backend=source.tool_backend,
+        )
+
+    @staticmethod
+    def _install_tool_backend(
+        *,
+        configuration: TargetConfiguration | None,
+        tool_backend: ToolBackend,
+    ) -> TargetConfiguration:
+        """
+        Install ``tool_backend`` onto ``configuration``. Rejects double-supply.
+
+        Args:
+            configuration (TargetConfiguration | None): The user-supplied configuration.
+            tool_backend (ToolBackend): The backend to install.
+
+        Returns:
+            TargetConfiguration: The same ``configuration`` instance with the
+                backend installed.
+
+        Raises:
+            ValueError: When ``configuration`` is ``None`` (no capability to attach
+                to), or when ``configuration.tool_backend`` is already set to a
+                different backend.
+        """
+        if configuration is None:
+            raise ValueError(
+                "tool_backend kwarg requires capabilities.supports_tool_use=True; "
+                "supply tool_parser= so the default capabilities flip TOOL_USE on, "
+                "or build a custom_configuration explicitly."
+            )
+        if configuration.tool_backend is not None and configuration.tool_backend is not tool_backend:
+            raise ValueError("tool_backend kwarg conflicts with custom_configuration.tool_backend; supply only one.")
+        configuration.tool_backend = tool_backend
+        return configuration
 
     def _build_identifier(self) -> ComponentIdentifier:
         """
@@ -224,17 +322,10 @@ class AzureMLChatTarget(PromptTarget):
         logger.info(f"Sending the following prompt to the prompt target: {request}")
 
         try:
-            resp_text = await self._complete_chat_async(
-                messages=normalized_conversation,
-            )
-
-            if not resp_text:
-                raise EmptyResponseException(message="The chat returned an empty response.")
-
-            response_entry = construct_response_from_request(request=request, response_text_pieces=[resp_text])
+            response_body = await self._complete_chat_async(messages=normalized_conversation)
+            response_entry = self._materialize_response(response=response_body, request=request)
         except HTTPStatusError as hse:
             if hse.response.status_code == 400:
-                # Handle Bad Request
                 response_entry = handle_bad_request_exception(response_text=hse.response.text, request=request)
             elif hse.response.status_code == 429:
                 raise RateLimitException from hse
@@ -248,21 +339,23 @@ class AzureMLChatTarget(PromptTarget):
     async def _complete_chat_async(
         self,
         messages: list[Message],
-    ) -> str:
+    ) -> dict[str, Any]:
         """
-        Completes a chat interaction by generating a response to the given input prompt.
-
-        This is a synchronous wrapper for the asynchronous _generate_and_extract_response method.
+        Issue a single chat request and return the parsed JSON response body.
 
         Args:
             messages (list[Message]): The message objects containing the role and content.
 
+        Returns:
+            dict[str, Any]: The deserialized response body. Always includes an
+                ``output`` field (per the AML scoring-script contract). Tool-capable
+                deployments may additionally include a ``tool_calls`` field carrying
+                canonical envelopes.
+
         Raises:
             EmptyResponseException: If the response from the chat is empty.
+            ValueError: If the parsed response body is missing the ``output`` field.
             Exception: For any other errors during the process.
-
-        Returns:
-            str: The generated response message.
         """
         headers = self._get_headers()
         payload = await self._construct_http_body_async(messages)
@@ -271,15 +364,52 @@ class AzureMLChatTarget(PromptTarget):
             endpoint_uri=self._endpoint, method="POST", request_body=payload, headers=headers
         )
 
-        try:
-            return str(response.json()["output"])
-        except Exception as e:
-            if response.json() == {}:
-                raise EmptyResponseException(message="The chat returned an empty response.") from e
-            raise type(e)(
-                f"Exception obtaining response from the target. Returned response: {response.json()}. "
-                f"Exception: {str(e)}"
-            ) from e
+        body = response.json()
+        if not isinstance(body, dict) or body == {}:
+            raise EmptyResponseException(message="The chat returned an empty response.")
+        if "output" not in body:
+            raise ValueError(f"Response from the target did not include 'output'. Returned response: {body}.")
+        return body
+
+    def _materialize_response(self, *, response: dict[str, Any], request: MessagePiece) -> Message:
+        """
+        Build a ``Message`` from the parsed response body, handling tool calls.
+
+        The deployment may include a ``tool_calls`` list when the model emits
+        canonical envelopes. Each envelope becomes its own ``function_call``
+        MessagePiece so the ``CanonicalEnvelopeParser`` shipped with PyRIT can
+        recognize it without further translation.
+
+        Args:
+            response (dict[str, Any]): The parsed response body returned from the endpoint.
+            request (MessagePiece): The request piece used to stamp identity onto each
+                response piece.
+
+        Returns:
+            Message: The materialized response message. Has at least one piece;
+                when both ``output`` and ``tool_calls`` are present, the text piece
+                comes first followed by one function_call piece per envelope.
+
+        Raises:
+            EmptyResponseException: If the response has neither output text nor tool calls.
+        """
+        text = str(response.get("output") or "")
+        tool_envelopes = response.get("tool_calls") or []
+        if not text and not tool_envelopes:
+            raise EmptyResponseException(message="The chat returned an empty response.")
+
+        pieces: list[MessagePiece] = []
+        if text:
+            text_piece = construct_response_from_request(request=request, response_text_pieces=[text]).message_pieces[0]
+            pieces.append(text_piece)
+        for envelope in tool_envelopes:
+            fc_piece = construct_response_from_request(
+                request=request,
+                response_text_pieces=[json.dumps(envelope, separators=(",", ":"))],
+                response_type="function_call",
+            ).message_pieces[0]
+            pieces.append(fc_piece)
+        return Message(message_pieces=pieces, skip_validation=True)
 
     async def _construct_http_body_async(
         self,
@@ -297,10 +427,7 @@ class AzureMLChatTarget(PromptTarget):
         wire_format = ChatMessageNormalizer()
         messages_dict = await wire_format.normalize_to_dicts_async(messages)
 
-        # Parameters include additional ones passed in through **kwargs. Those not accepted by the model will
-        # be ignored. We only include commonly supported parameters here - model-specific parameters like
-        # stop sequences should be passed via **param_kwargs since different models use different EOS tokens.
-        return {
+        body: dict[str, Any] = {
             "input_data": {
                 "input_string": messages_dict,
                 "parameters": {
@@ -312,6 +439,29 @@ class AzureMLChatTarget(PromptTarget):
                 | self._extra_parameters,
             }
         }
+        schemas = self._tool_schemas()
+        if schemas:
+            body["tools"] = schemas
+        return body
+
+    @property
+    def _tool_parser(self) -> ToolCallParser | None:
+        """Return the parser supplied at construction, if any."""
+        return self._tool_parser_instance
+
+    def _tool_schemas(self) -> list[dict[str, Any]]:
+        """
+        Wrap the backend's schemas in the OpenAI Chat Completions ``tools`` shape.
+
+        Tool-capable deployments are expected to forward ``tools`` into
+        ``tokenizer.apply_chat_template`` after unwrapping the ``{"type":
+        "function", "function": {...}}`` envelope.
+
+        Returns:
+            list[dict[str, Any]]: One descriptor per advertised tool, or an
+                empty list when no backend is configured.
+        """
+        return [{"type": "function", "function": schema} for schema in super()._tool_schemas()]
 
     def _get_headers(self) -> dict[str, str]:
         """

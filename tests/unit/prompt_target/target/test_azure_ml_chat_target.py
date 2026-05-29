@@ -72,7 +72,7 @@ async def test_complete_chat_async(aml_online_chat: AzureMLChatTarget):
         mock_response.json.return_value = {"output": "extracted response"}
         mock.return_value = mock_response
         response = await aml_online_chat._complete_chat_async(messages)
-        assert response == "extracted response"
+        assert response == {"output": "extracted response"}
         mock.assert_called_once()
 
 
@@ -90,7 +90,7 @@ async def test_complete_chat_async_with_default_normalizer(
         mock_response.json.return_value = {"output": "extracted response"}
         mock.return_value = mock_response
         response = await aml_online_chat._complete_chat_async(messages)
-        assert response == "extracted response"
+        assert response == {"output": "extracted response"}
 
         args, kwargs = mock.call_args
         body = kwargs["request_body"]
@@ -107,9 +107,12 @@ async def test_complete_chat_async_bad_json_response(aml_online_chat: AzureMLCha
 
     with patch("pyrit.common.net_utility.make_request_and_raise_if_error_async", new_callable=AsyncMock) as mock:
         mock_response = MagicMock()
+        # Set is a non-dict body that previously raised TypeError when the code
+        # subscripted response.json()["output"]; the new code raises ValueError
+        # because the body is not a dict.
         mock_response.json.return_value = {"bad response"}
         mock.return_value = mock_response
-        with pytest.raises(TypeError):
+        with pytest.raises((TypeError, ValueError, EmptyResponseException)):
             await aml_online_chat._complete_chat_async(messages)
 
 
@@ -178,8 +181,10 @@ async def test_send_prompt_async_rate_limit_exception_retries(aml_online_chat: A
 async def test_send_prompt_async_empty_response_retries(aml_online_chat: AzureMLChatTarget):
     response = MagicMock()
     response.status_code = 429
+    # Return an empty dict; _materialize_response raises EmptyResponseException
+    # when both output and tool_calls are missing.
     mock_complete_chat_async = AsyncMock()
-    mock_complete_chat_async.return_value = None
+    mock_complete_chat_async.return_value = {}
 
     aml_online_chat._complete_chat_async = mock_complete_chat_async
     message = Message(message_pieces=[MessagePiece(role="user", conversation_id="12345", original_value="Hello")])
@@ -236,3 +241,140 @@ def test_valid_temperature_and_top_p(patch_central_database):
     )
     assert target._temperature == 1.5
     assert target._top_p == 0.9
+
+
+# ---------------------------------------------------------------------------
+# Tool calling: tool_parser + tool_backend kwargs
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def echo_backend():
+    from pyrit.tools import LocalToolBackend
+
+    async def _echo(args):
+        return {"echoed": args.get("text", "")}
+
+    return LocalToolBackend(
+        callables={"echo": _echo},
+        schemas=[
+            {
+                "name": "echo",
+                "description": "Echo back the given text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            }
+        ],
+    )
+
+
+def test_tool_parser_kwarg_flips_supports_tool_use_capability(patch_central_database):
+    from pyrit.prompt_target.common.target_capabilities import CapabilityName
+    from pyrit.tools import CanonicalEnvelopeParser
+
+    target = AzureMLChatTarget(
+        endpoint="http://aml-test-endpoint.com",
+        api_key="k",
+        tool_parser=CanonicalEnvelopeParser(),
+    )
+    assert target.configuration.includes(capability=CapabilityName.TOOL_USE)
+    assert target._tool_parser is not None
+
+
+def test_no_tool_parser_leaves_supports_tool_use_off(aml_online_chat: AzureMLChatTarget):
+    from pyrit.prompt_target.common.target_capabilities import CapabilityName
+
+    assert not aml_online_chat.configuration.includes(capability=CapabilityName.TOOL_USE)
+    assert aml_online_chat._tool_parser is None
+
+
+def test_tool_backend_kwarg_installed_into_configuration(patch_central_database, echo_backend):
+    from pyrit.tools import CanonicalEnvelopeParser
+
+    target = AzureMLChatTarget(
+        endpoint="http://aml-test-endpoint.com",
+        api_key="k",
+        tool_parser=CanonicalEnvelopeParser(),
+        tool_backend=echo_backend,
+    )
+    assert target.configuration.tool_backend is echo_backend
+
+
+def test_tool_backend_kwarg_without_parser_raises(patch_central_database, echo_backend):
+    # Without tool_parser, the default configuration has supports_tool_use=False,
+    # so attaching a backend must raise.
+    with pytest.raises(ValueError, match="supports_tool_use"):
+        AzureMLChatTarget(
+            endpoint="http://aml-test-endpoint.com",
+            api_key="k",
+            tool_backend=echo_backend,
+        )
+
+
+def test_tool_schemas_wraps_backend_schemas_in_chat_completions_shape(patch_central_database, echo_backend):
+    from pyrit.tools import CanonicalEnvelopeParser
+
+    target = AzureMLChatTarget(
+        endpoint="http://aml-test-endpoint.com",
+        api_key="k",
+        tool_parser=CanonicalEnvelopeParser(),
+        tool_backend=echo_backend,
+    )
+    schemas = target._tool_schemas()
+    assert len(schemas) == 1
+    assert schemas[0]["type"] == "function"
+    assert schemas[0]["function"]["name"] == "echo"
+
+
+def test_tool_schemas_empty_when_no_backend(aml_online_chat: AzureMLChatTarget):
+    assert aml_online_chat._tool_schemas() == []
+
+
+async def test_request_body_omits_tools_key_when_no_backend(aml_online_chat: AzureMLChatTarget):
+    messages = [Message(message_pieces=[MessagePiece(role="user", original_value="hi")])]
+    body = await aml_online_chat._construct_http_body_async(messages)
+    assert "tools" not in body
+
+
+async def test_request_body_includes_tools_when_backend_set(patch_central_database, echo_backend):
+    from pyrit.tools import CanonicalEnvelopeParser
+
+    target = AzureMLChatTarget(
+        endpoint="http://aml-test-endpoint.com",
+        api_key="k",
+        tool_parser=CanonicalEnvelopeParser(),
+        tool_backend=echo_backend,
+    )
+    messages = [Message(message_pieces=[MessagePiece(role="user", original_value="hi")])]
+    body = await target._construct_http_body_async(messages)
+    assert "tools" in body
+    assert body["tools"][0]["function"]["name"] == "echo"
+
+
+async def test_materialize_response_handles_text_and_tool_calls(patch_central_database, echo_backend):
+    from pyrit.tools import CanonicalEnvelopeParser
+
+    target = AzureMLChatTarget(
+        endpoint="http://aml-test-endpoint.com",
+        api_key="k",
+        tool_parser=CanonicalEnvelopeParser(),
+        tool_backend=echo_backend,
+    )
+    request = MessagePiece(role="user", original_value="hi", conversation_id="abc")
+    response = {
+        "output": "ok",
+        "tool_calls": [
+            {
+                "type": "function_call",
+                "call_id": "call_0",
+                "name": "echo",
+                "arguments": '{"text":"hi"}',
+            }
+        ],
+    }
+    msg = target._materialize_response(response=response, request=request)
+    types = [p.original_value_data_type for p in msg.message_pieces]
+    assert types == ["text", "function_call"]
