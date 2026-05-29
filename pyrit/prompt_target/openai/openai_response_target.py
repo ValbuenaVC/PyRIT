@@ -38,7 +38,6 @@ from pyrit.prompt_target.openai.openai_target import OpenAITarget
 from pyrit.tools import (
     CanonicalEnvelopeParser,
     LocalToolBackend,
-    ToolBackend,
     ToolCallParser,
     ToolEventBehavior,
     ToolEventPolicy,
@@ -731,10 +730,7 @@ class OpenAIResponseTarget(OpenAITarget, PromptTarget):
             list[dict[str, Any]]: One descriptor per advertised tool, or an
                 empty list when no backend is configured.
         """
-        backend: ToolBackend | None = self.configuration.tool_backend
-        if backend is None:
-            return []
-        return [{"type": "function", **schema} for schema in backend.schemas]
+        return [{"type": "function", **schema} for schema in super()._tool_schemas()]
 
     def _parse_response_output_section(
         self, *, section: Any, message_piece: MessagePiece, error: Optional[PromptResponseError]

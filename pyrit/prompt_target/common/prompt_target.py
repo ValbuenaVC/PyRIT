@@ -162,17 +162,22 @@ class PromptTarget(Identifiable):
         """
         Outbound tool-schema list sent on the next request to the model.
 
-        Targets that participate in the tool-use loop override this method
-        to translate the active :class:`~pyrit.tools.ToolBackend.schemas`
-        into the wire format their model expects (Responses API vs. Chat
-        Completions API vs. anything else). The base default returns an
-        empty list, which means no schemas are advertised.
+        The default reads the configured ``tool_backend.schemas`` verbatim.
+        Targets whose wire format wraps schemas differently (e.g., OpenAI
+        Chat Completions requires ``{"type": "function", "function": {...}}``;
+        the OpenAI Responses API requires ``{"type": "function", **schema}``
+        spread at the top level) override this method to apply the
+        per-target translation.
 
         Returns:
-            list[dict[str, Any]]: One schema per advertised tool, in the
-            target-specific wire format. Empty by default.
+            list[dict[str, Any]]: One schema per advertised tool, in
+                whatever wire format this target expects. Empty when no
+                backend is configured.
         """
-        return []
+        backend = self.configuration.tool_backend
+        if backend is None:
+            return []
+        return list(backend.schemas)
 
     def _validate_request(self, *, normalized_conversation: list[Message]) -> None:
         """
