@@ -578,3 +578,163 @@ async def test_effective_generation_config_in_metadata():
     assert effective_config["temperature"] == 1.0
     # Model defaults should also be present
     assert effective_config["eos_token_id"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tool calling (F2): tool_parser + tool_backend kwargs
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def echo_backend():
+    from pyrit.tools import LocalToolBackend
+
+    async def _echo(args):
+        return {"echoed": args.get("text", "")}
+
+    return LocalToolBackend(
+        callables={"echo": _echo},
+        schemas=[
+            {
+                "name": "echo",
+                "description": "Echo back the given text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            }
+        ],
+    )
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_tool_parser_kwarg_flips_supports_tool_use_capability(patch_central_database):
+    from pyrit.prompt_target.common.target_capabilities import CapabilityName
+    from pyrit.tools import InlineToolCallParser
+
+    target = HuggingFaceChatTarget(model_id="test_model", use_cuda=False, tool_parser=InlineToolCallParser())
+    assert target.configuration.includes(capability=CapabilityName.TOOL_USE)
+    assert target._tool_parser is not None
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_no_tool_parser_leaves_supports_tool_use_off(patch_central_database):
+    from pyrit.prompt_target.common.target_capabilities import CapabilityName
+
+    target = HuggingFaceChatTarget(model_id="test_model", use_cuda=False)
+    assert not target.configuration.includes(capability=CapabilityName.TOOL_USE)
+    assert target._tool_parser is None
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_tool_backend_kwarg_installed_into_configuration(patch_central_database, echo_backend):
+    from pyrit.tools import InlineToolCallParser
+
+    target = HuggingFaceChatTarget(
+        model_id="test_model",
+        use_cuda=False,
+        tool_parser=InlineToolCallParser(),
+        tool_backend=echo_backend,
+    )
+    assert target.configuration.tool_backend is echo_backend
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_tool_backend_kwarg_without_parser_raises(patch_central_database, echo_backend):
+    with pytest.raises(ValueError, match="supports_tool_use"):
+        HuggingFaceChatTarget(model_id="test_model", use_cuda=False, tool_backend=echo_backend)
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_tool_schemas_returns_bare_backend_schemas(patch_central_database, echo_backend):
+    """HF chat templates accept bare schemas (no OpenAI envelope)."""
+    from pyrit.tools import InlineToolCallParser
+
+    target = HuggingFaceChatTarget(
+        model_id="test_model",
+        use_cuda=False,
+        tool_parser=InlineToolCallParser(),
+        tool_backend=echo_backend,
+    )
+    schemas = target._tool_schemas()
+    assert len(schemas) == 1
+    assert schemas[0]["name"] == "echo"
+    # Unlike AzureMLChatTarget, no {"type": "function", "function": {...}} wrapper.
+    assert "function" not in schemas[0]
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_build_chat_messages_translates_function_call_piece(patch_central_database):
+    target = HuggingFaceChatTarget(model_id="test_model", use_cuda=False)
+    fc_envelope = {
+        "type": "function_call",
+        "call_id": "call_0",
+        "name": "echo",
+        "arguments": '{"text":"hi"}',
+    }
+    msg = Message(
+        message_pieces=[
+            MessagePiece(
+                role="assistant",
+                original_value=json.dumps(fc_envelope),
+                original_value_data_type="function_call",
+                converted_value_data_type="function_call",
+            )
+        ]
+    )
+    chat_messages = target._build_chat_messages(normalized_conversation=[msg])
+    assert len(chat_messages) == 1
+    assert chat_messages[0]["role"] == "assistant"
+    assert chat_messages[0]["tool_calls"][0]["function"]["name"] == "echo"
+    assert chat_messages[0]["tool_calls"][0]["function"]["arguments"] == '{"text":"hi"}'
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_build_chat_messages_translates_function_call_output_piece(patch_central_database):
+    target = HuggingFaceChatTarget(model_id="test_model", use_cuda=False)
+    fco_envelope = {
+        "type": "function_call_output",
+        "call_id": "call_0",
+        "output": '{"echoed":"hi"}',
+    }
+    msg = Message(
+        message_pieces=[
+            MessagePiece(
+                role="tool",
+                original_value=json.dumps(fco_envelope),
+                original_value_data_type="function_call_output",
+                converted_value_data_type="function_call_output",
+            )
+        ],
+        skip_validation=True,
+    )
+    chat_messages = target._build_chat_messages(normalized_conversation=[msg])
+    assert len(chat_messages) == 1
+    assert chat_messages[0]["role"] == "tool"
+    assert chat_messages[0]["tool_call_id"] == "call_0"
+    assert chat_messages[0]["content"] == '{"echoed":"hi"}'
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_apply_chat_template_forwards_tools_when_present(patch_central_database, echo_backend):
+    from pyrit.tools import InlineToolCallParser
+
+    target = HuggingFaceChatTarget(
+        model_id="test_model",
+        use_cuda=False,
+        tool_parser=InlineToolCallParser(),
+        tool_backend=echo_backend,
+    )
+    target._apply_chat_template([{"role": "user", "content": "hi"}])
+    call_kwargs = target.tokenizer.apply_chat_template.call_args.kwargs
+    assert "tools" in call_kwargs
+    assert call_kwargs["tools"][0]["name"] == "echo"
+
+
+@pytest.mark.skipif(not is_torch_installed(), reason="torch is not installed")
+def test_apply_chat_template_omits_tools_when_no_backend(patch_central_database):
+    target = HuggingFaceChatTarget(model_id="test_model", use_cuda=False)
+    target._apply_chat_template([{"role": "user", "content": "hi"}])
+    call_kwargs = target.tokenizer.apply_chat_template.call_args.kwargs
+    assert "tools" not in call_kwargs

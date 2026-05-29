@@ -22,9 +22,13 @@ from pyrit.exceptions import EmptyResponseException, pyrit_target_retry
 from pyrit.identifiers import ComponentIdentifier
 from pyrit.models import Message, construct_response_from_request
 from pyrit.prompt_target.common.prompt_target import PromptTarget
-from pyrit.prompt_target.common.target_capabilities import TargetCapabilities
+from pyrit.prompt_target.common.target_capabilities import (
+    CapabilityName,
+    TargetCapabilities,
+)
 from pyrit.prompt_target.common.target_configuration import TargetConfiguration
 from pyrit.prompt_target.common.utils import limit_requests_per_minute
+from pyrit.tools import ToolBackend, ToolCallParser
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,8 @@ class HuggingFaceChatTarget(PromptTarget):
         attn_implementation: str | None = None,
         max_requests_per_minute: int | None = None,
         custom_configuration: TargetConfiguration | None = None,
+        tool_parser: ToolCallParser | None = None,
+        tool_backend: ToolBackend | None = None,
     ) -> None:
         """
         Initialize the HuggingFaceChatTarget.
@@ -108,12 +114,31 @@ class HuggingFaceChatTarget(PromptTarget):
             max_requests_per_minute (int | None): The maximum number of requests per minute. Defaults to None.
             custom_configuration (TargetConfiguration | None): Override the default configuration for this target
                 instance. Defaults to None.
+            tool_parser (ToolCallParser | None): When supplied, the target opts into PyRIT's
+                ``@tool_loop`` and uses this parser to extract pending tool calls from each
+                generated response. Supplying a parser also enables ``supports_tool_use=True``
+                on the default capabilities so callers don't need a custom_configuration just
+                to opt in. ``InlineToolCallParser`` is the typical choice because the local
+                tokenizer emits tool calls as inline marker-delimited JSON; supply a different
+                parser when targeting a chat template with a different marker syntax.
+            tool_backend (ToolBackend | None): Convenience kwarg that installs the backend
+                onto ``custom_configuration.tool_backend``.
 
         Raises:
             ValueError: If neither or both of `model_id` and `model_path` are provided.
             RuntimeError: If torch cannot be imported or if CUDA is requested but not available.
         """
         model_name = model_id if model_id else model_path if model_path else ""
+
+        # Enable tool-use capability when a parser is supplied, BEFORE super().__init__
+        # so the configuration is correct by the time the base class records it.
+        if tool_parser is not None:
+            custom_configuration = self._enable_tool_use(configuration=custom_configuration)
+        if tool_backend is not None:
+            custom_configuration = self._install_tool_backend(
+                configuration=custom_configuration,
+                tool_backend=tool_backend,
+            )
 
         super().__init__(
             max_requests_per_minute=max_requests_per_minute,
@@ -174,6 +199,81 @@ class HuggingFaceChatTarget(PromptTarget):
             raise RuntimeError("CUDA requested but not available.")
 
         self.load_model_and_tokenizer_task = asyncio.create_task(self.load_model_and_tokenizer())
+        self._tool_parser_instance = tool_parser
+
+    @classmethod
+    def _enable_tool_use(cls, *, configuration: TargetConfiguration | None) -> TargetConfiguration:
+        """
+        Return a configuration whose capabilities include ``supports_tool_use=True``.
+
+        When ``configuration`` already has the capability set, returns it as-is.
+        Otherwise rebuilds the capabilities with ``supports_tool_use=True`` and
+        preserves every other field.
+
+        Args:
+            configuration (TargetConfiguration | None): The user-supplied configuration,
+                or ``None`` to start from the class default.
+
+        Returns:
+            TargetConfiguration: A configuration whose capabilities include
+                ``supports_tool_use=True``.
+        """
+        source = configuration if configuration is not None else cls._DEFAULT_CONFIGURATION
+        caps = source.capabilities
+        if caps.includes(capability=CapabilityName.TOOL_USE):
+            return source
+        updated_caps = TargetCapabilities(
+            supports_multi_message_pieces=caps.supports_multi_message_pieces,
+            supports_editable_history=caps.supports_editable_history,
+            supports_multi_turn=caps.supports_multi_turn,
+            supports_system_prompt=caps.supports_system_prompt,
+            supports_tool_use=True,
+            input_modalities=caps.input_modalities,
+            output_modalities=caps.output_modalities,
+        )
+        return TargetConfiguration(
+            capabilities=updated_caps,
+            policy=source.policy,
+            tool_event_policy=source.tool_event_policy,
+            tool_backend=source.tool_backend,
+        )
+
+    @staticmethod
+    def _install_tool_backend(
+        *,
+        configuration: TargetConfiguration | None,
+        tool_backend: ToolBackend,
+    ) -> TargetConfiguration:
+        """
+        Install ``tool_backend`` onto ``configuration``. Rejects double-supply.
+
+        Args:
+            configuration (TargetConfiguration | None): The user-supplied configuration.
+            tool_backend (ToolBackend): The backend to install.
+
+        Returns:
+            TargetConfiguration: The same ``configuration`` instance with the
+                backend installed.
+
+        Raises:
+            ValueError: When ``configuration`` is ``None``, or when
+                ``configuration.tool_backend`` is already set to a different backend.
+        """
+        if configuration is None:
+            raise ValueError(
+                "tool_backend kwarg requires capabilities.supports_tool_use=True; "
+                "supply tool_parser= so the default capabilities flip TOOL_USE on, "
+                "or build a custom_configuration explicitly."
+            )
+        if configuration.tool_backend is not None and configuration.tool_backend is not tool_backend:
+            raise ValueError("tool_backend kwarg conflicts with custom_configuration.tool_backend; supply only one.")
+        configuration.tool_backend = tool_backend
+        return configuration
+
+    @property
+    def _tool_parser(self) -> ToolCallParser | None:
+        """Return the parser supplied at construction, if any."""
+        return self._tool_parser_instance
 
     def _build_identifier(self) -> ComponentIdentifier:
         """
@@ -401,26 +501,78 @@ class HuggingFaceChatTarget(PromptTarget):
             logger.error(f"Error occurred during inference: {e}")
             raise
 
-    def _build_chat_messages(self, *, normalized_conversation: list[Message]) -> list[dict[str, str]]:
+    def _build_chat_messages(self, *, normalized_conversation: list[Message]) -> list[dict[str, Any]]:
         """
         Build a list of chat message dicts from the full normalized conversation.
 
         Includes system, user, and assistant messages from the conversation history
-        so that the model's chat template receives the complete context.
+        so that the model's chat template receives the complete context. When the
+        conversation contains tool-call envelopes (produced by ``@tool_loop``), they
+        are converted into the chat-template's tool message shape:
+
+        * ``function_call`` pieces become an ``assistant`` message with a
+          ``tool_calls`` list (matching the HuggingFace ``apply_chat_template``
+          convention; templates that don't recognize ``tool_calls`` fall back to
+          rendering the embedded JSON as content).
+        * ``function_call_output`` pieces become a ``role=tool`` message with the
+          tool result as content and ``tool_call_id`` carried for templates that
+          need it.
 
         Args:
             normalized_conversation (list[Message]): The full normalized conversation.
 
         Returns:
-            list[dict[str, str]]: Messages formatted for the chat template.
+            list[dict[str, Any]]: Messages formatted for the chat template.
         """
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         for msg in normalized_conversation:
-            piece = msg.message_pieces[0]
-            role = piece.api_role
-            content = piece.converted_value or ""
-            messages.append({"role": role, "content": content})
+            for piece in msg.message_pieces:
+                tool_dict = self._maybe_tool_chat_message(piece=piece)
+                if tool_dict is not None:
+                    messages.append(tool_dict)
+                    continue
+                role = piece.api_role
+                content = piece.converted_value or ""
+                messages.append({"role": role, "content": content})
         return messages
+
+    @staticmethod
+    def _maybe_tool_chat_message(*, piece: Any) -> dict[str, Any] | None:
+        """
+        Convert a ``function_call`` or ``function_call_output`` piece to a chat-template message.
+
+        Args:
+            piece (Any): The MessagePiece to inspect.
+
+        Returns:
+            dict[str, Any] | None: A chat-template message dict (``assistant`` with
+                ``tool_calls``, or ``role=tool`` with ``tool_call_id``) when the
+                piece carries a tool envelope, otherwise ``None``.
+        """
+        data_type = piece.converted_value_data_type or piece.original_value_data_type
+        if data_type not in ("function_call", "function_call_output"):
+            return None
+        envelope = json.loads(piece.converted_value)
+        if data_type == "function_call":
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": envelope.get("call_id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": envelope.get("name", ""),
+                            "arguments": envelope.get("arguments", "{}"),
+                        },
+                    }
+                ],
+            }
+        return {
+            "role": "tool",
+            "content": str(envelope.get("output", "")),
+            "tool_call_id": envelope.get("call_id", ""),
+        }
 
     def set_random_seed(self, random_seed: int) -> None:
         """
@@ -520,6 +672,13 @@ class HuggingFaceChatTarget(PromptTarget):
         """
         Apply the chat template to the input messages and tokenize them.
 
+        When ``self._tool_schemas()`` is non-empty, the schemas are forwarded
+        into ``apply_chat_template`` so tool-trained chat templates can render
+        the model-family-specific tools block (Qwen wraps in ``<tools>...</tools>``,
+        Llama uses a system-message preamble, etc.). The model can then emit
+        tool calls in its native marker syntax which the user-supplied
+        ``tool_parser`` extracts.
+
         Args:
             messages: The input messages to apply the chat template to.
 
@@ -533,6 +692,11 @@ class HuggingFaceChatTarget(PromptTarget):
         if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template is not None:
             logger.info("Tokenizer has a chat template. Applying it to the input messages.")
 
+            template_kwargs: dict[str, Any] = {}
+            schemas = self._tool_schemas()
+            if schemas:
+                template_kwargs["tools"] = schemas
+
             # Apply the chat template to format and tokenize the messages
             return cast(
                 "BatchEncoding",
@@ -542,6 +706,7 @@ class HuggingFaceChatTarget(PromptTarget):
                     add_generation_prompt=True,
                     return_tensors=self.tensor_format,
                     return_dict=True,
+                    **template_kwargs,
                 ),
             ).to(self.device)
         error_message = (
