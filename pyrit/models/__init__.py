@@ -107,7 +107,7 @@ from pyrit.models.seeds import (
     SeedUnion,
     SimulatedTargetSystemPromptPaths,
 )
-from pyrit.models.target_capabilities import CapabilityName, TargetCapabilities
+from pyrit.models.target_capabilities import CapabilityName, TargetCapabilities, ToolUsageSchema
 
 __all__ = [
     "ALLOWED_CHAT_MESSAGE_ROLES",
@@ -205,6 +205,7 @@ __all__ = [
     "TARGET_EVAL_PARAMS",
     "TargetCapabilities",
     "TargetIdentifier",
+    "ToolUsageSchema",
     "TextDataTypeSerializer",
     "UnvalidatedScore",
     "validate_registry_name",

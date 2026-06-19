@@ -49,6 +49,33 @@ class CapabilityName(str, Enum):
     EDITABLE_HISTORY = "supports_editable_history"
     SYSTEM_PROMPT = "supports_system_prompt"
     STREAMING_AUDIO = "supports_streaming_audio"
+    TOOL_USAGE = "supports_tool_usage"
+
+
+class ToolUsageSchema(BaseModel):
+    """
+    Describes how a target natively represents tool calls and results.
+
+    Used by ``Agent`` to canonicalize tool-call detection and result formatting
+    when the inner target uses a non-standard shape.  Set to ``None`` on
+    ``TargetCapabilities`` to indicate the target does not support native tool
+    calling (tool calls must be injected by the agent loop).
+
+    Attributes:
+        tool_call_data_types: The ``converted_value_data_type`` values that
+            indicate a tool-call piece in an assistant message.  Defaults to
+            ``{"function_call", "tool_call"}`` — the shapes used by
+            ``OpenAIResponseTarget``.
+        tool_result_data_type: The ``original_value_data_type`` to use when
+            creating a tool-result ``MessagePiece``.
+        tool_result_role: The ``role`` to assign to the tool-result piece.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tool_call_data_types: frozenset[str] = frozenset({"function_call", "tool_call"})
+    tool_result_data_type: str = "function_call_output"
+    tool_result_role: str = "tool"
 
 
 class TargetCapabilities(BaseModel):
@@ -96,6 +123,19 @@ class TargetCapabilities(BaseModel):
     #: items in place, and drives manual ``response.create`` turns. Required by
     #: ``BargeInAttack``.
     supports_streaming_audio: bool = False
+
+    #: Whether the target natively supports tool/function calling.  Set to
+    #: ``True`` for targets (e.g., ``OpenAIResponseTarget``) that emit
+    #: ``function_call`` / ``tool_call`` pieces and expect
+    #: ``function_call_output`` replies.  ``CapabilityName.TOOL_USAGE`` maps
+    #: to this field so that ``includes()`` returns the correct bool.
+    supports_tool_usage: bool = False
+
+    #: Describes the tool-call shape this target uses.  ``None`` means the
+    #: target does not natively emit tool-call pieces.  When set, ``Agent``
+    #: uses this schema to canonicalize tool-call detection and result
+    #: formatting.
+    tool_usage_schema: ToolUsageSchema | None = None
 
     #: The input modalities supported by the target (e.g., "text", "image").
     input_modalities: frozenset[frozenset[PromptDataType]] = Field(default=_DEFAULT_TEXT_MODALITIES)

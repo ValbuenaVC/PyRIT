@@ -154,6 +154,7 @@ def _permissive_configuration(
         supports_editable_history=True,
         supports_system_prompt=True,
         supports_streaming_audio=True,
+        supports_tool_usage=True,
         input_modalities=merged_modalities,
         output_modalities=original.capabilities.output_modalities,
     )
