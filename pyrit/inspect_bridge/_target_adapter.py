@@ -2,108 +2,163 @@
 # Licensed under the MIT license.
 
 """
-TargetToModelAdapter — wraps a PyRIT PromptTarget as an Inspect AI model.
+TargetToModelAdapter -- wraps a PyRIT PromptTarget as an Inspect AI model.
+
+The real class (which subclasses inspect_ai.model.ModelAPI) is built lazily on
+first access so that importing this module never triggers an inspect_ai import.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrit.inspect_bridge._imports import require_inspect_ai
+from pyrit.inspect_bridge.errors import InspectBridgeError
+
 if TYPE_CHECKING:
+    from inspect_ai.model import ModelOutput
+
     from pyrit.prompt_target import PromptTarget
 
+# The provider prefix used in inspect model names (e.g. "pyrit/my_target").
+_PROVIDER_PREFIX: str = "pyrit"
 
-class TargetToModelAdapter:
+# Lazily-built class; populated on first call to _get_adapter_class().
+_adapter_class: type | None = None
+
+
+def _get_adapter_class() -> type:
     """
-    Wraps a PyRIT ``PromptTarget`` as an Inspect AI ``ModelAPI``.
+    Build (or return cached) the real TargetToModelAdapter class.
 
-    Inspect AI constructs model providers positionally; this adapter matches
-    Inspect's ``ModelAPI`` positional signature and calls ``super().__init__``.
+    The class is created at runtime so ModelAPI inheritance is deferred until
+    inspect_ai is actually installed and requested.
 
-    When ``target`` is ``None``, the target is resolved from ``TargetRegistry``
-    using the portion of ``model_name`` after ``"pyrit/"``. When ``target`` is
-    provided directly, it is used as-is (useful for testing).
+    Returns:
+        The ``TargetToModelAdapter`` class (a ``ModelAPI`` subclass).
 
-    Non-empty ``tools`` in ``generate`` raises ``InspectBridgeError`` because
-    PyRIT targets are non-tool-using as Inspect models.
     """
+    global _adapter_class
+    if _adapter_class is not None:
+        return _adapter_class
 
-    def __init__(
-        self,
-        model_name: str,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        api_key_vars: list[str] | None = None,
-        config: Any = None,
-        *,
-        target: PromptTarget | None = None,
-        **model_args: Any,
-    ) -> None:
+    require_inspect_ai()
+    from inspect_ai.model import ModelAPI
+
+    class TargetToModelAdapter(ModelAPI):
         """
-        Initialize the TargetToModelAdapter.
+        Wraps a PyRIT `PromptTarget` as an Inspect AI `ModelAPI`.
 
-        Args:
-            model_name (str): Inspect model name in the form ``"pyrit/<registry_name>"``.
-            base_url (str | None): Unused; accepted for Inspect ModelAPI compatibility.
-            api_key (str | None): Unused; accepted for Inspect ModelAPI compatibility.
-            api_key_vars (list[str] | None): Unused; accepted for Inspect ModelAPI compatibility.
-            config: Optional Inspect ``GenerateConfig`` object.
-            target (PromptTarget | None): PyRIT target instance. When ``None``, the
-                target is resolved from ``TargetRegistry`` by the name after ``"pyrit/"``
-                in ``model_name``.
-            **model_args: Additional keyword arguments forwarded to ``ModelAPI.__init__``.
+        Inspect AI constructs model providers positionally; this adapter matches
+        Inspect's `ModelAPI` positional signature and calls super().__init__.
 
+        When `target` is `None`, the target is resolved from `TargetRegistry`
+        using the portion of `model_name` after `"pyrit/"`. When `target` is
+        provided directly, it is used as-is (useful for testing).
+
+        Non-empty `tools` in `generate` raises `InspectBridgeError` because
+        PyRIT targets are non-tool-using as Inspect models.
         """
-        raise NotImplementedError
 
-    @property
-    def target(self) -> PromptTarget:
-        """
-        Return the wrapped PyRIT target.
+        def __init__(
+            self,
+            model_name: str,
+            base_url: str | None = None,
+            api_key: str | None = None,
+            api_key_vars: list[str] | None = None,
+            config: Any = None,
+            *,
+            target: PromptTarget | None = None,
+            **model_args: Any,
+        ) -> None:
+            super().__init__(model_name, base_url, api_key, api_key_vars or [], config)
+            if target is None:
+                from pyrit.registry.object_registries.target_registry import TargetRegistry
 
-        Returns:
-            PromptTarget: The underlying target instance.
+                registry = TargetRegistry.get_registry_singleton()
+                name = model_name.removeprefix(f"{_PROVIDER_PREFIX}/")
+                resolved = registry.get_instance_by_name(name)
+                if resolved is None:
+                    raise InspectBridgeError(
+                        message=(
+                            f"No PyRIT target registered as '{name}'. "
+                            "Register the target via InspectInitializer before running tasks."
+                        )
+                    )
+                self._target: PromptTarget = resolved
+            else:
+                self._target = target
 
-        """
-        raise NotImplementedError
+        @property
+        def target(self) -> PromptTarget:
+            """Return the wrapped PyRIT target."""
+            return self._target
 
-    async def generate(self, input: Any, tools: Any, tool_choice: Any, config: Any) -> Any:  # pyrit-async-suffix-exempt
-        """
-        Convert Inspect input to a PyRIT conversation and call the wrapped target.
+        async def generate(  # pyrit-async-suffix-exempt  # noqa: A002
+            self,
+            input: Any,  # noqa: A002
+            tools: Any,
+            tool_choice: Any,
+            config: Any,
+        ) -> ModelOutput:
+            """
+            Convert Inspect input to a PyRIT conversation and return `ModelOutput`.
 
-        Converts the Inspect ``input`` (``list[ChatMessage]``) into a normalized
-        PyRIT conversation (``list[Message]``) and calls the wrapped target's
-        ``_send_prompt_to_target_async(normalized_conversation=...)`` directly
-        (not the public ``send_prompt_async``, which rebuilds history from memory
-        and accepts a single message). The response is then converted to a
-        ``ModelOutput``.
+            Args:
+                input: Inspect chat messages (`list[ChatMessage]`).
+                tools: Inspect tool definitions. Non-empty raises `InspectBridgeError`.
+                tool_choice: Inspect tool-choice policy (ignored; tools not supported).
+                config: Inspect `GenerateConfig` (ignored).
 
-        Args:
-            input: Inspect chat messages (``list[ChatMessage]``).
-            tools: Inspect tool definitions. Non-empty raises ``InspectBridgeError``.
-            tool_choice: Inspect tool-choice policy (ignored; tools not supported).
-            config: Inspect ``GenerateConfig`` (ignored).
+            Returns:
+                ModelOutput wrapping the target's response.
 
-        Returns:
-            ModelOutput: The Inspect model output wrapping the target's response.
+            Raises:
+                InspectBridgeError: If `tools` is non-empty.
 
-        Raises:
-            InspectBridgeError: If ``tools`` is non-empty (PyRIT targets are
-                non-tool-using as Inspect models).
+            """
+            if tools:
+                raise InspectBridgeError(
+                    message=(
+                        "PyRIT targets exposed as Inspect models do not support tool use. "
+                        "Remove tools from the task or use a native Inspect model provider."
+                    )
+                )
 
-        """
-        raise NotImplementedError
+            from pyrit.inspect_bridge.conversion import to_model_output, to_pyrit_message_pieces
+            from pyrit.models import Message
 
-    @staticmethod
-    def model_name_for(*, target: PromptTarget) -> str:
-        """
-        Return the Inspect model name for a given PyRIT target.
+            pyrit_pieces = to_pyrit_message_pieces(
+                messages=input,
+                conversation_id="inspect-bridge",
+                sequence_start=0,
+            )
+            pyrit_messages = [Message(message_pieces=[piece]) for piece in pyrit_pieces]
 
-        Args:
-            target (PromptTarget): The PyRIT target instance.
+            response_messages = await self._target._send_prompt_to_target_async(
+                normalized_conversation=pyrit_messages
+            )
+            return to_model_output(messages=response_messages)
 
-        Returns:
-            str: The Inspect model name in the form ``"pyrit/<unique_name>"``.
+        @staticmethod
+        def model_name_for(*, target: PromptTarget) -> str:
+            """
+            Return the Inspect model name for a given PyRIT target.
 
-        """
-        raise NotImplementedError
+            Args:
+                target: The PyRIT target instance.
+
+            Returns:
+                str: The model name in the form `"pyrit/<unique_name>"`.
+
+            """
+            return f"{_PROVIDER_PREFIX}/{target.get_identifier().unique_name}"
+
+    _adapter_class = TargetToModelAdapter
+    return _adapter_class
+
+
+def __getattr__(name: str) -> object:
+    if name == "TargetToModelAdapter":
+        return _get_adapter_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrit.inspect_bridge._dataset_adapter import DatasetAdapter
+from pyrit.inspect_bridge._initializer import InspectInitializer, _initialized
+from pyrit.inspect_bridge._solver_adapter import AttackToSolverAdapter
+
 if TYPE_CHECKING:
     from pyrit.executor.attack.core.attack_strategy import AttackStrategy
     from pyrit.models.seeds.seed_attack_group import SeedAttackGroup
@@ -26,7 +30,6 @@ class InspectTaskFactory:
 
     def __init__(self) -> None:
         """Initialize the InspectTaskFactory."""
-        raise NotImplementedError
 
     def create_task(
         self,
@@ -65,11 +68,65 @@ class InspectTaskFactory:
             ValueError: If ``seed_groups`` is empty.
 
         """
-        raise NotImplementedError
+        from inspect_ai import Task
+        from inspect_ai._util.registry import registry_lookup
+
+        from pyrit.inspect_bridge.errors import InspectBridgeError
+
+        if not _initialized:
+            raise InspectBridgeError(
+                message=(
+                    "InspectInitializer has not been run. "
+                    "Call await InspectInitializer().initialize_async() before create_task()."
+                )
+            )
+
+        if not seed_groups:
+            raise ValueError("seed_groups must not be empty")
+
+        both_set = attack is not None and solver_name is not None
+        neither_set = attack is None and solver_name is None
+        if both_set or neither_set:
+            raise InspectBridgeError(
+                message="Provide attack XOR solver_name — exactly one must be specified."
+            )
+
+        dataset = DatasetAdapter(seed_groups=list(seed_groups)).to_inspect_dataset()
+
+        if attack is not None:
+            solver = AttackToSolverAdapter(attack=attack).to_solver()
+        else:
+            # solver_name is a registered Inspect solver name
+            solver_fn = registry_lookup("solver", solver_name)
+            if solver_fn is None:
+                raise InspectBridgeError(message=f"Inspect solver '{solver_name}' not found in registry.")
+            solver = solver_fn()
+
+        scorer = None
+        if inspect_scorer_name is not None:
+            scorer_fn = registry_lookup("scorer", inspect_scorer_name)
+            if scorer_fn is None:
+                raise InspectBridgeError(message=f"Inspect scorer '{inspect_scorer_name}' not found in registry.")
+            scorer = scorer_fn()
+
+        model_arg = None
+        if target is not None:
+            from pyrit.inspect_bridge._target_adapter import TargetToModelAdapter
+
+            model_arg = TargetToModelAdapter.model_name_for(target=target)
+
+        task_config = config or {}
+        return Task(
+            dataset=dataset,
+            solver=solver,
+            scorer=scorer,
+            model=model_arg,
+            **task_config,
+        )
 
     async def run_task_async(self, task: Any, *, model: str | None = None, **eval_kwargs: Any) -> list[Any]:
         """
-        Ensure initialized, then run an Inspect task via ``inspect_ai.eval``.
+        Ensure initialized, then run an Inspect task via ``inspect_ai.eval_async``.
 
         Awaits ``InspectInitializer().initialize_async()`` (idempotent) before
         running the eval. Logs are persisted through the ``MemoryAdapter`` hook.
@@ -77,13 +134,16 @@ class InspectTaskFactory:
         Args:
             task: The Inspect ``Task`` to run (typically from ``create_task``).
             model (str | None): Optional Inspect model string (e.g. ``"pyrit/my_target"``).
-            **eval_kwargs: Additional keyword arguments forwarded to ``inspect_ai.eval``.
+            **eval_kwargs: Additional keyword arguments forwarded to ``inspect_ai.eval_async``.
 
         Returns:
             list[EvalLog]: Eval log entries from the run.
 
         """
-        raise NotImplementedError
+        from inspect_ai import eval_async
+
+        await InspectInitializer().initialize_async()
+        return await eval_async(task, model=model, **eval_kwargs)
 
     async def run_named_eval_async(
         self,
@@ -104,10 +164,20 @@ class InspectTaskFactory:
             target (PromptTarget | None): Optional PyRIT target to use as the
                 model-under-test. If ``None``, ``model`` must be provided.
             model (str | None): Optional Inspect model string override.
-            **eval_kwargs: Additional keyword arguments forwarded to ``inspect_ai.eval``.
+            **eval_kwargs: Additional keyword arguments forwarded to ``inspect_ai.eval_async``.
 
         Returns:
             list[EvalLog]: Eval log entries from the run.
 
         """
-        raise NotImplementedError
+        from inspect_ai import eval_async
+
+        await InspectInitializer().initialize_async()
+
+        resolved_model = model
+        if resolved_model is None and target is not None:
+            from pyrit.inspect_bridge._target_adapter import TargetToModelAdapter
+
+            resolved_model = TargetToModelAdapter.model_name_for(target=target)
+
+        return await eval_async(eval_name, model=resolved_model, **eval_kwargs)

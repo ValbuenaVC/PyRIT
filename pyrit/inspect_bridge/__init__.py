@@ -41,12 +41,12 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
+    from pyrit.inspect_bridge._dataset_adapter import DatasetAdapter
     from pyrit.inspect_bridge._initializer import InspectInitializer
     from pyrit.inspect_bridge._memory_adapter import MemoryAdapter
     from pyrit.inspect_bridge._solver_adapter import AttackToSolverAdapter
     from pyrit.inspect_bridge._target_adapter import TargetToModelAdapter
     from pyrit.inspect_bridge._task_factory import InspectTaskFactory
-    from pyrit.inspect_bridge._dataset_adapter import DatasetAdapter
 
 _MODULE_MAP: dict[str, str] = {
     "InspectInitializer": "pyrit.inspect_bridge._initializer",

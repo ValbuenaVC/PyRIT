@@ -18,8 +18,10 @@ def test_import_pyrit_does_not_import_inspect_ai() -> None:
         [
             sys.executable,
             "-c",
-            "import pyrit; import sys; assert 'inspect_ai' not in sys.modules, "
-            "'inspect_ai was imported by import pyrit'",
+            (
+                "import pyrit; import sys; assert 'inspect_ai' not in sys.modules, "
+                "'inspect_ai was imported by import pyrit'"
+            ),
         ],
         capture_output=True,
         text=True,
@@ -33,9 +35,11 @@ def test_import_inspect_bridge_does_not_import_inspect_ai() -> None:
         [
             sys.executable,
             "-c",
-            "import pyrit.inspect_bridge; import sys; "
-            "assert 'inspect_ai' not in sys.modules, "
-            "'inspect_ai was imported by import pyrit.inspect_bridge'",
+            (
+                "import pyrit.inspect_bridge; import sys; "
+                "assert 'inspect_ai' not in sys.modules, "
+                "'inspect_ai was imported by import pyrit.inspect_bridge'"
+            ),
         ],
         capture_output=True,
         text=True,
@@ -69,8 +73,8 @@ def test_pyrit_model_provider_constant() -> None:
 
 def test_inspect_bridge_error_is_importable_without_inspect_ai() -> None:
     """``InspectBridgeError`` must be importable without inspect_ai installed."""
-    from pyrit.inspect_bridge import InspectBridgeError
     from pyrit.exceptions.exception_classes import PyritException
+    from pyrit.inspect_bridge import InspectBridgeError
 
     assert issubclass(InspectBridgeError, PyritException)
 
@@ -95,7 +99,6 @@ def test_inspect_bridge_error_custom_args() -> None:
 
 def test_inspect_extra_declared_in_pyproject() -> None:
     """``[project.optional-dependencies] inspect`` must be declared in pyproject.toml."""
-    import importlib.util
     import pathlib
     import re
 
