@@ -203,6 +203,7 @@ async def initialize_pyrit_async(
     env_files: Sequence[pathlib.Path] | None = None,
     env_akv_ref: Sequence[str] | None = None,
     silent: bool = False,
+    plugin_fail_open: bool | None = None,
     **memory_instance_kwargs: Any,
 ) -> None:
     """
@@ -224,6 +225,9 @@ async def initialize_pyrit_async(
             so local files take precedence over AKV. Requires ``azure-keyvault-secrets``.
         silent (bool): If True, suppresses print statements about environment file loading and
             schema migration. Defaults to False.
+        plugin_fail_open (bool | None): Overrides ``PLUGIN_FAIL_OPEN`` for plug-in loading. When True,
+            a plug-in (``PLUGIN_WHEEL``) that fails to load is skipped with a warning instead of raising.
+            Defaults to None (use the ``PLUGIN_FAIL_OPEN`` environment variable, else fail-closed).
         **memory_instance_kwargs (Any | None): Additional keyword arguments to pass to the memory instance.
 
     Raises:
@@ -258,6 +262,15 @@ async def initialize_pyrit_async(
         )
 
     CentralMemory.set_memory_instance(memory)
+
+    # Load a configured plug-in (PLUGIN_WHEEL) as a guaranteed-first phase: after memory
+    # is set (a plug-in bootstrap may use it) and BEFORE any configured initializers run,
+    # so plug-in datasets/scenarios are registered before LoadDefaultDatasets and
+    # PreloadScenarioMetadata read the registry. Ordering is true by construction here, so
+    # it does not depend on .pyrit_conf list position. No-op unless PLUGIN_WHEEL is set.
+    from pyrit.setup.plugin_loader import load_plugin_if_configured_async
+
+    await load_plugin_if_configured_async(fail_open=plugin_fail_open)
 
     # Combine directly provided initializers with those loaded from scripts
     all_initializers = list(initializers) if initializers else []

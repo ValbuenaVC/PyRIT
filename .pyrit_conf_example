@@ -28,6 +28,10 @@ memory_db_type: sqlite
 # - load_default_datasets: Loads datasets into memory so scenarios can run
 # - preload_scenario_metadata: Preloads scenario metadata into the registry
 #
+# Note: plug-ins (PLUGIN_WHEEL) are NOT configured here. They load automatically as a
+# guaranteed-first phase inside initialize_pyrit_async — before these initializers — so
+# there is no ordering to get right. See the PLUGIN_* variables in .env_example.
+#
 # Each initializer can be specified as:
 # - A simple string (name only)
 # - A dictionary with 'name' and optional 'args' for parameters
