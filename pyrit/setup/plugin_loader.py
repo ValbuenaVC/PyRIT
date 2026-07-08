@@ -29,6 +29,7 @@ import os
 import pkgutil
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -272,9 +273,10 @@ class PluginLoader:
             logger.info("Reusing cached plug-in extraction at %s", extract_dir)
             return extract_dir
 
-        tmp_dir = base_dir / f".{wheel_path.stem}.tmp-{os.getpid()}"
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir)
+        # Unique per-extraction temp dir so concurrent loads of the same wheel in one
+        # process cannot collide on a shared path (mkdtemp is atomic and 0700). safe_extract
+        # into it, then atomically move into place.
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f".{wheel_path.stem}.tmp-", dir=base_dir))
         try:
             safe_extract_zip(source=wheel_path, dest_dir=tmp_dir)
             if extract_dir.exists():
