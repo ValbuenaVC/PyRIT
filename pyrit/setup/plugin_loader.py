@@ -248,6 +248,11 @@ class PluginLoader:
         tmp_dir.mkdir(parents=True)
         try:
             with zipfile.ZipFile(wheel_path) as wheel_zip:
+                tmp_dir_resolved = tmp_dir.resolve()
+                for member in wheel_zip.infolist():
+                    member_path = (tmp_dir / member.filename).resolve()
+                    if not member_path.is_relative_to(tmp_dir_resolved):
+                        raise ValueError(f"Wheel contains unsafe path: {member.filename}")
                 wheel_zip.extractall(tmp_dir)
             if extract_dir.exists():
                 shutil.rmtree(extract_dir)
