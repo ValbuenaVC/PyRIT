@@ -28,7 +28,6 @@ import os
 import pkgutil
 import shutil
 import sys
-import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -226,7 +225,9 @@ class PluginLoader:
 
         Extraction is atomic: the wheel is unpacked into a temporary sibling directory and
         moved into place only on success, so a crash mid-extraction never leaves a partial
-        tree that would later be treated as a valid cache.
+        tree that would later be treated as a valid cache. ``safe_extract_zip`` validates
+        every member first (path traversal, symlinks, and size / entry-count / compression
+        caps) so a tampered wheel cannot escape the extraction directory or exhaust disk.
 
         Args:
             wheel_path: Path to the plug-in wheel.
@@ -234,6 +235,8 @@ class PluginLoader:
         Returns:
             Path: The directory the wheel was extracted to.
         """
+        from pyrit.common.safe_extract import safe_extract_zip
+
         base_dir = self._plugin_base_dir()
         base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -245,15 +248,8 @@ class PluginLoader:
         tmp_dir = base_dir / f".{wheel_path.stem}.tmp-{os.getpid()}"
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
-        tmp_dir.mkdir(parents=True)
         try:
-            with zipfile.ZipFile(wheel_path) as wheel_zip:
-                tmp_dir_resolved = tmp_dir.resolve()
-                for member in wheel_zip.infolist():
-                    member_path = (tmp_dir / member.filename).resolve()
-                    if not member_path.is_relative_to(tmp_dir_resolved):
-                        raise ValueError(f"Wheel contains unsafe path: {member.filename}")
-                wheel_zip.extractall(tmp_dir)
+            safe_extract_zip(source=wheel_path, dest_dir=tmp_dir)
             if extract_dir.exists():
                 shutil.rmtree(extract_dir)
             os.replace(tmp_dir, extract_dir)

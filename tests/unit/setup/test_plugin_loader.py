@@ -756,6 +756,21 @@ async def test_non_whl_path_fails_closed(tmp_path: Path) -> None:
             await load_plugin_if_configured_async()
 
 
+async def test_wheel_with_path_traversal_member_fails_closed(tmp_path: Path) -> None:
+    """A wheel containing a path-traversal member is rejected during safe extraction."""
+    malicious = tmp_path / "evil-0.0.1-py3-none-any.whl"
+    with zipfile.ZipFile(malicious, "w") as archive:
+        archive.writestr("evil_pkg/__init__.py", "")
+        archive.writestr("../escape.py", "compromised = True")
+
+    with plugin_env(PLUGIN_WHEEL=str(malicious), PLUGIN_DIR=str(tmp_path / ".plugin")):
+        with pytest.raises(PluginLoadError, match="Failed to load plug-in"):
+            await load_plugin_if_configured_async()
+
+    # The traversal target was not written outside the extraction directory.
+    assert not (tmp_path / "escape.py").exists()
+
+
 # ---------------------------------------------------------------------------
 # No-arg-instantiable contract
 # ---------------------------------------------------------------------------
