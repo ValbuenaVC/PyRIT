@@ -584,6 +584,52 @@ async def test_fail_open_rolls_back_partial_registration(tmp_path: Path) -> None
     assert wheel.scenario_name not in registry._classes
 
 
+async def test_rollback_restores_overwritten_provider(tmp_path: Path) -> None:
+    """A failed load restores a provider entry the plug-in overwrote (name collision)."""
+    wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
+
+    # SeedDatasetProvider keys by class name and the mock provider is "MockProvider";
+    # occupy that key so the plug-in's import overwrites it.
+    class _PreexistingProvider(SeedDatasetProvider):
+        should_register = False
+
+        @property
+        def dataset_name(self) -> str:
+            return "preexisting"
+
+        async def fetch_dataset_async(self, *, cache: bool = True) -> SeedDataset:
+            raise NotImplementedError
+
+    SeedDatasetProvider._registry["MockProvider"] = _PreexistingProvider
+
+    with plugin_env(PLUGIN_WHEEL=str(wheel.path), PLUGIN_DIR=str(tmp_path / ".plugin")):
+        with pytest.raises(PluginLoadError):
+            await load_plugin_if_configured_async()
+
+    # The original provider is restored, not deleted or left replaced by the plug-in's.
+    assert SeedDatasetProvider._registry["MockProvider"] is _PreexistingProvider
+
+
+async def test_rollback_restores_overwritten_scenario(tmp_path: Path) -> None:
+    """A failed load restores a scenario entry the plug-in overwrote (name collision)."""
+    from pyrit.scenario.scenarios.airt.rapid_response import RapidResponse
+
+    wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
+
+    class _PreexistingScenario(RapidResponse):
+        """Sentinel scenario occupying the plug-in's registry name."""
+
+    registry = ScenarioRegistry.get_registry_singleton()
+    registry.register_class(_PreexistingScenario, name=wheel.scenario_name)
+
+    with plugin_env(PLUGIN_WHEEL=str(wheel.path), PLUGIN_DIR=str(tmp_path / ".plugin")):
+        with pytest.raises(PluginLoadError):
+            await load_plugin_if_configured_async()
+
+    # The original scenario is restored, not deleted or left replaced by the plug-in's.
+    assert registry._classes[wheel.scenario_name] is _PreexistingScenario
+
+
 # ---------------------------------------------------------------------------
 # Extraction cache
 # ---------------------------------------------------------------------------

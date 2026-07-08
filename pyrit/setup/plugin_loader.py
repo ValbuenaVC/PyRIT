@@ -561,11 +561,14 @@ class PluginLoader:
         """
         Undo the partial global-state changes made while loading a plug-in.
 
-        Removes the plug-in's ``sys.path`` entry, the modules it newly imported, and any
-        provider/scenario registrations it added, so a failed (or fail-open) load leaves
-        PyRIT as if the plug-in had never been loaded. State present before the load —
-        including modules that already existed and built-ins discovered meanwhile — is
-        preserved.
+        Removes the plug-in's ``sys.path`` entry, the modules it newly imported, and the
+        provider/scenario registrations it added, and **restores any entries the plug-in
+        overwrote**. Both registries key by a name the plug-in does not control
+        (``SeedDatasetProvider`` by ``cls.__name__``; the scenario catalog by registry
+        name) and assign unconditionally, so a plug-in whose provider/scenario name
+        collides with an existing one silently replaces it; rollback must put the original
+        back, not just drop the new key. State present before the load — including modules
+        that already existed and built-ins discovered meanwhile — is preserved.
 
         Args:
             package_name: The plug-in's top-level package name.
@@ -583,16 +586,24 @@ class PluginLoader:
         for name in [m for m in sys.modules if _name_owned_by(m, package_name) and m not in modules_snapshot]:
             del sys.modules[name]
 
-        for key, cls in list(SeedDatasetProvider._registry.items()):
-            if key not in provider_snapshot and _module_owned_by(cls, package_name):
-                del SeedDatasetProvider._registry[key]
+        # For every entry the plug-in now owns: restore the pre-load value if the key
+        # existed before (the plug-in overwrote it), otherwise drop the key it added.
+        for key in list(SeedDatasetProvider._registry):
+            if _module_owned_by(SeedDatasetProvider._registry[key], package_name):
+                if key in provider_snapshot:
+                    SeedDatasetProvider._registry[key] = provider_snapshot[key]  # type: ignore[ty:invalid-assignment]
+                else:
+                    del SeedDatasetProvider._registry[key]
 
-        removed_scenario = False
-        for name, cls in list(scenario_registry._classes.items()):
-            if name not in scenario_snapshot and _module_owned_by(cls, package_name):
-                del scenario_registry._classes[name]
-                removed_scenario = True
-        if removed_scenario:
+        changed_scenarios = False
+        for name in list(scenario_registry._classes):
+            if _module_owned_by(scenario_registry._classes[name], package_name):
+                if name in scenario_snapshot:
+                    scenario_registry._classes[name] = scenario_snapshot[name]  # type: ignore[ty:invalid-assignment]
+                else:
+                    del scenario_registry._classes[name]
+                changed_scenarios = True
+        if changed_scenarios:
             scenario_registry._metadata_cache = None
 
     def _resolve_fail_open(self) -> bool:
