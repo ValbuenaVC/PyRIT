@@ -21,6 +21,7 @@ no-op when ``PLUGIN_WHEEL`` is unset.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import logging
@@ -166,8 +167,10 @@ class PluginLoader:
         if wheel_path.suffix != ".whl":
             raise ValueError(f"PLUGIN_WHEEL must point to a .whl file, got: {wheel_path}")
 
-        extract_dir = self._extract_wheel(wheel_path=wheel_path)
-        package_name = self._resolve_package_name(extract_dir=extract_dir)
+        # Wheel extraction and directory scanning are blocking filesystem work; run them
+        # off the event loop so init does not stall unrelated async tasks.
+        extract_dir = await asyncio.to_thread(self._extract_wheel, wheel_path=wheel_path)
+        package_name = await asyncio.to_thread(self._resolve_package_name, extract_dir=extract_dir)
 
         from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
         from pyrit.registry import ScenarioRegistry
