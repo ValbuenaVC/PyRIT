@@ -28,7 +28,14 @@ from pyrit.memory import CentralMemory
 from pyrit.models import SeedDataset
 from pyrit.registry import ScenarioRegistry
 from pyrit.setup.initialization import IN_MEMORY, initialize_pyrit_async
-from pyrit.setup.plugin_loader import PluginLoader, PluginLoadError, load_plugin_if_configured_async
+from pyrit.setup.plugin_loader import (
+    PluginImportError,
+    PluginLoader,
+    PluginLoadError,
+    PluginRegisteredNothingError,
+    PluginWheelNotFoundError,
+    load_plugin_if_configured_async,
+)
 
 # ---------------------------------------------------------------------------
 # Mock-wheel builder
@@ -480,7 +487,7 @@ async def test_shadowing_installed_package_is_rejected(tmp_path: Path) -> None:
 
     # PLUGIN_PACKAGE points at a stdlib package that imports from outside the extraction dir.
     with plugin_env(PLUGIN_WHEEL=str(wheel.path), PLUGIN_DIR=str(tmp_path / ".plugin"), PLUGIN_PACKAGE="json"):
-        with pytest.raises(PluginLoadError, match="shadowing"):
+        with pytest.raises(PluginImportError, match="shadowing"):
             await load_plugin_if_configured_async()
 
 
@@ -712,9 +719,9 @@ def test_resolve_package_name_multiple_raises(tmp_path: Path) -> None:
 
 
 async def test_missing_wheel_fails_closed() -> None:
-    """A configured-but-missing wheel raises by default (fail-closed)."""
+    """A configured-but-missing wheel raises PluginWheelNotFoundError by default (fail-closed)."""
     with plugin_env(PLUGIN_WHEEL=str(Path("does_not_exist.whl"))):
-        with pytest.raises(PluginLoadError, match="Failed to load plug-in"):
+        with pytest.raises(PluginWheelNotFoundError, match="Failed to load plug-in"):
             await load_plugin_if_configured_async()
 
 
@@ -735,7 +742,7 @@ async def test_empty_wheel_is_loud(tmp_path: Path) -> None:
     wheel = build_mock_wheel(tmp_path, bootstrap="none", include_provider=False, include_scenario=False)
 
     with plugin_env(PLUGIN_WHEEL=str(wheel.path), PLUGIN_DIR=str(tmp_path / ".plugin")):
-        with pytest.raises(PluginLoadError, match="registered no datasets or scenarios"):
+        with pytest.raises(PluginRegisteredNothingError, match="registered no datasets or scenarios"):
             await load_plugin_if_configured_async()
 
 
@@ -747,13 +754,19 @@ async def test_empty_wheel_fail_open_proceeds(tmp_path: Path) -> None:
 
 
 async def test_non_whl_path_fails_closed(tmp_path: Path) -> None:
-    """PLUGIN_WHEEL that is not a .whl file fails closed."""
+    """PLUGIN_WHEEL that is not a .whl file fails closed with PluginWheelNotFoundError."""
     not_a_wheel = tmp_path / "plugin.zip"
     not_a_wheel.write_text("not a wheel", encoding="utf-8")
 
     with plugin_env(PLUGIN_WHEEL=str(not_a_wheel)):
-        with pytest.raises(PluginLoadError, match="Failed to load plug-in"):
+        with pytest.raises(PluginWheelNotFoundError, match="Failed to load plug-in"):
             await load_plugin_if_configured_async()
+
+
+def test_error_subclasses_are_plugin_load_errors() -> None:
+    """All specific plug-in errors subclass PluginLoadError so one except still catches them."""
+    for error_cls in (PluginWheelNotFoundError, PluginImportError, PluginRegisteredNothingError):
+        assert issubclass(error_cls, PluginLoadError)
 
 
 async def test_wheel_with_path_traversal_member_fails_closed(tmp_path: Path) -> None:

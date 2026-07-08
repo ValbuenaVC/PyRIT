@@ -91,8 +91,26 @@ def _module_owned_by(cls: type, package_name: str) -> bool:
     return _name_owned_by(cls.__module__ or "", package_name)
 
 
+_REMEDIATION = (
+    "Remove the plug-in configuration, or enable fail-open (PLUGIN_FAIL_OPEN=true, or the "
+    "initialize_pyrit_async(plugin_fail_open=True) parameter) to continue without it."
+)
+
+
 class PluginLoadError(RuntimeError):
-    """Raised when a configured plug-in fails to load and fail-open is not enabled."""
+    """Base error raised when a configured plug-in fails to load and fail-open is not enabled."""
+
+
+class PluginWheelNotFoundError(PluginLoadError):
+    """``PLUGIN_WHEEL`` does not point to a readable ``.whl`` file."""
+
+
+class PluginImportError(PluginLoadError):
+    """The plug-in package could not be imported (missing dependency, or an installed package shadows it)."""
+
+
+class PluginRegisteredNothingError(PluginLoadError):
+    """The plug-in imported cleanly but registered no datasets or scenarios."""
 
 
 class PluginLoader:
@@ -141,11 +159,13 @@ class PluginLoader:
                     exc,
                 )
                 return
-            raise PluginLoadError(
-                f"Failed to load plug-in from PLUGIN_WHEEL='{wheel_env}': {exc}. "
-                "Remove the plug-in configuration, or enable fail-open (PLUGIN_FAIL_OPEN=true, or the "
-                "initialize_pyrit_async(plugin_fail_open=True) parameter) to continue without it."
-            ) from exc
+            message = f"Failed to load plug-in from PLUGIN_WHEEL='{wheel_env}': {exc} {_REMEDIATION}"
+            # Preserve the specific failure type so callers can distinguish modes, while
+            # always surfacing the remediation guidance. Unknown errors (e.g. a raising
+            # bootstrap or an unsafe archive) become a plain PluginLoadError.
+            if isinstance(exc, PluginLoadError):
+                raise type(exc)(message) from exc
+            raise PluginLoadError(message) from exc
 
     async def _load_plugin_async(self, *, wheel_path: Path) -> None:
         """
@@ -159,13 +179,14 @@ class PluginLoader:
             wheel_path: Path to the pre-built plug-in wheel on disk.
 
         Raises:
-            FileNotFoundError: If ``wheel_path`` does not point to an existing file.
-            ValueError: If the file is not a ``.whl`` or the plug-in registered nothing.
+            PluginWheelNotFoundError: If ``wheel_path`` is not an existing ``.whl`` file.
+            PluginImportError: If the plug-in package cannot be imported.
+            PluginRegisteredNothingError: If the plug-in registered no datasets or scenarios.
         """
         if not wheel_path.is_file():
-            raise FileNotFoundError(f"PLUGIN_WHEEL does not point to an existing file: {wheel_path}")
+            raise PluginWheelNotFoundError(f"PLUGIN_WHEEL does not point to an existing file: {wheel_path}")
         if wheel_path.suffix != ".whl":
-            raise ValueError(f"PLUGIN_WHEEL must point to a .whl file, got: {wheel_path}")
+            raise PluginWheelNotFoundError(f"PLUGIN_WHEEL must point to a .whl file, got: {wheel_path}")
 
         # Wheel extraction and directory scanning are blocking filesystem work; run them
         # off the event loop so init does not stall unrelated async tasks.
@@ -186,9 +207,12 @@ class PluginLoader:
 
         try:
             logger.info("Importing plug-in package '%s'", package_name)
-            module = importlib.import_module(package_name)
-            self._verify_module_location(module=module, extract_dir=extract_dir, package_name=package_name)
-            self._import_submodules(module=module, package_name=package_name)
+            try:
+                module = importlib.import_module(package_name)
+                self._verify_module_location(module=module, extract_dir=extract_dir, package_name=package_name)
+                self._import_submodules(module=module, package_name=package_name)
+            except Exception as exc:
+                raise PluginImportError(f"Could not import plug-in package '{package_name}': {exc}") from exc
 
             await self._run_bootstrap_async(package_name=package_name, module=module)
 
@@ -196,7 +220,7 @@ class PluginLoader:
                 package_name=package_name, scenario_registry=scenario_registry
             )
             if not provider_count and not scenario_count:
-                raise ValueError(
+                raise PluginRegisteredNothingError(
                     f"Plug-in package '{package_name}' imported successfully but registered no datasets or "
                     "scenarios. The wheel is likely mis-packaged (imports cleanly yet loads nothing)."
                 )
