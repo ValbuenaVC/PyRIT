@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 
 
-async def load_plugin_if_configured_async(*, fail_open: bool | None = None) -> None:
+async def load_plugin_if_configured_async(*, accept_load_failures: bool | None = None) -> None:
     """
     Load the plug-in referenced by ``PLUGIN_WHEEL`` if one is configured.
 
@@ -54,14 +54,15 @@ async def load_plugin_if_configured_async(*, fail_open: bool | None = None) -> N
     ``PLUGIN_WHEEL`` is unset.
 
     Args:
-        fail_open: If provided, overrides the ``PLUGIN_FAIL_OPEN`` environment variable.
-            When True, a plug-in that fails to load is skipped with a warning.
+        accept_load_failures: If provided, overrides the ``PLUGIN_ACCEPT_LOAD_FAILURES``
+            environment variable. When True, a plug-in that fails to load is skipped with
+            a warning.
 
     Raises:
-        PluginLoadError: If the plug-in is configured but fails to load and fail-open is
-            not enabled.
+        PluginLoadError: If the plug-in is configured but fails to load and load failures
+            are not accepted.
     """
-    await PluginLoader(fail_open=fail_open).load_async()
+    await PluginLoader(accept_load_failures=accept_load_failures).load_async()
 
 
 def _name_owned_by(module_name: str, package_name: str) -> bool:
@@ -93,13 +94,13 @@ def _module_owned_by(cls: type, package_name: str) -> bool:
 
 
 _REMEDIATION = (
-    "Remove the plug-in configuration, or enable fail-open (PLUGIN_FAIL_OPEN=true, or the "
-    "initialize_pyrit_async(plugin_fail_open=True) parameter) to continue without it."
+    "Remove the plug-in configuration, or accept load failures (PLUGIN_ACCEPT_LOAD_FAILURES=true, or the "
+    "initialize_pyrit_async(plugin_accept_load_failures=True) parameter) to continue without it."
 )
 
 
 class PluginLoadError(RuntimeError):
-    """Base error raised when a configured plug-in fails to load and fail-open is not enabled."""
+    """Base error raised when a configured plug-in fails to load and load failures are not accepted."""
 
 
 class PluginWheelNotFoundError(PluginLoadError):
@@ -121,41 +122,43 @@ class PluginLoader:
     No-op unless ``PLUGIN_WHEEL`` is set. When set, the wheel is extracted to
     ``.plugin/<name>/`` (never installed), imported, and its bootstrap is run so its
     datasets and scenarios register like built-ins. Fails closed by default; set
-    ``fail_open`` (constructor / ``initialize_pyrit_async`` param) or ``PLUGIN_FAIL_OPEN``
-    to continue without the plug-in when it cannot be loaded.
+    ``accept_load_failures`` (constructor / ``initialize_pyrit_async`` param) or
+    ``PLUGIN_ACCEPT_LOAD_FAILURES`` to continue without the plug-in when it cannot be loaded.
     """
 
-    def __init__(self, *, fail_open: bool | None = None) -> None:
+    def __init__(self, *, accept_load_failures: bool | None = None) -> None:
         """
         Initialize the loader.
 
         Args:
-            fail_open: If provided, overrides ``PLUGIN_FAIL_OPEN``. When True, a plug-in
-                that fails to load is skipped with a warning instead of raising.
+            accept_load_failures: If provided, overrides ``PLUGIN_ACCEPT_LOAD_FAILURES``.
+                When True, a plug-in that fails to load is skipped with a warning instead
+                of raising.
         """
-        self._explicit_fail_open = fail_open
+        self._explicit_accept_load_failures = accept_load_failures
 
     async def load_async(self) -> None:
         """
         Load the plug-in referenced by ``PLUGIN_WHEEL`` (no-op when unset).
 
         Raises:
-            PluginLoadError: If the plug-in is configured but fails to load and fail-open
-                is not enabled.
+            PluginLoadError: If the plug-in is configured but fails to load and load
+                failures are not accepted.
         """
         wheel_env = os.getenv("PLUGIN_WHEEL")
         if not wheel_env:
             logger.debug("PLUGIN_WHEEL is not set; plug-in loading is a no-op.")
             return
 
-        fail_open = self._resolve_fail_open()
+        accept_load_failures = self._resolve_accept_load_failures()
 
         try:
             await self._load_plugin_async(wheel_path=Path(wheel_env).expanduser())
         except Exception as exc:
-            if fail_open:
+            if accept_load_failures:
                 logger.warning(
-                    "Plug-in from PLUGIN_WHEEL='%s' failed to load; fail_open is set so continuing without it: %s",
+                    "Plug-in from PLUGIN_WHEEL='%s' failed to load; load failures are accepted so "
+                    "continuing without it: %s",
                     wheel_env,
                     exc,
                 )
@@ -173,7 +176,7 @@ class PluginLoader:
         Extract, import, bootstrap, and verify a single plug-in wheel.
 
         Global state (``sys.path``, imported plug-in modules, and the provider/scenario
-        registries) is rolled back if the load fails, so a failed or fail-open load
+        registries) is rolled back if the load fails, so a failed or accepted-failure load
         leaves no partial trace.
 
         Args:
@@ -528,7 +531,7 @@ class PluginLoader:
         noisy. Hard enforcement that can tell a real mismatch from a harmless name coincidence
         belongs to the scenario's declared required-dataset-names / expected-source mechanism
         (which knows the operator's intent), not this loader, and is intentionally not gated
-        behind ``PLUGIN_FAIL_OPEN``.
+        behind ``PLUGIN_ACCEPT_LOAD_FAILURES``.
 
         Args:
             package_name: The plug-in's top-level package name.
@@ -631,21 +634,21 @@ class PluginLoader:
         if changed_scenarios:
             scenario_registry._metadata_cache = None
 
-    def _resolve_fail_open(self) -> bool:
+    def _resolve_accept_load_failures(self) -> bool:
         """
-        Resolve the fail-open setting from the explicit value or the environment.
+        Resolve the accept-load-failures setting from the explicit value or the environment.
 
-        Precedence: the explicit ``fail_open`` passed to the constructor (e.g. from
-        ``initialize_pyrit_async``), then the ``PLUGIN_FAIL_OPEN`` environment variable,
-        otherwise fail-closed.
+        Precedence: the explicit ``accept_load_failures`` passed to the constructor (e.g. from
+        ``initialize_pyrit_async``), then the ``PLUGIN_ACCEPT_LOAD_FAILURES`` environment
+        variable, otherwise fail-closed.
 
         Returns:
             bool: True if a failed plug-in load should be skipped with a warning.
         """
-        if self._explicit_fail_open is not None:
-            return self._explicit_fail_open
+        if self._explicit_accept_load_failures is not None:
+            return self._explicit_accept_load_failures
 
-        env_value = os.getenv("PLUGIN_FAIL_OPEN")
+        env_value = os.getenv("PLUGIN_ACCEPT_LOAD_FAILURES")
         if env_value is not None:
             return self._coerce_bool(env_value)
 

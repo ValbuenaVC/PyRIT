@@ -203,7 +203,7 @@ async def initialize_pyrit_async(
     env_files: Sequence[pathlib.Path] | None = None,
     env_akv_ref: Sequence[str] | None = None,
     silent: bool = False,
-    plugin_fail_open: bool | None = None,
+    plugin_accept_load_failures: bool | None = None,
     **memory_instance_kwargs: Any,
 ) -> None:
     """
@@ -225,9 +225,10 @@ async def initialize_pyrit_async(
             so local files take precedence over AKV. Requires ``azure-keyvault-secrets``.
         silent (bool): If True, suppresses print statements about environment file loading and
             schema migration. Defaults to False.
-        plugin_fail_open (bool | None): Overrides ``PLUGIN_FAIL_OPEN`` for plug-in loading. When True,
-            a plug-in (``PLUGIN_WHEEL``) that fails to load is skipped with a warning instead of raising.
-            Defaults to None (use the ``PLUGIN_FAIL_OPEN`` environment variable, else fail-closed).
+        plugin_accept_load_failures (bool | None): Overrides ``PLUGIN_ACCEPT_LOAD_FAILURES`` for plug-in
+            loading. When True, a plug-in (``PLUGIN_WHEEL``) that fails to load is skipped with a warning
+            instead of raising. Defaults to None (use the ``PLUGIN_ACCEPT_LOAD_FAILURES`` environment
+            variable, else fail-closed).
         **memory_instance_kwargs (Any | None): Additional keyword arguments to pass to the memory instance.
 
     Raises:
@@ -270,7 +271,7 @@ async def initialize_pyrit_async(
     # it does not depend on .pyrit_conf list position. No-op unless PLUGIN_WHEEL is set.
     from pyrit.setup.plugin_loader import load_plugin_if_configured_async
 
-    await load_plugin_if_configured_async(fail_open=plugin_fail_open)
+    await load_plugin_if_configured_async(accept_load_failures=plugin_accept_load_failures)
 
     # Combine directly provided initializers with those loaded from scripts
     all_initializers = list(initializers) if initializers else []

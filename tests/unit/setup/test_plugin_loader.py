@@ -6,7 +6,7 @@ Unit tests for the PyRIT plug-in loader.
 
 These tests build a **mock plug-in wheel** at test time (no dependency on any real
 plug-in) and exercise the full consumer mechanism: extract -> sys.path ->
-import -> bootstrap -> assert-loaded, plus the fail-open/closed policy and the
+import -> bootstrap -> assert-loaded, plus the accept-load-failures/fail-closed policy and the
 silent-failure guards called out in the design brief.
 """
 
@@ -285,7 +285,7 @@ def plugin_sandbox() -> Iterator[None]:
 def plugin_env(**overrides: str) -> Iterator[None]:
     """Patch os.environ so only the given PLUGIN_* overrides are present."""
     with patch.dict(os.environ, overrides, clear=False):
-        for key in ("PLUGIN_WHEEL", "PLUGIN_DIR", "PLUGIN_PACKAGE", "PLUGIN_FAIL_OPEN"):
+        for key in ("PLUGIN_WHEEL", "PLUGIN_DIR", "PLUGIN_PACKAGE", "PLUGIN_ACCEPT_LOAD_FAILURES"):
             if key not in overrides:
                 os.environ.pop(key, None)
         yield
@@ -295,7 +295,7 @@ async def load_plugin(
     wheel: MockWheel,
     plugin_dir: Path,
     *,
-    fail_open: bool | None = None,
+    accept_load_failures: bool | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> None:
     """Run the plug-in loader against a mock wheel with an isolated env."""
@@ -304,7 +304,7 @@ async def load_plugin(
         env.update(extra_env)
 
     with plugin_env(**env):
-        await load_plugin_if_configured_async(fail_open=fail_open)
+        await load_plugin_if_configured_async(accept_load_failures=accept_load_failures)
 
 
 # ---------------------------------------------------------------------------
@@ -331,17 +331,17 @@ async def test_plugin_phase_runs_after_memory_before_initializers() -> None:
     assert order.index("set_memory") < order.index("load_plugin") < order.index("execute")
 
 
-async def test_plugin_phase_forwards_fail_open_param() -> None:
-    """initialize_pyrit_async forwards plugin_fail_open to the loader."""
+async def test_plugin_phase_forwards_accept_load_failures_param() -> None:
+    """initialize_pyrit_async forwards plugin_accept_load_failures to the loader."""
     load_plugin_mock = AsyncMock()
     with (
         patch("pyrit.setup.initialization.SQLiteMemory", return_value=MagicMock()),
         patch.object(CentralMemory, "set_memory_instance"),
         patch("pyrit.setup.plugin_loader.load_plugin_if_configured_async", load_plugin_mock),
     ):
-        await initialize_pyrit_async(IN_MEMORY, env_files=[], silent=True, plugin_fail_open=True)
+        await initialize_pyrit_async(IN_MEMORY, env_files=[], silent=True, plugin_accept_load_failures=True)
 
-    load_plugin_mock.assert_awaited_once_with(fail_open=True)
+    load_plugin_mock.assert_awaited_once_with(accept_load_failures=True)
 
 
 # ---------------------------------------------------------------------------
@@ -580,12 +580,12 @@ async def test_failing_bootstrap_rolls_back_partial_registration(tmp_path: Path)
     assert str(plugin_dir / wheel.path.stem) not in sys.path
 
 
-async def test_fail_open_rolls_back_partial_registration(tmp_path: Path) -> None:
-    """Under fail_open, a partially-registered failed plug-in is still fully rolled back."""
+async def test_accept_load_failures_rolls_back_partial_registration(tmp_path: Path) -> None:
+    """When load failures are accepted, a partially-registered failed plug-in is still fully rolled back."""
     wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
     plugin_dir = tmp_path / ".plugin"
 
-    await load_plugin(wheel, plugin_dir, fail_open=True)  # must not raise
+    await load_plugin(wheel, plugin_dir, accept_load_failures=True)  # must not raise
 
     registry = ScenarioRegistry.get_registry_singleton()
     assert wheel.scenario_name not in registry._classes
@@ -725,15 +725,15 @@ async def test_missing_wheel_fails_closed() -> None:
             await load_plugin_if_configured_async()
 
 
-async def test_missing_wheel_fail_open_param_proceeds() -> None:
-    """fail_open via the explicit param skips a broken plug-in with a warning."""
+async def test_missing_wheel_accept_load_failures_param_proceeds() -> None:
+    """Accepting load failures via the explicit param skips a broken plug-in with a warning."""
     with plugin_env(PLUGIN_WHEEL=str(Path("does_not_exist.whl"))):
-        await load_plugin_if_configured_async(fail_open=True)  # must not raise
+        await load_plugin_if_configured_async(accept_load_failures=True)  # must not raise
 
 
-async def test_missing_wheel_fail_open_env_proceeds() -> None:
-    """fail_open via PLUGIN_FAIL_OPEN env skips a broken plug-in with a warning."""
-    with plugin_env(PLUGIN_WHEEL=str(Path("does_not_exist.whl")), PLUGIN_FAIL_OPEN="true"):
+async def test_missing_wheel_accept_load_failures_env_proceeds() -> None:
+    """Accepting load failures via PLUGIN_ACCEPT_LOAD_FAILURES env skips a broken plug-in with a warning."""
+    with plugin_env(PLUGIN_WHEEL=str(Path("does_not_exist.whl")), PLUGIN_ACCEPT_LOAD_FAILURES="true"):
         await load_plugin_if_configured_async()  # must not raise
 
 
@@ -746,11 +746,11 @@ async def test_empty_wheel_is_loud(tmp_path: Path) -> None:
             await load_plugin_if_configured_async()
 
 
-async def test_empty_wheel_fail_open_proceeds(tmp_path: Path) -> None:
-    """An empty wheel under fail_open proceeds instead of raising."""
+async def test_empty_wheel_accept_load_failures_proceeds(tmp_path: Path) -> None:
+    """An empty wheel with load failures accepted proceeds instead of raising."""
     wheel = build_mock_wheel(tmp_path, bootstrap="none", include_provider=False, include_scenario=False)
 
-    await load_plugin(wheel, tmp_path / ".plugin", fail_open=True)  # must not raise
+    await load_plugin(wheel, tmp_path / ".plugin", accept_load_failures=True)  # must not raise
 
 
 async def test_non_whl_path_fails_closed(tmp_path: Path) -> None:
@@ -808,7 +808,7 @@ def test_non_no_arg_scenario_fails_metadata_cleanly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# fail_open resolution
+# accept_load_failures resolution
 # ---------------------------------------------------------------------------
 
 
@@ -816,31 +816,31 @@ def test_non_no_arg_scenario_fails_metadata_cleanly() -> None:
     "value,expected",
     [("true", True), ("True", True), ("1", True), ("yes", True), ("on", True), ("false", False), ("0", False)],
 )
-def test_resolve_fail_open_from_env_tokens(value: str, expected: bool) -> None:
-    """fail_open resolves from PLUGIN_FAIL_OPEN across truthy/falsey tokens."""
-    with plugin_env(PLUGIN_FAIL_OPEN=value):
-        assert PluginLoader()._resolve_fail_open() is expected
+def test_resolve_accept_load_failures_from_env_tokens(value: str, expected: bool) -> None:
+    """accept_load_failures resolves from PLUGIN_ACCEPT_LOAD_FAILURES across truthy/falsey tokens."""
+    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES=value):
+        assert PluginLoader()._resolve_accept_load_failures() is expected
 
 
-def test_resolve_fail_open_explicit_true() -> None:
-    """An explicit fail_open=True resolves to True."""
-    with plugin_env(PLUGIN_FAIL_OPEN="false"):
-        assert PluginLoader(fail_open=True)._resolve_fail_open() is True
+def test_resolve_accept_load_failures_explicit_true() -> None:
+    """An explicit accept_load_failures=True resolves to True."""
+    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="false"):
+        assert PluginLoader(accept_load_failures=True)._resolve_accept_load_failures() is True
 
 
-def test_resolve_fail_open_explicit_overrides_env() -> None:
-    """An explicit fail_open value takes precedence over the env var."""
-    with plugin_env(PLUGIN_FAIL_OPEN="true"):
-        assert PluginLoader(fail_open=False)._resolve_fail_open() is False
+def test_resolve_accept_load_failures_explicit_overrides_env() -> None:
+    """An explicit accept_load_failures value takes precedence over the env var."""
+    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="true"):
+        assert PluginLoader(accept_load_failures=False)._resolve_accept_load_failures() is False
 
 
-def test_resolve_fail_open_from_env_when_no_explicit() -> None:
-    """fail_open falls back to PLUGIN_FAIL_OPEN when no explicit value is set."""
-    with plugin_env(PLUGIN_FAIL_OPEN="true"):
-        assert PluginLoader()._resolve_fail_open() is True
+def test_resolve_accept_load_failures_from_env_when_no_explicit() -> None:
+    """accept_load_failures falls back to PLUGIN_ACCEPT_LOAD_FAILURES when no explicit value is set."""
+    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="true"):
+        assert PluginLoader()._resolve_accept_load_failures() is True
 
 
-def test_resolve_fail_open_defaults_false() -> None:
-    """fail_open defaults to False (fail-closed)."""
+def test_resolve_accept_load_failures_defaults_false() -> None:
+    """accept_load_failures defaults to False (fail-closed)."""
     with plugin_env():
-        assert PluginLoader()._resolve_fail_open() is False
+        assert PluginLoader()._resolve_accept_load_failures() is False
