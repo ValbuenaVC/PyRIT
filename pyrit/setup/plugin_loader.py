@@ -9,7 +9,9 @@ must not live in the public PyRIT repo. The loader **extracts** the wheel (stdli
 ``zipfile`` — never ``pip``/``.venv``) into ``.plugin/<name>/``, prepends that directory
 to ``sys.path``, imports the package (so ``SeedDatasetProvider`` subclasses self-register),
 and runs the plug-in's bootstrap (a top-level ``register()`` callable or a shipped
-``PyRITInitializer`` subclass) which registers the plug-in's scenarios.
+``PyRITInitializer`` subclass). The plug-in's own ``Scenario`` subclasses are then
+auto-registered by type (scoped to the plug-in package), so a plug-in's scenarios are
+discovered without the bootstrap having to register each one explicitly.
 
 Plug-ins are declared in ``.pyrit_conf`` under the dedicated ``plugins`` key (a list, so
 several plug-ins load identically to one). ``load_plugins_if_configured_async`` is invoked
@@ -210,6 +212,8 @@ class PluginLoader:
     cannot be loaded.
     """
 
+    _FINGERPRINT_FILE = ".plugin_wheel_fingerprint"
+
     def __init__(self, *, spec: PluginSpec, accept_load_failures: bool | None = None) -> None:
         """
         Initialize the loader for one plug-in.
@@ -279,6 +283,12 @@ class PluginLoader:
             self._resolve_package_name, extract_dir=extract_dir, explicit_package=self._spec.package
         )
 
+        from pyrit.setup.plugin_compat import bridge_scenario_extension_points, warn_on_version_drift
+
+        # Surface any host/plug-in version drift before importing, so a subsequent import or
+        # registration failure is read in the light of the mismatch (tolerate slight drift).
+        warn_on_version_drift(extract_dir=extract_dir)
+
         from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
         from pyrit.registry import ScenarioRegistry
 
@@ -300,7 +310,26 @@ class PluginLoader:
             except Exception as exc:
                 raise PluginImportError(f"Could not import plug-in package '{package_name}': {exc}") from exc
 
+            # Bridge known renamed extension points so scenarios built against an older
+            # PyRIT are made concrete (and thus discoverable) before bootstrap/registration.
+            bridged = bridge_scenario_extension_points(package_name=package_name)
+            if bridged:
+                logger.warning(
+                    "Applied %d plug-in compatibility shim(s) for '%s': %s",
+                    len(bridged),
+                    package_name,
+                    ", ".join(bridged),
+                )
+
             await self._run_bootstrap_async(package_name=package_name, module=module)
+
+            # Register the plug-in's own Scenario subclasses the same way built-ins are
+            # discovered (by type, scoped to the plug-in package), so plug-in scenarios are
+            # picked up without the bootstrap having to register each one explicitly. Classes
+            # the bootstrap already registered are left untouched.
+            registered_scenarios = scenario_registry.register_external_subclasses(package_name=package_name)
+            if registered_scenarios:
+                logger.info("Auto-registered %d plug-in scenario(s) from '%s'.", registered_scenarios, package_name)
 
             provider_count, scenario_count = self._count_registered(
                 package_name=package_name, scenario_registry=scenario_registry
@@ -334,13 +363,19 @@ class PluginLoader:
 
     def _extract_wheel(self, *, wheel_path: Path) -> Path:
         """
-        Extract the wheel into ``.plugin/<wheel-stem>/``, reusing a cached extraction.
+        Extract the wheel into ``.plugin/<wheel-stem>/``, reusing a fresh cached extraction.
 
-        Extraction is atomic: the wheel is unpacked into a temporary sibling directory and
-        moved into place only on success, so a crash mid-extraction never leaves a partial
-        tree that would later be treated as a valid cache. ``safe_extract_zip`` validates
-        every member first (path traversal, symlinks, and size / entry-count / compression
-        caps) so a tampered wheel cannot escape the extraction directory or exhaust disk.
+        A cached extraction is reused only when its recorded fingerprint (wheel size and
+        modification time) matches the wheel on disk. A wheel rebuilt at the same path
+        (common during plug-in development, where the version-stamped filename is stable)
+        has a newer fingerprint, so the stale extraction is discarded and re-extracted
+        rather than silently reused — the exact silent-staleness trap the plug-in design
+        guards against. Extraction is atomic: the wheel is unpacked into a temporary
+        sibling directory and moved into place only on success, so a crash mid-extraction
+        never leaves a partial tree that would later be treated as a valid cache.
+        ``safe_extract_zip`` validates every member first (path traversal, symlinks, and
+        size / entry-count / compression caps) so a tampered wheel cannot escape the
+        extraction directory or exhaust disk.
 
         Args:
             wheel_path: Path to the plug-in wheel.
@@ -354,9 +389,17 @@ class PluginLoader:
         base_dir.mkdir(parents=True, exist_ok=True)
 
         extract_dir = base_dir / wheel_path.stem
+        fingerprint = self._wheel_fingerprint(wheel_path=wheel_path)
         if extract_dir.is_dir() and any(extract_dir.iterdir()):
-            logger.info("Reusing cached plug-in extraction at %s", extract_dir)
-            return extract_dir
+            if self._cached_fingerprint(extract_dir=extract_dir) == fingerprint:
+                logger.info("Reusing cached plug-in extraction at %s", extract_dir)
+                return extract_dir
+            logger.warning(
+                "PLUGIN CACHE STALE: extraction at %s does not match the current wheel "
+                "(rebuilt or replaced); re-extracting '%s'.",
+                extract_dir,
+                wheel_path.name,
+            )
 
         # Unique per-extraction temp dir so concurrent loads of the same wheel in one
         # process cannot collide on a shared path (mkdtemp is atomic and 0700). safe_extract
@@ -364,6 +407,7 @@ class PluginLoader:
         tmp_dir = Path(tempfile.mkdtemp(prefix=f".{wheel_path.stem}.tmp-", dir=base_dir))
         try:
             safe_extract_zip(source=wheel_path, dest_dir=tmp_dir)
+            (tmp_dir / self._FINGERPRINT_FILE).write_text(fingerprint, encoding="utf-8")
             if extract_dir.exists():
                 shutil.rmtree(extract_dir)
             os.replace(tmp_dir, extract_dir)
@@ -373,6 +417,41 @@ class PluginLoader:
 
         logger.info("Extracted plug-in wheel '%s' to %s", wheel_path.name, extract_dir)
         return extract_dir
+
+    @staticmethod
+    def _wheel_fingerprint(*, wheel_path: Path) -> str:
+        """
+        Return a cheap change-detecting fingerprint (size and mtime) for a wheel.
+
+        Args:
+            wheel_path: Path to the plug-in wheel.
+
+        Returns:
+            str: A ``"<size>:<mtime_ns>"`` fingerprint that changes whenever the wheel is
+            rebuilt or replaced.
+        """
+        stat = wheel_path.stat()
+        return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+    @classmethod
+    def _cached_fingerprint(cls, *, extract_dir: Path) -> str | None:
+        """
+        Return the fingerprint recorded for a cached extraction, or ``None`` if absent.
+
+        A missing marker (e.g. an extraction from before fingerprinting) reads as ``None``
+        so the cache is treated as stale and re-extracted rather than trusted blindly.
+
+        Args:
+            extract_dir: The cached extraction directory.
+
+        Returns:
+            str | None: The recorded fingerprint, or ``None`` when no valid marker exists.
+        """
+        marker = extract_dir / cls._FINGERPRINT_FILE
+        try:
+            return marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
 
     @staticmethod
     def _plugin_base_dir() -> Path:
