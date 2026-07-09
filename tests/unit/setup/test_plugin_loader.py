@@ -509,6 +509,32 @@ async def test_ordering_scenario_visible_to_preload(tmp_path: Path) -> None:
     assert wheel.scenario_name in names
 
 
+async def test_plugin_scenario_auto_registered_without_bootstrap(tmp_path: Path) -> None:
+    """A plug-in's Scenario subclass is auto-registered by discovery even with no bootstrap."""
+    wheel = build_mock_wheel(tmp_path, bootstrap="none", include_provider=False)
+
+    await load_plugin(wheel, tmp_path / ".plugin")
+
+    # The scenario is picked up purely by type-scoped discovery of the plug-in package,
+    # so a scenario-only plug-in with no register()/initializer still loads.
+    registry = ScenarioRegistry.get_registry_singleton()
+    mock_scenario = sys.modules[f"{wheel.package}.scenario"].MockScenario
+    assert mock_scenario in registry._classes.values()
+    assert registry._discovered is False  # auto-registration must not trigger built-in discovery
+
+
+async def test_bootstrap_registration_not_duplicated_by_auto_register(tmp_path: Path) -> None:
+    """A scenario the bootstrap registers is not also re-registered under a fallback name."""
+    wheel = build_mock_wheel(tmp_path, bootstrap="register")
+
+    await load_plugin(wheel, tmp_path / ".plugin")
+
+    registry = ScenarioRegistry.get_registry_singleton()
+    mock_scenario = sys.modules[f"{wheel.package}.scenario"].MockScenario
+    registered_names = [name for name, cls in registry._classes.items() if cls is mock_scenario]
+    assert registered_names == [wheel.scenario_name]
+
+
 async def test_datasets_only_plugin_loads_without_bootstrap(tmp_path: Path) -> None:
     """A datasets-only plug-in (no bootstrap, no scenario) loads via import-time registration."""
     wheel = build_mock_wheel(tmp_path, bootstrap="none", include_scenario=False)
