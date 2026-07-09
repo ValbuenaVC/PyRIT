@@ -28,9 +28,9 @@ memory_db_type: sqlite
 # - load_default_datasets: Loads datasets into memory so scenarios can run
 # - preload_scenario_metadata: Preloads scenario metadata into the registry
 #
-# Note: plug-ins (PLUGIN_WHEEL) are NOT configured here. They load automatically as a
-# guaranteed-first phase inside initialize_pyrit_async — before these initializers — so
-# there is no ordering to get right. See the PLUGIN_* variables in .env_example.
+# Note: plug-ins are configured below via the dedicated `plugins:` key, NOT as an entry
+# in this `initializers:` list. Plug-ins load as a guaranteed-first phase (before these
+# initializers), so there is no ordering to get right here.
 #
 # Each initializer can be specified as:
 # - A simple string (name only)
@@ -56,6 +56,36 @@ initializers:
   - name: scorer
   - name: technique
   - name: load_default_datasets
+
+# Plug-ins
+# --------
+# Non-disclosable plug-ins (extra scenarios + datasets) shipped as pre-built wheels and
+# loaded at initialization. Plug-ins load as a guaranteed-first phase — after memory is set
+# and BEFORE the initializers above — so their scenarios/datasets register before anything
+# reads the registry. They are a dedicated phase, not an entry in `initializers:`, so there
+# is no ordering to get right. Loaded in list order; one plug-in behaves identically to
+# several. A configless setup simply has no plug-ins.
+#
+# Each entry can be:
+#   - a wheel path (package auto-detected):        - /abs/path/to/my_plugin.whl
+#   - a {package: wheel} pair (names the package): - my_plugin: /abs/path/to/my_plugin.whl
+#   - an explicit mapping:                         - wheel: /abs/path/to/my_plugin.whl
+#                                                    package: my_plugin
+#
+# WARNING: loading a plug-in executes third-party code in the PyRIT process. Whoever can
+# write this file can run code on the host. Treat it as sensitive.
+#
+# Example:
+# plugins:
+#   - my_first_plugin: /abs/path/to/first-0.0.0-py3-none-any.whl
+#   - my_second_plugin: /abs/path/to/second-0.0.0-py3-none-any.whl
+
+# Accept plug-in load failures
+# ----------------------------
+# When true, a plug-in that fails to load is skipped with a warning instead of aborting
+# initialization. Defaults to false (fail-closed). Precedence: this value wins when set;
+# the PLUGIN_ACCEPT_LOAD_FAILURES env var is used only when this is omitted.
+# plugin_accept_load_failures: false
 
 # Default Scenario
 # ----------------

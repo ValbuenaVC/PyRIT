@@ -24,6 +24,7 @@ from pyrit.setup.initialization import (
 )
 
 if TYPE_CHECKING:
+    from pyrit.setup.plugin_loader import PluginSpec
     from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 
@@ -106,6 +107,11 @@ class ConfigurationLoader(YamlLoadable):
         silent: Whether to suppress initialization messages.
         operator: Name for the current operator, e.g. a team or username.
         operation: Name for the current operation.
+        plugins: List of plug-ins to load as the guaranteed-first initialization phase. Each
+            entry is a wheel path string, a ``{package: wheel}`` mapping, or a
+            ``{wheel: ..., package: ...}`` mapping. Empty means no plug-ins.
+        plugin_accept_load_failures: When True, a plug-in that fails to load is skipped with a
+            warning instead of raising. None defers to ``PLUGIN_ACCEPT_LOAD_FAILURES`` (else fail-closed).
 
     Example YAML configuration:
         memory_db_type: sqlite
@@ -149,10 +155,15 @@ class ConfigurationLoader(YamlLoadable):
     max_concurrent_scenario_runs: int = 3
     allow_custom_initializers: bool = False
     server: dict[str, Any] | None = None
+    plugins: list[str | dict[str, Any]] = field(default_factory=list)
+    plugin_accept_load_failures: bool | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate and normalize the configuration after loading."""
+        # Normalize plug-ins first: they load as the guaranteed-first phase of
+        # initialization, so a malformed plug-in entry should fail fast before anything else.
+        self._normalize_plugins()
         self._normalize_memory_db_type()
         self._normalize_initializers()
         self._normalize_scenario()
@@ -215,6 +226,22 @@ class ConfigurationLoader(YamlLoadable):
             else:
                 raise ValueError(f"Initializer entry must be a string or dict, got: {type(entry).__name__}")
         self._initializer_configs = normalized
+
+    def _normalize_plugins(self) -> None:
+        """
+        Normalize ``plugins`` entries to ``PluginSpec`` instances.
+
+        Each entry is a wheel path string, a single-key ``{package: wheel}`` mapping, or an
+        explicit ``{wheel: ..., package: ...}`` mapping. Validating here (before any other
+        normalization) fails fast on a malformed plug-in entry, since plug-ins load as the
+        guaranteed-first phase of initialization.
+
+        Raises:
+            ValueError: If a plug-in entry has an unsupported shape.
+        """
+        from pyrit.setup.plugin_loader import PluginSpec
+
+        self._plugin_specs = [PluginSpec.from_config(entry) for entry in self.plugins]
 
     def _normalize_scenario(self) -> None:
         """
@@ -362,6 +389,8 @@ class ConfigurationLoader(YamlLoadable):
             "env_files": None,  # None = use defaults
             "env_akv_ref": None,
             "silent": False,
+            "plugins": [],
+            "plugin_accept_load_failures": None,
         }
 
         # 1. Try loading default config file if it exists
@@ -381,6 +410,8 @@ class ConfigurationLoader(YamlLoadable):
                 config_data["env_files"] = default_config.env_files
                 config_data["env_akv_ref"] = default_config.env_akv_ref
                 config_data["silent"] = default_config.silent
+                config_data["plugins"] = list(default_config.plugins)
+                config_data["plugin_accept_load_failures"] = default_config.plugin_accept_load_failures
                 if default_config.operator:
                     config_data["operator"] = default_config.operator
                 if default_config.operation:
@@ -407,6 +438,8 @@ class ConfigurationLoader(YamlLoadable):
             config_data["env_files"] = explicit_config.env_files
             config_data["env_akv_ref"] = explicit_config.env_akv_ref
             config_data["silent"] = explicit_config.silent
+            config_data["plugins"] = list(explicit_config.plugins)
+            config_data["plugin_accept_load_failures"] = explicit_config.plugin_accept_load_failures
             if explicit_config.operator:
                 config_data["operator"] = explicit_config.operator
             if explicit_config.operation:
@@ -491,6 +524,15 @@ class ConfigurationLoader(YamlLoadable):
 
         return resolved
 
+    def resolve_plugins(self) -> list["PluginSpec"]:
+        """
+        Resolve the configured ``plugins`` entries to ``PluginSpec`` instances.
+
+        Returns:
+            list[PluginSpec]: The plug-ins to load, in configured order (empty if none).
+        """
+        return list(self._plugin_specs)
+
     def resolve_initialization_scripts(self) -> Sequence[pathlib.Path] | None:
         """
         Resolve initialization script paths.
@@ -563,6 +605,7 @@ class ConfigurationLoader(YamlLoadable):
         resolved_initializers = self.resolve_initializers()
         resolved_scripts = self.resolve_initialization_scripts()
         resolved_env_files = self.resolve_env_files()
+        resolved_plugins = self.resolve_plugins()
 
         # Map snake_case memory_db_type to internal constant
         internal_memory_db_type = self._MEMORY_DB_TYPE_MAP[self.memory_db_type]
@@ -574,6 +617,8 @@ class ConfigurationLoader(YamlLoadable):
             env_files=resolved_env_files,
             env_akv_ref=self.env_akv_ref,
             silent=self.silent,
+            plugins=resolved_plugins if resolved_plugins else None,
+            plugin_accept_load_failures=self.plugin_accept_load_failures,
         )
 
 

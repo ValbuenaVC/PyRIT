@@ -39,7 +39,7 @@ from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvid
 from pyrit.registry import ScenarioRegistry
 from pyrit.registry.discovery import discover_in_directory
 from pyrit.scenario.core import Scenario
-from pyrit.setup import IN_MEMORY, initialize_pyrit_async
+from pyrit.setup import IN_MEMORY, PluginSpec, initialize_pyrit_async
 
 # (module stem, class name, registry name) for the scenarios the self-contained wheel ships.
 _MOCK_SCENARIOS = [
@@ -179,13 +179,11 @@ def _scenario_class_names_under_package(package_prefix: str) -> set[str]:
 
 
 @contextmanager
-def _plugin_env(*, wheel: Path, plugin_dir: Path | None, extra: dict[str, str] | None = None) -> Iterator[None]:
-    """Set PLUGIN_* env for the duration of a load, then restore the prior values."""
-    values: dict[str, str] = {"PLUGIN_WHEEL": str(wheel)}
+def _plugin_dir_env(*, plugin_dir: Path | None) -> Iterator[None]:
+    """Set PLUGIN_DIR (extraction dir) for the duration of a load, then restore it."""
+    values: dict[str, str] = {}
     if plugin_dir is not None:
         values["PLUGIN_DIR"] = str(plugin_dir)
-    if extra:
-        values.update(extra)
 
     saved: dict[str, str | None] = {key: os.environ.get(key) for key in values}
     os.environ.update(values)
@@ -225,8 +223,8 @@ async def test_built_wheel_scenarios_are_discovered(tmp_path: Path, plugin_sandb
     registry = ScenarioRegistry.get_registry_singleton()
     before = set(registry.get_class_names())
 
-    with _plugin_env(wheel=wheel, plugin_dir=tmp_path / ".plugin"):
-        await initialize_pyrit_async(IN_MEMORY)
+    with _plugin_dir_env(plugin_dir=tmp_path / ".plugin"):
+        await initialize_pyrit_async(IN_MEMORY, plugins=[PluginSpec(wheel=wheel)])
 
     registry = ScenarioRegistry.get_registry_singleton()
     after = set(registry.get_class_names())
@@ -261,12 +259,8 @@ async def test_injected_wheel_scenarios_are_discovered(plugin_sandbox: None) -> 
     if not scenario_dirs_env and not package:
         pytest.skip("Set PLUGIN_TEST_SCENARIO_DIRS or PLUGIN_TEST_PACKAGE to define the expected scenarios.")
 
-    extra_env: dict[str, str] = {}
-    if package:
-        extra_env["PLUGIN_PACKAGE"] = package
-
-    with _plugin_env(wheel=wheel, plugin_dir=None, extra=extra_env):
-        await initialize_pyrit_async(IN_MEMORY)
+    with _plugin_dir_env(plugin_dir=None):
+        await initialize_pyrit_async(IN_MEMORY, plugins=[PluginSpec(wheel=wheel, package=package)])
 
     found = _registered_scenario_class_names()
 

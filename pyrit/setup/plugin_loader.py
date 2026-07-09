@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 """
-Load a non-disclosable PyRIT plug-in from a pre-built wheel at initialization time.
+Load non-disclosable PyRIT plug-ins from pre-built wheels at initialization time.
 
 A plug-in is a pure-Python wheel that ships dataset providers and/or scenarios that
 must not live in the public PyRIT repo. The loader **extracts** the wheel (stdlib
@@ -11,12 +11,13 @@ to ``sys.path``, imports the package (so ``SeedDatasetProvider`` subclasses self
 and runs the plug-in's bootstrap (a top-level ``register()`` callable or a shipped
 ``PyRITInitializer`` subclass) which registers the plug-in's scenarios.
 
-``load_plugin_if_configured_async`` is invoked as a guaranteed-first phase inside
-``initialize_pyrit_async`` — after central memory is set and **before** any configured
-initializers run — so plug-in datasets and scenarios are registered before
-``LoadDefaultDatasets`` / ``PreloadScenarioMetadata`` read the registry. Ordering is
-therefore true by construction, without relying on ``.pyrit_conf`` list position. It is a
-no-op when ``PLUGIN_WHEEL`` is unset.
+Plug-ins are declared in ``.pyrit_conf`` under the dedicated ``plugins`` key (a list, so
+several plug-ins load identically to one). ``load_plugins_if_configured_async`` is invoked
+as a guaranteed-first phase inside ``initialize_pyrit_async`` — after central memory is set
+and **before** any configured initializer runs — so plug-in datasets and scenarios are
+registered before ``LoadDefaultDatasets`` / ``PreloadScenarioMetadata`` read the registry.
+Because ``plugins`` is its own always-first phase (not one of the ordered ``initializers``),
+this ordering is true by construction. It is a no-op when no plug-ins are configured.
 """
 
 from __future__ import annotations
@@ -30,13 +31,15 @@ import pkgutil
 import shutil
 import sys
 import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Sequence
     from types import ModuleType
 
     from pyrit.registry import ScenarioRegistry
@@ -46,23 +49,104 @@ logger = logging.getLogger(__name__)
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 
 
-async def load_plugin_if_configured_async(*, accept_load_failures: bool | None = None) -> None:
+@dataclass(frozen=True)
+class PluginSpec:
     """
-    Load the plug-in referenced by ``PLUGIN_WHEEL`` if one is configured.
+    A single plug-in to load: a pre-built wheel plus its optional top-level package name.
 
-    Convenience entry point invoked by ``initialize_pyrit_async``. A no-op when
-    ``PLUGIN_WHEEL`` is unset.
+    Attributes:
+        wheel (Path): Filesystem path to the pre-built plug-in wheel (``.whl``).
+        package (str | None): The wheel's top-level import package. When ``None`` it is
+            auto-detected from the wheel; set it to disambiguate a multi-package wheel.
+    """
+
+    wheel: Path
+    package: str | None = None
+
+    @classmethod
+    def from_config(cls, entry: str | Mapping[str, object]) -> PluginSpec:
+        """
+        Build a ``PluginSpec`` from a ``.pyrit_conf`` ``plugins`` list entry.
+
+        Accepted shapes:
+
+        * A bare wheel path string (package auto-detected)::
+
+            - /abs/path/to/plugin.whl
+
+        * A single-key ``{package: wheel}`` mapping (concise, names the package)::
+
+            - my_plugin: /abs/path/to/plugin.whl
+
+        * An explicit ``{wheel: ..., package: ...}`` mapping (``package`` optional)::
+
+            - wheel: /abs/path/to/plugin.whl
+              package: my_plugin
+
+        Args:
+            entry: One ``plugins`` list item from the parsed configuration.
+
+        Returns:
+            PluginSpec: The normalized spec.
+
+        Raises:
+            ValueError: If the entry shape is not one of the accepted forms.
+        """
+        if isinstance(entry, str):
+            return cls(wheel=Path(entry).expanduser())
+
+        if isinstance(entry, Mapping):
+            mapping = dict(entry)
+            if "wheel" in mapping:
+                extra_keys = set(mapping) - {"wheel", "package"}
+                if extra_keys:
+                    raise ValueError(
+                        f"Plug-in mapping has unexpected key(s) {sorted(extra_keys)}; only 'wheel' and "
+                        f"'package' are allowed. Got: {entry}"
+                    )
+                wheel = mapping["wheel"]
+                package = mapping.get("package")
+                if not isinstance(wheel, str) or (package is not None and not isinstance(package, str)):
+                    raise ValueError(f"Plug-in entry 'wheel'/'package' must be strings. Got: {entry}")
+                return cls(wheel=Path(wheel).expanduser(), package=package)
+            if len(mapping) == 1 and "package" not in mapping:
+                ((package, wheel),) = mapping.items()
+                if not isinstance(package, str) or not isinstance(wheel, str):
+                    raise ValueError(f"Plug-in entry must map a package name to a wheel path. Got: {entry}")
+                return cls(wheel=Path(wheel).expanduser(), package=package)
+            raise ValueError(
+                f"Plug-in mapping must be a single {{package_name: wheel}} pair or carry a 'wheel' key. Got: {entry}"
+            )
+
+        raise ValueError(f"Plug-in entry must be a wheel path string or mapping, got: {type(entry).__name__}")
+
+
+async def load_plugins_if_configured_async(
+    *, plugins: Sequence[PluginSpec], accept_load_failures: bool | None = None
+) -> None:
+    """
+    Load every configured plug-in, in order. A no-op when ``plugins`` is empty.
+
+    Convenience entry point invoked by ``initialize_pyrit_async`` after memory is set and
+    before the configured initializers run. Plug-ins are loaded in list order, so one
+    plug-in behaves identically to several — the single-plug-in case is just a
+    one-element list.
 
     Args:
+        plugins: The plug-in specs to load, in order.
         accept_load_failures: If provided, overrides the ``PLUGIN_ACCEPT_LOAD_FAILURES``
             environment variable. When True, a plug-in that fails to load is skipped with
-            a warning.
+            a warning and the next plug-in still loads.
 
     Raises:
-        PluginLoadError: If the plug-in is configured but fails to load and load failures
-            are not accepted.
+        PluginLoadError: If a plug-in fails to load and load failures are not accepted.
     """
-    await PluginLoader(accept_load_failures=accept_load_failures).load_async()
+    if not plugins:
+        logger.debug("No plug-ins configured; plug-in loading is a no-op.")
+        return
+
+    for spec in plugins:
+        await PluginLoader(spec=spec, accept_load_failures=accept_load_failures).load_async()
 
 
 def _name_owned_by(module_name: str, package_name: str) -> bool:
@@ -104,7 +188,7 @@ class PluginLoadError(RuntimeError):
 
 
 class PluginWheelNotFoundError(PluginLoadError):
-    """``PLUGIN_WHEEL`` does not point to a readable ``.whl`` file."""
+    """The configured plug-in wheel path does not point to a readable ``.whl`` file."""
 
 
 class PluginImportError(PluginLoadError):
@@ -117,53 +201,49 @@ class PluginRegisteredNothingError(PluginLoadError):
 
 class PluginLoader:
     """
-    Extract and register a PyRIT plug-in wheel referenced by ``PLUGIN_WHEEL``.
+    Extract and register a single PyRIT plug-in wheel described by a ``PluginSpec``.
 
-    No-op unless ``PLUGIN_WHEEL`` is set. When set, the wheel is extracted to
-    ``.plugin/<name>/`` (never installed), imported, and its bootstrap is run so its
-    datasets and scenarios register like built-ins. Fails closed by default; set
-    ``accept_load_failures`` (constructor / ``initialize_pyrit_async`` param) or
-    ``PLUGIN_ACCEPT_LOAD_FAILURES`` to continue without the plug-in when it cannot be loaded.
+    The wheel is extracted to ``.plugin/<name>/`` (never installed), imported, and its
+    bootstrap is run so its datasets and scenarios register like built-ins. Fails closed
+    by default; set ``accept_load_failures`` (constructor / ``initialize_pyrit_async``
+    param) or ``PLUGIN_ACCEPT_LOAD_FAILURES`` to continue without the plug-in when it
+    cannot be loaded.
     """
 
-    def __init__(self, *, accept_load_failures: bool | None = None) -> None:
+    def __init__(self, *, spec: PluginSpec, accept_load_failures: bool | None = None) -> None:
         """
-        Initialize the loader.
+        Initialize the loader for one plug-in.
 
         Args:
+            spec: The plug-in to load (wheel path plus optional package name).
             accept_load_failures: If provided, overrides ``PLUGIN_ACCEPT_LOAD_FAILURES``.
                 When True, a plug-in that fails to load is skipped with a warning instead
                 of raising.
         """
+        self._spec = spec
         self._explicit_accept_load_failures = accept_load_failures
 
     async def load_async(self) -> None:
         """
-        Load the plug-in referenced by ``PLUGIN_WHEEL`` (no-op when unset).
+        Load the plug-in described by this loader's ``PluginSpec``.
 
         Raises:
-            PluginLoadError: If the plug-in is configured but fails to load and load
-                failures are not accepted.
+            PluginLoadError: If the plug-in fails to load and load failures are not accepted.
         """
-        wheel_env = os.getenv("PLUGIN_WHEEL")
-        if not wheel_env:
-            logger.debug("PLUGIN_WHEEL is not set; plug-in loading is a no-op.")
-            return
-
+        wheel = self._spec.wheel
         accept_load_failures = self._resolve_accept_load_failures()
 
         try:
-            await self._load_plugin_async(wheel_path=Path(wheel_env).expanduser())
+            await self._load_plugin_async(wheel_path=wheel.expanduser())
         except Exception as exc:
             if accept_load_failures:
                 logger.warning(
-                    "Plug-in from PLUGIN_WHEEL='%s' failed to load; load failures are accepted so "
-                    "continuing without it: %s",
-                    wheel_env,
+                    "Plug-in wheel '%s' failed to load; load failures are accepted so continuing without it: %s",
+                    wheel,
                     exc,
                 )
                 return
-            message = f"Failed to load plug-in from PLUGIN_WHEEL='{wheel_env}': {exc} {_REMEDIATION}"
+            message = f"Failed to load plug-in from wheel '{wheel}': {exc} {_REMEDIATION}"
             # Preserve the specific failure type so callers can distinguish modes, while
             # always surfacing the remediation guidance. Unknown errors (e.g. a raising
             # bootstrap or an unsafe archive) become a plain PluginLoadError.
@@ -188,14 +268,16 @@ class PluginLoader:
             PluginRegisteredNothingError: If the plug-in registered no datasets or scenarios.
         """
         if not wheel_path.is_file():
-            raise PluginWheelNotFoundError(f"PLUGIN_WHEEL does not point to an existing file: {wheel_path}")
+            raise PluginWheelNotFoundError(f"Plug-in wheel does not point to an existing file: {wheel_path}")
         if wheel_path.suffix != ".whl":
-            raise PluginWheelNotFoundError(f"PLUGIN_WHEEL must point to a .whl file, got: {wheel_path}")
+            raise PluginWheelNotFoundError(f"Plug-in wheel must be a .whl file, got: {wheel_path}")
 
         # Wheel extraction and directory scanning are blocking filesystem work; run them
         # off the event loop so init does not stall unrelated async tasks.
         extract_dir = await asyncio.to_thread(self._extract_wheel, wheel_path=wheel_path)
-        package_name = await asyncio.to_thread(self._resolve_package_name, extract_dir=extract_dir)
+        package_name = await asyncio.to_thread(
+            self._resolve_package_name, extract_dir=extract_dir, explicit_package=self._spec.package
+        )
 
         from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
         from pyrit.registry import ScenarioRegistry
@@ -310,15 +392,16 @@ class PluginLoader:
         return Path(path.HOME_PATH, ".plugin").resolve()
 
     @staticmethod
-    def _resolve_package_name(*, extract_dir: Path) -> str:
+    def _resolve_package_name(*, extract_dir: Path, explicit_package: str | None) -> str:
         """
         Determine the plug-in's top-level import package.
 
-        Resolution order: ``PLUGIN_PACKAGE`` env var, then ``*.dist-info/top_level.txt``,
+        Resolution order: the spec's ``package`` (when set), then ``*.dist-info/top_level.txt``,
         then the single importable top-level directory in the extraction.
 
         Args:
             extract_dir: The directory the wheel was extracted to.
+            explicit_package: The package name from the plug-in's config, if any.
 
         Returns:
             str: The top-level package name to import.
@@ -326,9 +409,8 @@ class PluginLoader:
         Raises:
             ValueError: If the package cannot be unambiguously determined.
         """
-        explicit = os.getenv("PLUGIN_PACKAGE")
-        if explicit:
-            return explicit
+        if explicit_package:
+            return explicit_package
 
         for dist_info in sorted(extract_dir.glob("*.dist-info")):
             top_level = dist_info / "top_level.txt"
@@ -351,10 +433,11 @@ class PluginLoader:
         if not candidates:
             raise ValueError(
                 f"Could not find an importable top-level package in {extract_dir}. "
-                "Set PLUGIN_PACKAGE to the plug-in's package name."
+                "Set the plug-in's 'package' in its .pyrit_conf entry."
             )
         raise ValueError(
-            f"Found multiple top-level packages in {extract_dir}: {candidates}. Set PLUGIN_PACKAGE to disambiguate."
+            f"Found multiple top-level packages in {extract_dir}: {candidates}. "
+            "Set the plug-in's 'package' in its .pyrit_conf entry to disambiguate."
         )
 
     @staticmethod
@@ -387,7 +470,8 @@ class PluginLoader:
             raise ValueError(
                 f"Imported package '{package_name}' resolved to {locations[0]} which is outside the "
                 f"plug-in extraction directory {extract_resolved}. An installed package with the same "
-                "name is likely shadowing the plug-in; set PLUGIN_PACKAGE or resolve the name conflict."
+                "name is likely shadowing the plug-in; set the plug-in's 'package' in .pyrit_conf or "
+                "resolve the name conflict."
             )
 
     @staticmethod

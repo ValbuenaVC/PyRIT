@@ -11,6 +11,7 @@ from pyrit.setup.initialization import (
     MemoryDatabaseType,
     initialize_pyrit_async,
 )
+from pyrit.setup.plugin_loader import PluginSpec
 
 __all__ = [
     "AZURE_SQL",
@@ -20,4 +21,5 @@ __all__ = [
     "initialize_from_config_async",
     "MemoryDatabaseType",
     "ConfigurationLoader",
+    "PluginSpec",
 ]

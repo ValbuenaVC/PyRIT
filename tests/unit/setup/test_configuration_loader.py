@@ -710,3 +710,82 @@ class TestNormalizeServer:
     def test_server_non_dict_raises(self):
         with pytest.raises(ValueError, match="Server entry must be a dict"):
             ConfigurationLoader(server="http://oops:8000")  # type: ignore[arg-type]
+
+
+class TestConfigurationLoaderPlugins:
+    """Tests for the .pyrit_conf `plugins` list and `plugin_accept_load_failures`."""
+
+    def test_no_plugins_by_default(self):
+        """A config with no plugins resolves to an empty plug-in list."""
+        config = ConfigurationLoader()
+        assert config.plugins == []
+        assert config.resolve_plugins() == []
+        assert config.plugin_accept_load_failures is None
+
+    def test_bare_string_entry(self):
+        """A bare wheel-path string resolves to a spec with no explicit package."""
+        from pyrit.setup.plugin_loader import PluginSpec
+
+        config = ConfigurationLoader(plugins=["/abs/path/plugin.whl"])
+        assert config.resolve_plugins() == [PluginSpec(wheel=pathlib.Path("/abs/path/plugin.whl"))]
+
+    def test_concise_package_wheel_pair(self):
+        """A {package: wheel} mapping names the package."""
+        from pyrit.setup.plugin_loader import PluginSpec
+
+        config = ConfigurationLoader(plugins=[{"my_pkg": "/abs/path/plugin.whl"}])
+        assert config.resolve_plugins() == [PluginSpec(wheel=pathlib.Path("/abs/path/plugin.whl"), package="my_pkg")]
+
+    def test_explicit_mapping_entry(self):
+        """An explicit {wheel, package} mapping resolves both fields."""
+        from pyrit.setup.plugin_loader import PluginSpec
+
+        config = ConfigurationLoader(plugins=[{"wheel": "/abs/path/plugin.whl", "package": "my_pkg"}])
+        assert config.resolve_plugins() == [PluginSpec(wheel=pathlib.Path("/abs/path/plugin.whl"), package="my_pkg")]
+
+    def test_multiple_plugins_preserve_order(self):
+        """Several plug-ins resolve in configured order."""
+        config = ConfigurationLoader(plugins=["/a/first.whl", {"second_pkg": "/b/second.whl"}])
+        specs = config.resolve_plugins()
+        assert [s.wheel.name for s in specs] == ["first.whl", "second.whl"]
+        assert specs[1].package == "second_pkg"
+
+    def test_malformed_plugin_entry_fails_fast(self):
+        """A malformed plug-in entry raises during construction (before other setup)."""
+        with pytest.raises(ValueError):
+            ConfigurationLoader(plugins=[123])  # type: ignore[list-item]
+
+    def test_from_dict_with_plugins(self):
+        """from_dict wires the plugins list and accept-load-failures flag onto the loader."""
+        config = ConfigurationLoader.from_dict(
+            {"plugins": [{"pkg": "/x/plugin.whl"}], "plugin_accept_load_failures": True}
+        )
+        assert config.plugin_accept_load_failures is True
+        assert config.resolve_plugins()[0].package == "pkg"
+
+    async def test_initialize_forwards_plugins_and_flag(self):
+        """ConfigurationLoader.initialize_pyrit_async forwards resolved plugins and the flag to core."""
+        from pyrit.setup.plugin_loader import PluginSpec
+
+        config = ConfigurationLoader(
+            memory_db_type="in_memory",
+            plugins=[{"pkg": "/x/plugin.whl"}],
+            plugin_accept_load_failures=True,
+        )
+
+        with mock.patch("pyrit.setup.configuration_loader.initialize_pyrit_async") as core_init:
+            await config.initialize_pyrit_async()
+
+        _, kwargs = core_init.call_args
+        assert kwargs["plugins"] == [PluginSpec(wheel=pathlib.Path("/x/plugin.whl"), package="pkg")]
+        assert kwargs["plugin_accept_load_failures"] is True
+
+    async def test_initialize_passes_none_plugins_when_empty(self):
+        """With no plug-ins configured, core is called with plugins=None (no-op path)."""
+        config = ConfigurationLoader(memory_db_type="in_memory")
+
+        with mock.patch("pyrit.setup.configuration_loader.initialize_pyrit_async") as core_init:
+            await config.initialize_pyrit_async()
+
+        _, kwargs = core_init.call_args
+        assert kwargs["plugins"] is None
