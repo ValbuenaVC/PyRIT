@@ -109,6 +109,35 @@ class ScenarioRegistry(ParamBagRegistry["Scenario", ScenarioMetadata]):
                 return relative
         return class_name_to_snake_case(cls.__name__, suffix="Scenario")
 
+    def _external_registry_name(self, cls: type[Scenario], *, package_name: str) -> str:
+        """
+        Key a plug-in scenario by its module path within the plug-in package.
+
+        Mirrors the built-in dotted-name scheme (module path relative to the scenarios
+        package) so plug-in scenarios read like built-ins and same-named scenarios in
+        different submodules do not collide on a bare class name. The name is the class's
+        module relative to the plug-in's top-level ``package_name`` with a leading
+        ``scenario.scenarios.`` / ``scenarios.`` segment stripped to match built-in style;
+        it falls back to the suffix-stripped snake_case class name when no module context
+        is available.
+
+        Args:
+            cls (type[Scenario]): The plug-in scenario class.
+            package_name (str): The plug-in's top-level package name.
+
+        Returns:
+            str: The dotted registry name for the plug-in scenario.
+        """
+        module = cls.__module__ or ""
+        prefix = f"{package_name}."
+        relative = module[len(prefix) :] if module.startswith(prefix) else module
+        for marker in ("scenario.scenarios.", "scenarios."):
+            index = relative.find(marker)
+            if index != -1:
+                relative = relative[index + len(marker) :]
+                break
+        return relative or class_name_to_snake_case(cls.__name__, suffix="Scenario")
+
     def _build_metadata(self, name: str, cls: type[Scenario]) -> ScenarioMetadata:
         """
         Build metadata for a Scenario class.

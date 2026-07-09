@@ -272,9 +272,7 @@ class Registry(ABC, Generic[T, MetadataT]):
         ``_base_type``/``_discovery_package``.
         """
         package = self._discovery_package()
-        base = self._base_type()
         package_name = package.__name__
-        package_prefix = f"{package_name}."
         # Materialize lazily-exported classes so they are loaded before enumeration.
         # A lazy import backed by an optional dependency may fail; skip it rather
         # than fail the whole discovery (the class cannot be built without the dep).
@@ -283,14 +281,72 @@ class Registry(ABC, Generic[T, MetadataT]):
                 getattr(package, exported_name)
             except Exception as exc:
                 logger.debug(f"Skipping lazily-exported '{exported_name}': {exc}")
+        self._register_subclasses_in_package(package_name=package_name)
+
+    def register_external_subclasses(self, *, package_name: str) -> int:
+        """
+        Register concrete base-type subclasses that live under an external package.
+
+        This is how a loaded plug-in's components (e.g. scenarios shipped in a plug-in
+        wheel) enter the registry: the plug-in's modules are imported elsewhere, then
+        this enumerates the base type's in-memory subclasses under ``package_name`` and
+        registers each, alongside the built-in discovery package. Built-in discovery is
+        **not** triggered, so lazy discovery is preserved, and classes already registered
+        (e.g. by the plug-in's own bootstrap) are left untouched.
+
+        Args:
+            package_name (str): The external (plug-in) top-level package name.
+
+        Returns:
+            int: The number of classes newly registered from the package.
+        """
+        return self._register_subclasses_in_package(
+            package_name=package_name, skip_registered_classes=True, external_package=package_name
+        )
+
+    def _register_subclasses_in_package(
+        self, *, package_name: str, skip_registered_classes: bool = False, external_package: str | None = None
+    ) -> int:
+        """
+        Register every concrete base-type subclass whose module lives under a package.
+
+        Shared by built-in discovery (``_discover``) and external plug-in
+        registration (``register_external_subclasses``). Enumerates the in-memory
+        subclasses of ``_base_type()``, keeps those whose module is ``package_name`` or a
+        submodule of it, and registers each. Built-in classes are named by
+        ``_get_registry_name``; when ``external_package`` is set, names come from
+        ``_external_registry_name`` so a plug-in's classes are keyed by their module path
+        within the plug-in (mirroring built-ins), which keeps same-named classes in
+        different submodules from colliding. When ``skip_registered_classes`` is set,
+        classes already in the catalog (by identity) are skipped so an explicit bootstrap
+        registration is never shadowed by a fallback-named duplicate.
+
+        Args:
+            package_name (str): The package whose subclasses to register.
+            skip_registered_classes (bool): Skip classes already registered by identity.
+            external_package (str | None): When set, the plug-in package the classes belong
+                to; names are derived relative to it via ``_external_registry_name``.
+
+        Returns:
+            int: The number of classes newly registered.
+        """
+        base = self._base_type()
+        package_prefix = f"{package_name}."
+        already_registered = set(self._classes.values()) if skip_registered_classes else set()
+        count = 0
         for cls in self._iter_concrete_subclasses(base):
             module = cls.__module__ or ""
             if module != package_name and not module.startswith(package_prefix):
                 continue
+            if skip_registered_classes and cls in already_registered:
+                continue
             if (cls.__doc__ or "").strip().startswith("Deprecated alias"):
                 logger.debug(f"Skipping deprecated alias: {cls.__name__}")
                 continue
-            name = self._get_registry_name(cls)
+            if external_package is not None:
+                name = self._external_registry_name(cls, package_name=external_package)
+            else:
+                name = self._get_registry_name(cls)
             existing = self._classes.get(name)
             if existing is not None and existing is not cls:
                 logger.warning(
@@ -299,7 +355,26 @@ class Registry(ABC, Generic[T, MetadataT]):
                 )
                 continue
             self.register_class(cls, name=name)
+            count += 1
             logger.debug(f"Registered {base.__name__} class: {name} ({cls.__name__})")
+        return count
+
+    def _external_registry_name(self, cls: type[T], *, package_name: str) -> str:
+        """
+        Return the catalog name for a class discovered in an external (plug-in) package.
+
+        Defaults to the same name built-in discovery would use. Registries that key
+        built-ins by module path (e.g. scenarios) override this so plug-in classes get an
+        equally path-based, collision-resistant name relative to the plug-in package.
+
+        Args:
+            cls (type[T]): The external class being registered.
+            package_name (str): The plug-in's top-level package name.
+
+        Returns:
+            str: The catalog name to register the class under.
+        """
+        return self._get_registry_name(cls)
 
     @staticmethod
     def _iter_concrete_subclasses(base: type[T]) -> list[type[T]]:
