@@ -15,6 +15,14 @@ from pyrit.exceptions import (
     EmptyResponseException,
     InvalidJsonException,
     MissingPromptPlaceholderException,
+    PluginCollisionError,
+    PluginDiscoveryError,
+    PluginImportError,
+    PluginLoadError,
+    PluginRegisteredNothingError,
+    PluginSourceNotFoundError,
+    PluginValidationError,
+    PluginWheelNotFoundError,
     PyritException,
     RateLimitException,
     handle_bad_request_exception,
@@ -64,6 +72,28 @@ def test_invalid_json_exception_initialization():
     assert ex.status_code == 500
     assert ex.message == "Invalid JSON Response"
     assert str(ex) == "Status Code: 500, Message: Invalid JSON Response"
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        PluginSourceNotFoundError,
+        PluginWheelNotFoundError,
+        PluginImportError,
+        PluginDiscoveryError,
+        PluginValidationError,
+        PluginCollisionError,
+        PluginRegisteredNothingError,
+    ],
+)
+def test_plugin_specific_errors_inherit_plugin_load_error(error_type: type[PluginLoadError]) -> None:
+    """Every specific plug-in failure must be catchable through ``PluginLoadError``."""
+    assert issubclass(error_type, PluginLoadError)
+
+
+def test_plugin_registered_nothing_error_describes_supported_components() -> None:
+    """The empty-contribution error must describe the V1 scenario/technique scope."""
+    assert "scenarios or attack techniques" in (PluginRegisteredNothingError.__doc__ or "")
 
 
 def test_bad_request_exception_process_exception(caplog):

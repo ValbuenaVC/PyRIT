@@ -247,19 +247,35 @@ class ExperimentalWarning(FutureWarning):
 
 
 class PluginLoadError(RuntimeError):
-    """Base error raised when a configured plug-in fails to load and load failures are not accepted."""
+    """Base error raised when a configured plug-in fails to load."""
+
+
+class PluginCollisionError(PluginLoadError):
+    """A plug-in contribution conflicts with an existing scenario or attack technique."""
+
+
+class PluginDiscoveryError(PluginLoadError):
+    """A plug-in imported but its scenario or attack-technique contributions could not be discovered."""
+
+
+class PluginImportError(PluginLoadError):
+    """A plug-in source module or wheel package could not be imported."""
+
+
+class PluginRegisteredNothingError(PluginLoadError):
+    """The plug-in imported cleanly but contributed no scenarios or attack techniques."""
+
+
+class PluginSourceNotFoundError(PluginLoadError):
+    """The configured plug-in source path does not point to a readable Python file or package."""
+
+
+class PluginValidationError(PluginLoadError):
+    """A discovered plug-in scenario or attack technique violates the current PyRIT contract."""
 
 
 class PluginWheelNotFoundError(PluginLoadError):
     """The configured plug-in wheel path does not point to a readable ``.whl`` file."""
-
-
-class PluginImportError(PluginLoadError):
-    """The plug-in package could not be imported (missing dependency, or an installed package shadows it)."""
-
-
-class PluginRegisteredNothingError(PluginLoadError):
-    """The plug-in imported cleanly but registered no datasets or scenarios."""
 
 
 def pyrit_custom_result_retry(
