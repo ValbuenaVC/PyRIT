@@ -782,3 +782,43 @@ class TestConfigurationLoaderPlugins:
         config = ConfigurationLoader.from_yaml_file(config_path)
 
         assert config.resolve_plugins()[0].source == (tmp_path / "plugins" / "operation_foobar.py").resolve()
+
+    async def test_initialize_prepends_privileged_plugin_initializer(self, tmp_path: pathlib.Path):
+        from pyrit.setup.plugin_loader import PluginInitializer
+
+        user_initializer = mock.MagicMock()
+        config = ConfigurationLoader(
+            memory_db_type="in_memory",
+            plugins=[
+                {
+                    "name": "partner",
+                    "format": "wheel",
+                    "wheel": str(tmp_path / "partner.whl"),
+                    "package": "partner.plugin",
+                }
+            ],
+        )
+
+        with (
+            mock.patch.object(config, "resolve_initializers", return_value=[user_initializer]),
+            mock.patch("pyrit.setup.configuration_loader.initialize_pyrit_async") as core_init,
+        ):
+            await config.initialize_pyrit_async()
+
+        initializers = core_init.call_args.kwargs["initializers"]
+        assert isinstance(initializers[0], PluginInitializer)
+        assert initializers[0].plugins == config.resolve_plugins()
+        assert initializers[1] is user_initializer
+        assert "plugins" not in core_init.call_args.kwargs
+
+    async def test_initialize_without_plugins_uses_only_configured_initializers(self):
+        user_initializer = mock.MagicMock()
+        config = ConfigurationLoader(memory_db_type="in_memory")
+
+        with (
+            mock.patch.object(config, "resolve_initializers", return_value=[user_initializer]),
+            mock.patch("pyrit.setup.configuration_loader.initialize_pyrit_async") as core_init,
+        ):
+            await config.initialize_pyrit_async()
+
+        assert core_init.call_args.kwargs["initializers"] == [user_initializer]

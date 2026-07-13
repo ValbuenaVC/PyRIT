@@ -13,7 +13,6 @@ from pyrit.common.apply_defaults import reset_default_values
 from pyrit.memory import AzureSQLMemory, CentralMemory, MemoryInterface, SQLiteMemory
 
 if TYPE_CHECKING:
-    from pyrit.setup.plugin_loader import PluginSpec
     from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 logger = logging.getLogger(__name__)
@@ -196,30 +195,6 @@ async def _execute_initializers_async(*, initializers: Sequence["PyRITInitialize
             raise
 
 
-def _verify_plugin_prerequisites() -> None:
-    """
-    Verify the initialization phases plug-ins depend on completed successfully.
-
-    Plug-in loading runs a third party's bootstrap, which typically constructs targets and
-    scorers (needing loaded environment variables) and reads or writes central memory. This
-    is the health gate for that phase: plug-ins are loaded only if the prior initialization
-    phases were green. Central memory being set is the concrete, verifiable signal that the
-    environment and memory phases completed — the linear init flow would have raised earlier
-    otherwise, so a violation here means a broken initialization state, not a plug-in fault,
-    and is surfaced loudly regardless of ``plugin_accept_load_failures``.
-
-    Raises:
-        RuntimeError: If central memory is not set, indicating a prior phase did not complete.
-    """
-    try:
-        CentralMemory.get_memory_instance()
-    except Exception as exc:
-        raise RuntimeError(
-            "Cannot load plug-ins: central memory is not initialized. Plug-in loading requires "
-            "the environment and memory phases of initialize_pyrit_async to have completed first."
-        ) from exc
-
-
 async def initialize_pyrit_async(
     memory_db_type: MemoryDatabaseType | str,
     *,
@@ -228,8 +203,6 @@ async def initialize_pyrit_async(
     env_files: Sequence[pathlib.Path] | None = None,
     env_akv_ref: Sequence[str] | None = None,
     silent: bool = False,
-    plugins: Sequence["PluginSpec"] | None = None,
-    plugin_accept_load_failures: bool | None = None,
     **memory_instance_kwargs: Any,
 ) -> None:
     """
@@ -251,15 +224,6 @@ async def initialize_pyrit_async(
             so local files take precedence over AKV. Requires ``azure-keyvault-secrets``.
         silent (bool): If True, suppresses print statements about environment file loading and
             schema migration. Defaults to False.
-        plugins (Sequence[PluginSpec] | None): Optional plug-ins to load as a guaranteed-first phase,
-            after central memory is set and before the configured initializers run. Each plug-in is a
-            pre-built wheel shipping datasets/scenarios that register like built-ins. Plug-ins are
-            loaded in list order, so one plug-in behaves identically to several. Typically populated
-            from the ``plugins`` key of ``.pyrit_conf``; direct callers pass ``PluginSpec`` instances.
-        plugin_accept_load_failures (bool | None): Overrides ``PLUGIN_ACCEPT_LOAD_FAILURES`` for plug-in
-            loading. When True, a plug-in that fails to load is skipped with a warning instead of
-            raising. Defaults to None (use the ``PLUGIN_ACCEPT_LOAD_FAILURES`` environment variable,
-            else fail-closed).
         **memory_instance_kwargs (Any | None): Additional keyword arguments to pass to the memory instance.
 
     Raises:
@@ -294,20 +258,6 @@ async def initialize_pyrit_async(
         )
 
     CentralMemory.set_memory_instance(memory)
-
-    # Load configured plug-ins as a guaranteed-first phase: after central memory is set (a
-    # plug-in bootstrap may use it) and BEFORE any configured initializer runs, so plug-in
-    # datasets/scenarios are registered before LoadDefaultDatasets and PreloadScenarioMetadata
-    # read the registry. Because `plugins` is its own always-first phase (not one of the
-    # ordered `initializers`), this ordering is true by construction. Plug-ins are loaded only
-    # after a health check confirms the initialization phases they depend on completed. No-op
-    # when no plug-ins are configured.
-    if plugins:
-        _verify_plugin_prerequisites()
-
-        from pyrit.setup.plugin_loader import load_plugins_if_configured_async
-
-        await load_plugins_if_configured_async(plugins=plugins, accept_load_failures=plugin_accept_load_failures)
 
     # Combine directly provided initializers with those loaded from scripts
     all_initializers = list(initializers) if initializers else []

@@ -10,6 +10,7 @@ import -> bootstrap -> assert-loaded, plus the accept-load-failures/fail-closed 
 silent-failure guards called out in the design brief.
 """
 
+import inspect
 import logging
 import os
 import sys
@@ -28,9 +29,10 @@ from pyrit.memory import CentralMemory
 from pyrit.models import SeedDataset
 from pyrit.registry import ScenarioRegistry
 from pyrit.setup import PluginSpec
-from pyrit.setup.initialization import IN_MEMORY, _verify_plugin_prerequisites, initialize_pyrit_async
+from pyrit.setup.initialization import IN_MEMORY, initialize_pyrit_async
 from pyrit.setup.plugin_loader import (
     PluginImportError,
+    PluginInitializer,
     PluginLoader,
     PluginLoadError,
     PluginRegisteredNothingError,
@@ -286,7 +288,7 @@ def plugin_sandbox() -> Iterator[None]:
 def plugin_env(**overrides: str) -> Iterator[None]:
     """Patch os.environ so only the given PLUGIN_* overrides are present."""
     with patch.dict(os.environ, overrides, clear=False):
-        for key in ("PLUGIN_DIR", "PLUGIN_ACCEPT_LOAD_FAILURES"):
+        for key in ("PLUGIN_DIR",):
             if key not in overrides:
                 os.environ.pop(key, None)
         yield
@@ -297,98 +299,64 @@ def _spec(wheel: MockWheel, *, package: str | None = None) -> PluginSpec:
     return PluginSpec(wheel=wheel.path, package=package)
 
 
-def _dummy_loader(*, accept_load_failures: bool | None = None) -> PluginLoader:
-    """Build a PluginLoader with a placeholder spec for testing policy resolution."""
-    return PluginLoader(spec=PluginSpec(wheel=Path("dummy.whl")), accept_load_failures=accept_load_failures)
-
-
 async def load_plugin(
     wheel: MockWheel,
     plugin_dir: Path,
     *,
-    accept_load_failures: bool | None = None,
     package: str | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> None:
     """Run the plug-in loader against a single mock wheel with an isolated env."""
     with plugin_env(PLUGIN_DIR=str(plugin_dir), **(extra_env or {})):
-        await load_plugins_if_configured_async(
-            plugins=[_spec(wheel, package=package)], accept_load_failures=accept_load_failures
-        )
+        await load_plugins_if_configured_async(plugins=[_spec(wheel, package=package)])
 
 
 # ---------------------------------------------------------------------------
-# Loader phase inside initialize_pyrit_async
+# Privileged PluginInitializer
 # ---------------------------------------------------------------------------
 
 
-def test_verify_plugin_prerequisites_passes_when_memory_set() -> None:
-    """The health check passes when central memory is initialized."""
-    with patch.object(CentralMemory, "get_memory_instance", return_value=MagicMock()):
-        _verify_plugin_prerequisites()  # must not raise
+def test_core_initialize_has_no_plugin_parameters() -> None:
+    parameters = inspect.signature(initialize_pyrit_async).parameters
+    assert "plugins" not in parameters
+    assert "plugin_accept_load_failures" not in parameters
 
 
-def test_verify_plugin_prerequisites_raises_when_memory_unset() -> None:
-    """The health check fails loudly when a prerequisite phase (memory) did not complete."""
-    with patch.object(CentralMemory, "get_memory_instance", side_effect=ValueError("not set")):
-        with pytest.raises(RuntimeError, match="central memory is not initialized"):
-            _verify_plugin_prerequisites()
-
-
-async def test_plugin_phase_runs_after_memory_before_initializers() -> None:
-    """initialize_pyrit_async loads plug-ins after memory is set, before initializers."""
-    manager = MagicMock()
-    manager.attach_mock(MagicMock(), "set_memory")
-    manager.attach_mock(AsyncMock(), "load_plugins")
-    manager.attach_mock(AsyncMock(), "execute")
-
-    with (
-        patch("pyrit.setup.initialization.SQLiteMemory", return_value=MagicMock()),
-        patch.object(CentralMemory, "set_memory_instance", manager.set_memory),
-        patch("pyrit.setup.initialization._verify_plugin_prerequisites"),
-        patch("pyrit.setup.plugin_loader.load_plugins_if_configured_async", manager.load_plugins),
-        patch("pyrit.setup.initialization._execute_initializers_async", manager.execute),
-    ):
-        await initialize_pyrit_async(
-            IN_MEMORY,
-            initializers=[MagicMock()],
-            env_files=[],
-            silent=True,
-            plugins=[PluginSpec(wheel=Path("plugin.whl"))],
-        )
-
-    order = [call[0] for call in manager.mock_calls if call[0] in {"set_memory", "load_plugins", "execute"}]
-    assert order.index("set_memory") < order.index("load_plugins") < order.index("execute")
-
-
-async def test_plugin_phase_forwards_accept_load_failures_param() -> None:
-    """initialize_pyrit_async forwards plugins and plugin_accept_load_failures to the loader."""
+async def test_plugin_initializer_delegates_to_loader() -> None:
     load_plugins_mock = AsyncMock()
     spec = PluginSpec(wheel=Path("plugin.whl"))
+    initializer = PluginInitializer(plugins=[spec])
+
+    with patch("pyrit.setup.plugin_loader.load_plugins_if_configured_async", load_plugins_mock):
+        await initializer.initialize_async()
+
+    load_plugins_mock.assert_awaited_once()
+    assert list(load_plugins_mock.await_args.kwargs["plugins"]) == [spec]
+
+
+async def test_plugin_initializer_runs_after_memory_setup() -> None:
+    memory = MagicMock()
+    initializer = PluginInitializer(plugins=[PluginSpec(wheel=Path("plugin.whl"))])
+
+    async def _assert_memory_ready() -> None:
+        assert CentralMemory.get_memory_instance() is memory
+
     with (
-        patch("pyrit.setup.initialization.SQLiteMemory", return_value=MagicMock()),
-        patch.object(CentralMemory, "set_memory_instance"),
-        patch("pyrit.setup.initialization._verify_plugin_prerequisites"),
-        patch("pyrit.setup.plugin_loader.load_plugins_if_configured_async", load_plugins_mock),
+        patch("pyrit.setup.initialization.SQLiteMemory", return_value=memory),
+        patch.object(initializer, "initialize_async", side_effect=_assert_memory_ready) as initialize_mock,
     ):
-        await initialize_pyrit_async(
-            IN_MEMORY, env_files=[], silent=True, plugins=[spec], plugin_accept_load_failures=True
-        )
+        await initialize_pyrit_async(IN_MEMORY, initializers=[initializer], env_files=[], silent=True)
 
-    load_plugins_mock.assert_awaited_once_with(plugins=[spec], accept_load_failures=True)
+    initialize_mock.assert_awaited_once()
 
 
-async def test_plugin_phase_skipped_when_no_plugins() -> None:
-    """initialize_pyrit_async does not touch the plug-in loader when no plug-ins are configured."""
-    load_plugins_mock = AsyncMock()
-    with (
-        patch("pyrit.setup.initialization.SQLiteMemory", return_value=MagicMock()),
-        patch.object(CentralMemory, "set_memory_instance"),
-        patch("pyrit.setup.plugin_loader.load_plugins_if_configured_async", load_plugins_mock),
-    ):
-        await initialize_pyrit_async(IN_MEMORY, env_files=[], silent=True)
+def test_plugin_initializer_is_not_user_discoverable() -> None:
+    from pyrit.registry import InitializerRegistry
 
-    load_plugins_mock.assert_not_awaited()
+    InitializerRegistry.reset_registry_singleton()
+    registry = InitializerRegistry.get_registry_singleton()
+
+    assert "plugin" not in registry.get_class_names()
 
 
 # ---------------------------------------------------------------------------
@@ -650,17 +618,6 @@ async def test_failing_bootstrap_rolls_back_partial_registration(tmp_path: Path)
     assert str(plugin_dir / wheel.path.stem) not in sys.path
 
 
-async def test_accept_load_failures_rolls_back_partial_registration(tmp_path: Path) -> None:
-    """When load failures are accepted, a partially-registered failed plug-in is still fully rolled back."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
-    plugin_dir = tmp_path / ".plugin"
-
-    await load_plugin(wheel, plugin_dir, accept_load_failures=True)  # must not raise
-
-    registry = ScenarioRegistry.get_registry_singleton()
-    assert wheel.scenario_name not in registry._classes
-
-
 async def test_rollback_restores_overwritten_provider(tmp_path: Path) -> None:
     """A failed load restores a provider entry the plug-in overwrote (name collision)."""
     wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
@@ -790,33 +747,12 @@ async def test_missing_wheel_fails_closed() -> None:
             await load_plugins_if_configured_async(plugins=[PluginSpec(wheel=Path("does_not_exist.whl"))])
 
 
-async def test_missing_wheel_accept_load_failures_param_proceeds() -> None:
-    """Accepting load failures via the explicit param skips a broken plug-in with a warning."""
-    with plugin_env():
-        await load_plugins_if_configured_async(
-            plugins=[PluginSpec(wheel=Path("does_not_exist.whl"))], accept_load_failures=True
-        )  # must not raise
-
-
-async def test_missing_wheel_accept_load_failures_env_proceeds() -> None:
-    """Accepting load failures via PLUGIN_ACCEPT_LOAD_FAILURES env skips a broken plug-in with a warning."""
-    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="true"):
-        await load_plugins_if_configured_async(plugins=[PluginSpec(wheel=Path("does_not_exist.whl"))])  # must not raise
-
-
 async def test_empty_wheel_is_loud(tmp_path: Path) -> None:
     """A wheel that imports cleanly but registers nothing fails loudly."""
     wheel = build_mock_wheel(tmp_path, bootstrap="none", include_provider=False, include_scenario=False)
 
     with pytest.raises(PluginRegisteredNothingError, match="registered no datasets or scenarios"):
         await load_plugin(wheel, tmp_path / ".plugin")
-
-
-async def test_empty_wheel_accept_load_failures_proceeds(tmp_path: Path) -> None:
-    """An empty wheel with load failures accepted proceeds instead of raising."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="none", include_provider=False, include_scenario=False)
-
-    await load_plugin(wheel, tmp_path / ".plugin", accept_load_failures=True)  # must not raise
 
 
 async def test_non_whl_path_fails_closed(tmp_path: Path) -> None:
@@ -874,78 +810,15 @@ def test_non_no_arg_scenario_fails_metadata_cleanly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# accept_load_failures resolution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "value,expected",
-    [("true", True), ("True", True), ("1", True), ("yes", True), ("on", True), ("false", False), ("0", False)],
-)
-def test_resolve_accept_load_failures_from_env_tokens(value: str, expected: bool) -> None:
-    """accept_load_failures resolves from PLUGIN_ACCEPT_LOAD_FAILURES across truthy/falsey tokens."""
-    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES=value):
-        assert _dummy_loader()._resolve_accept_load_failures() is expected
-
-
-def test_resolve_accept_load_failures_explicit_true() -> None:
-    """An explicit accept_load_failures=True resolves to True."""
-    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="false"):
-        assert _dummy_loader(accept_load_failures=True)._resolve_accept_load_failures() is True
-
-
-def test_resolve_accept_load_failures_explicit_overrides_env() -> None:
-    """An explicit accept_load_failures value takes precedence over the env var."""
-    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="true"):
-        assert _dummy_loader(accept_load_failures=False)._resolve_accept_load_failures() is False
-
-
-def test_resolve_accept_load_failures_from_env_when_no_explicit() -> None:
-    """accept_load_failures falls back to PLUGIN_ACCEPT_LOAD_FAILURES when no explicit value is set."""
-    with plugin_env(PLUGIN_ACCEPT_LOAD_FAILURES="true"):
-        assert _dummy_loader()._resolve_accept_load_failures() is True
-
-
-def test_resolve_accept_load_failures_defaults_false() -> None:
-    """accept_load_failures defaults to False (fail-closed)."""
-    with plugin_env():
-        assert _dummy_loader()._resolve_accept_load_failures() is False
-
-
-# ---------------------------------------------------------------------------
 # Multiple plug-ins
 # ---------------------------------------------------------------------------
 
 
-async def test_multiple_plugins_all_load(tmp_path: Path) -> None:
-    """Every configured plug-in loads; a single plug-in is just the one-element case."""
+async def test_multiple_plugins_rejected(tmp_path: Path) -> None:
+    """V1 rejects plug-in composition."""
     wheel_a = build_mock_wheel(tmp_path / "a", package_name="mock_plugin_alpha")
     wheel_b = build_mock_wheel(tmp_path / "b", package_name="mock_plugin_beta")
 
     with plugin_env(PLUGIN_DIR=str(tmp_path / ".plugin")):
-        await load_plugins_if_configured_async(plugins=[_spec(wheel_a), _spec(wheel_b)])
-
-    names = ScenarioRegistry.get_registry_singleton().get_class_names()
-    assert wheel_a.scenario_name in names
-    assert wheel_b.scenario_name in names
-
-
-async def test_plugins_load_in_configured_order(tmp_path: Path) -> None:
-    """Plug-ins load in list order (later entries load after earlier ones)."""
-    wheel_a = build_mock_wheel(tmp_path / "a", package_name="mock_plugin_first")
-    wheel_b = build_mock_wheel(tmp_path / "b", package_name="mock_plugin_second")
-
-    loaded: list[str] = []
-    original = PluginLoader.load_async
-
-    async def _record(self: PluginLoader) -> None:
-        loaded.append(self._spec.package or self._spec.wheel.stem)
-        await original(self)
-
-    with plugin_env(PLUGIN_DIR=str(tmp_path / ".plugin")):
-        with patch.object(PluginLoader, "load_async", _record):
-            await load_plugins_if_configured_async(
-                plugins=[_spec(wheel_a, package="mock_plugin_first"), _spec(wheel_b, package="mock_plugin_second")]
-            )
-
-    assert loaded == ["mock_plugin_first", "mock_plugin_second"]
+        with pytest.raises(ValueError, match="one plug-in"):
+            await load_plugins_if_configured_async(plugins=[_spec(wheel_a), _spec(wheel_b)])

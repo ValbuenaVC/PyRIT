@@ -632,10 +632,14 @@ class ConfigurationLoader(YamlLoadable):
         Raises:
             ValueError: If configuration is invalid or initializers cannot be resolved.
         """
-        resolved_initializers = self.resolve_initializers()
+        resolved_initializers = list(self.resolve_initializers())
         resolved_scripts = self.resolve_initialization_scripts()
         resolved_env_files = self.resolve_env_files()
         resolved_plugins = self.resolve_plugins()
+        if resolved_plugins:
+            from pyrit.setup.plugin_loader import PluginInitializer
+
+            resolved_initializers.insert(0, PluginInitializer(plugins=resolved_plugins))
 
         # Map snake_case memory_db_type to internal constant
         internal_memory_db_type = self._MEMORY_DB_TYPE_MAP[self.memory_db_type]
@@ -647,7 +651,6 @@ class ConfigurationLoader(YamlLoadable):
             env_files=resolved_env_files,
             env_akv_ref=self.env_akv_ref,
             silent=self.silent,
-            plugins=resolved_plugins if resolved_plugins else None,
         )
 
 

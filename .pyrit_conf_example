@@ -80,13 +80,6 @@ initializers:
 #   - my_first_plugin: /abs/path/to/first-0.0.0-py3-none-any.whl
 #   - my_second_plugin: /abs/path/to/second-0.0.0-py3-none-any.whl
 
-# Accept plug-in load failures
-# ----------------------------
-# When true, a plug-in that fails to load is skipped with a warning instead of aborting
-# initialization. Defaults to false (fail-closed). Precedence: this value wins when set;
-# the PLUGIN_ACCEPT_LOAD_FAILURES env var is used only when this is omitted.
-# plugin_accept_load_failures: false
-
 # Default Scenario
 # ----------------
 # Optional default scenario to run when invoking `pyrit_scan` without a

@@ -53,12 +53,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 
-
-async def load_plugins_if_configured_async(
-    *, plugins: Sequence[PluginSpec], accept_load_failures: bool | None = None
-) -> None:
+async def load_plugins_if_configured_async(*, plugins: Sequence[PluginSpec]) -> None:
     """
     Load every configured plug-in, in order. A no-op when ``plugins`` is empty.
 
@@ -69,19 +65,19 @@ async def load_plugins_if_configured_async(
 
     Args:
         plugins: The plug-in specs to load, in order.
-        accept_load_failures: If provided, overrides the ``PLUGIN_ACCEPT_LOAD_FAILURES``
-            environment variable. When True, a plug-in that fails to load is skipped with
-            a warning and the next plug-in still loads.
 
     Raises:
-        PluginLoadError: If a plug-in fails to load and load failures are not accepted.
+        PluginLoadError: If a plug-in fails to load.
+        ValueError: If more than one plug-in is supplied.
     """
     if not plugins:
         logger.debug("No plug-ins configured; plug-in loading is a no-op.")
         return
+    if len(plugins) > 1:
+        raise ValueError("V1 supports one plug-in at a time; plug-in composition is not supported.")
 
     for spec in plugins:
-        await PluginLoader(spec=spec, accept_load_failures=accept_load_failures).load_async()
+        await PluginLoader(spec=spec).load_async()
 
 
 def _name_owned_by(module_name: str, package_name: str) -> bool:
@@ -112,10 +108,35 @@ def _module_owned_by(cls: type, package_name: str) -> bool:
     return _name_owned_by(cls.__module__ or "", package_name)
 
 
-_REMEDIATION = (
-    "Remove the plug-in configuration, or accept load failures (PLUGIN_ACCEPT_LOAD_FAILURES=true, or the "
-    "initialize_pyrit_async(plugin_accept_load_failures=True) parameter) to continue without it."
-)
+_REMEDIATION = "Fix or remove the plug-in entry from .pyrit_conf, then restart PyRIT."
+
+
+class PluginInitializer(PyRITInitializer):
+    """Privileged config-owned initializer that activates one scenario plug-in."""
+
+    def __init__(self, *, plugins: Sequence[PluginSpec]) -> None:
+        """
+        Initialize the privileged plug-in loader.
+
+        Args:
+            plugins (Sequence[PluginSpec]): The normalized plug-in declarations.
+
+        Raises:
+            ValueError: If V1 receives anything other than one plug-in.
+        """
+        super().__init__()
+        if len(plugins) != 1:
+            raise ValueError("PluginInitializer requires exactly one plug-in in V1.")
+        self._plugins = tuple(plugins)
+
+    @property
+    def plugins(self) -> list[PluginSpec]:
+        """The normalized plug-in declarations."""
+        return list(self._plugins)
+
+    async def initialize_async(self) -> None:
+        """Activate the configured plug-in before user-configured initializers."""
+        await load_plugins_if_configured_async(plugins=self._plugins)
 
 
 class PluginLoader:
@@ -124,46 +145,34 @@ class PluginLoader:
 
     The wheel is extracted to ``.plugin/<name>/`` (never installed), imported, and its
     bootstrap is run so its datasets and scenarios register like built-ins. Fails closed
-    by default; set ``accept_load_failures`` (constructor / ``initialize_pyrit_async``
-    param) or ``PLUGIN_ACCEPT_LOAD_FAILURES`` to continue without the plug-in when it
-    cannot be loaded.
+    by default.
     """
 
     _FINGERPRINT_FILE = ".plugin_wheel_fingerprint"
 
-    def __init__(self, *, spec: PluginSpec, accept_load_failures: bool | None = None) -> None:
+    def __init__(self, *, spec: PluginSpec) -> None:
         """
         Initialize the loader for one plug-in.
 
         Args:
             spec: The plug-in to load (wheel path plus optional package name).
-            accept_load_failures: If provided, overrides ``PLUGIN_ACCEPT_LOAD_FAILURES``.
-                When True, a plug-in that fails to load is skipped with a warning instead
-                of raising.
         """
         self._spec = spec
-        self._explicit_accept_load_failures = accept_load_failures
 
     async def load_async(self) -> None:
         """
         Load the plug-in described by this loader's ``PluginSpec``.
 
         Raises:
-            PluginLoadError: If the plug-in fails to load and load failures are not accepted.
+            PluginWheelNotFoundError: If the spec is not a wheel-format plug-in.
+            PluginLoadError: If the plug-in fails to load.
         """
         wheel = self._spec.wheel
-        accept_load_failures = self._resolve_accept_load_failures()
-
+        if wheel is None:
+            raise PluginWheelNotFoundError("The current loader only accepts wheel-format plug-ins.")
         try:
             await self._load_plugin_async(wheel_path=wheel.expanduser())
         except Exception as exc:
-            if accept_load_failures:
-                logger.warning(
-                    "Plug-in wheel '%s' failed to load; load failures are accepted so continuing without it: %s",
-                    wheel,
-                    exc,
-                )
-                return
             message = f"Failed to load plug-in from wheel '{wheel}': {exc} {_REMEDIATION}"
             # Preserve the specific failure type so callers can distinguish modes, while
             # always surfacing the remediation guidance. Unknown errors (e.g. a raising
@@ -610,8 +619,7 @@ class PluginLoader:
         the real collision, so false-positive-free with a documented gap beats high-recall-but-
         noisy. Hard enforcement that can tell a real mismatch from a harmless name coincidence
         belongs to the scenario's declared required-dataset-names / expected-source mechanism
-        (which knows the operator's intent), not this loader, and is intentionally not gated
-        behind ``PLUGIN_ACCEPT_LOAD_FAILURES``.
+        (which knows the operator's intent), not this loader.
 
         Args:
             package_name: The plug-in's top-level package name.
@@ -713,36 +721,3 @@ class PluginLoader:
                 changed_scenarios = True
         if changed_scenarios:
             scenario_registry._metadata_cache = None
-
-    def _resolve_accept_load_failures(self) -> bool:
-        """
-        Resolve the accept-load-failures setting from the explicit value or the environment.
-
-        Precedence: the explicit ``accept_load_failures`` passed to the constructor (e.g. from
-        ``initialize_pyrit_async``), then the ``PLUGIN_ACCEPT_LOAD_FAILURES`` environment
-        variable, otherwise fail-closed.
-
-        Returns:
-            bool: True if a failed plug-in load should be skipped with a warning.
-        """
-        if self._explicit_accept_load_failures is not None:
-            return self._explicit_accept_load_failures
-
-        env_value = os.getenv("PLUGIN_ACCEPT_LOAD_FAILURES")
-        if env_value is not None:
-            return self._coerce_bool(env_value)
-
-        return False
-
-    @staticmethod
-    def _coerce_bool(value: str) -> bool:
-        """
-        Interpret a string as a boolean flag.
-
-        Args:
-            value: The raw string value.
-
-        Returns:
-            bool: True for common truthy tokens (1/true/yes/on, case-insensitive).
-        """
-        return str(value).strip().lower() in _TRUE_TOKENS
