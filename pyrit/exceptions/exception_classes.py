@@ -246,6 +246,22 @@ class ExperimentalWarning(FutureWarning):
     """
 
 
+class PluginLoadError(RuntimeError):
+    """Base error raised when a configured plug-in fails to load and load failures are not accepted."""
+
+
+class PluginWheelNotFoundError(PluginLoadError):
+    """The configured plug-in wheel path does not point to a readable ``.whl`` file."""
+
+
+class PluginImportError(PluginLoadError):
+    """The plug-in package could not be imported (missing dependency, or an installed package shadows it)."""
+
+
+class PluginRegisteredNothingError(PluginLoadError):
+    """The plug-in imported cleanly but registered no datasets or scenarios."""
+
+
 def pyrit_custom_result_retry(
     retry_function: Callable[..., bool], retry_max_num_attempts: int | None = None
 ) -> Callable[..., Any]:

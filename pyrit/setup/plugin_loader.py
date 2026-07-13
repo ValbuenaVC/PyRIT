@@ -38,6 +38,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pyrit.exceptions.exception_classes import (
+    PluginImportError,
+    PluginLoadError,
+    PluginRegisteredNothingError,
+    PluginWheelNotFoundError,
+)
 from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 if TYPE_CHECKING:
@@ -183,22 +189,6 @@ _REMEDIATION = (
     "Remove the plug-in configuration, or accept load failures (PLUGIN_ACCEPT_LOAD_FAILURES=true, or the "
     "initialize_pyrit_async(plugin_accept_load_failures=True) parameter) to continue without it."
 )
-
-
-class PluginLoadError(RuntimeError):
-    """Base error raised when a configured plug-in fails to load and load failures are not accepted."""
-
-
-class PluginWheelNotFoundError(PluginLoadError):
-    """The configured plug-in wheel path does not point to a readable ``.whl`` file."""
-
-
-class PluginImportError(PluginLoadError):
-    """The plug-in package could not be imported (missing dependency, or an installed package shadows it)."""
-
-
-class PluginRegisteredNothingError(PluginLoadError):
-    """The plug-in imported cleanly but registered no datasets or scenarios."""
 
 
 class PluginLoader:
