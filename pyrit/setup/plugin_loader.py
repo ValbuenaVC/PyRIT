@@ -33,8 +33,6 @@ import pkgutil
 import shutil
 import sys
 import tempfile
-from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,86 +45,15 @@ from pyrit.exceptions.exception_classes import (
 from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from types import ModuleType
 
     from pyrit.registry import ScenarioRegistry
+    from pyrit.setup.plugin_spec import PluginSpec
 
 logger = logging.getLogger(__name__)
 
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
-
-
-@dataclass(frozen=True)
-class PluginSpec:
-    """
-    A single plug-in to load: a pre-built wheel plus its optional top-level package name.
-
-    Attributes:
-        wheel (Path): Filesystem path to the pre-built plug-in wheel (``.whl``).
-        package (str | None): The wheel's top-level import package. When ``None`` it is
-            auto-detected from the wheel; set it to disambiguate a multi-package wheel.
-    """
-
-    wheel: Path
-    package: str | None = None
-
-    @classmethod
-    def from_config(cls, entry: str | Mapping[str, object]) -> PluginSpec:
-        """
-        Build a ``PluginSpec`` from a ``.pyrit_conf`` ``plugins`` list entry.
-
-        Accepted shapes:
-
-        * A bare wheel path string (package auto-detected)::
-
-            - /abs/path/to/plugin.whl
-
-        * A single-key ``{package: wheel}`` mapping (concise, names the package)::
-
-            - my_plugin: /abs/path/to/plugin.whl
-
-        * An explicit ``{wheel: ..., package: ...}`` mapping (``package`` optional)::
-
-            - wheel: /abs/path/to/plugin.whl
-              package: my_plugin
-
-        Args:
-            entry: One ``plugins`` list item from the parsed configuration.
-
-        Returns:
-            PluginSpec: The normalized spec.
-
-        Raises:
-            ValueError: If the entry shape is not one of the accepted forms.
-        """
-        if isinstance(entry, str):
-            return cls(wheel=Path(entry).expanduser())
-
-        if isinstance(entry, Mapping):
-            mapping = dict(entry)
-            if "wheel" in mapping:
-                extra_keys = set(mapping) - {"wheel", "package"}
-                if extra_keys:
-                    raise ValueError(
-                        f"Plug-in mapping has unexpected key(s) {sorted(extra_keys)}; only 'wheel' and "
-                        f"'package' are allowed. Got: {entry}"
-                    )
-                wheel = mapping["wheel"]
-                package = mapping.get("package")
-                if not isinstance(wheel, str) or (package is not None and not isinstance(package, str)):
-                    raise ValueError(f"Plug-in entry 'wheel'/'package' must be strings. Got: {entry}")
-                return cls(wheel=Path(wheel).expanduser(), package=package)
-            if len(mapping) == 1 and "package" not in mapping:
-                ((package, wheel),) = mapping.items()
-                if not isinstance(package, str) or not isinstance(wheel, str):
-                    raise ValueError(f"Plug-in entry must map a package name to a wheel path. Got: {entry}")
-                return cls(wheel=Path(wheel).expanduser(), package=package)
-            raise ValueError(
-                f"Plug-in mapping must be a single {{package_name: wheel}} pair or carry a 'wheel' key. Got: {entry}"
-            )
-
-        raise ValueError(f"Plug-in entry must be a wheel path string or mapping, got: {type(entry).__name__}")
 
 
 async def load_plugins_if_configured_async(

@@ -713,79 +713,72 @@ class TestNormalizeServer:
 
 
 class TestConfigurationLoaderPlugins:
-    """Tests for the .pyrit_conf `plugins` list and `plugin_accept_load_failures`."""
+    """Tests for the ``.pyrit_conf`` plug-in list."""
 
     def test_no_plugins_by_default(self):
         """A config with no plugins resolves to an empty plug-in list."""
         config = ConfigurationLoader()
         assert config.plugins == []
         assert config.resolve_plugins() == []
-        assert config.plugin_accept_load_failures is None
 
-    def test_bare_string_entry(self):
-        """A bare wheel-path string resolves to a spec with no explicit package."""
-        from pyrit.setup.plugin_loader import PluginSpec
+    def test_explicit_source_mapping(self, tmp_path: pathlib.Path):
+        config = ConfigurationLoader(
+            plugins=[
+                {
+                    "name": "operation_foobar",
+                    "format": "source",
+                    "source": str(tmp_path / "operation_foobar.py"),
+                }
+            ]
+        )
 
-        config = ConfigurationLoader(plugins=["/abs/path/plugin.whl"])
-        assert config.resolve_plugins() == [PluginSpec(wheel=pathlib.Path("/abs/path/plugin.whl"))]
+        spec = config.resolve_plugins()[0]
+        assert spec.name == "operation_foobar"
+        assert spec.source == (tmp_path / "operation_foobar.py").resolve()
 
-    def test_concise_package_wheel_pair(self):
-        """A {package: wheel} mapping names the package."""
-        from pyrit.setup.plugin_loader import PluginSpec
-
-        config = ConfigurationLoader(plugins=[{"my_pkg": "/abs/path/plugin.whl"}])
-        assert config.resolve_plugins() == [PluginSpec(wheel=pathlib.Path("/abs/path/plugin.whl"), package="my_pkg")]
-
-    def test_explicit_mapping_entry(self):
-        """An explicit {wheel, package} mapping resolves both fields."""
-        from pyrit.setup.plugin_loader import PluginSpec
-
-        config = ConfigurationLoader(plugins=[{"wheel": "/abs/path/plugin.whl", "package": "my_pkg"}])
-        assert config.resolve_plugins() == [PluginSpec(wheel=pathlib.Path("/abs/path/plugin.whl"), package="my_pkg")]
-
-    def test_multiple_plugins_preserve_order(self):
-        """Several plug-ins resolve in configured order."""
-        config = ConfigurationLoader(plugins=["/a/first.whl", {"second_pkg": "/b/second.whl"}])
-        specs = config.resolve_plugins()
-        assert [s.wheel.name for s in specs] == ["first.whl", "second.whl"]
-        assert specs[1].package == "second_pkg"
+    def test_multiple_plugins_rejected(self, tmp_path: pathlib.Path):
+        with pytest.raises(ValueError, match="one plug-in"):
+            ConfigurationLoader(
+                plugins=[
+                    {"name": "first", "format": "source", "source": str(tmp_path / "first.py")},
+                    {"name": "second", "format": "source", "source": str(tmp_path / "second.py")},
+                ]
+            )
 
     def test_malformed_plugin_entry_fails_fast(self):
         """A malformed plug-in entry raises during construction (before other setup)."""
         with pytest.raises(ValueError):
             ConfigurationLoader(plugins=[123])  # type: ignore[list-item]
 
-    def test_from_dict_with_plugins(self):
-        """from_dict wires the plugins list and accept-load-failures flag onto the loader."""
+    def test_from_dict_with_plugins(self, tmp_path: pathlib.Path):
+        """``from_dict`` wires the explicit plug-in mapping onto the loader."""
         config = ConfigurationLoader.from_dict(
-            {"plugins": [{"pkg": "/x/plugin.whl"}], "plugin_accept_load_failures": True}
+            {
+                "plugins": [
+                    {
+                        "name": "partner",
+                        "format": "wheel",
+                        "wheel": str(tmp_path / "plugin.whl"),
+                        "package": "partner.plugin",
+                    }
+                ]
+            }
         )
-        assert config.plugin_accept_load_failures is True
-        assert config.resolve_plugins()[0].package == "pkg"
+        assert config.resolve_plugins()[0].package == "partner.plugin"
 
-    async def test_initialize_forwards_plugins_and_flag(self):
-        """ConfigurationLoader.initialize_pyrit_async forwards resolved plugins and the flag to core."""
-        from pyrit.setup.plugin_loader import PluginSpec
-
-        config = ConfigurationLoader(
-            memory_db_type="in_memory",
-            plugins=[{"pkg": "/x/plugin.whl"}],
-            plugin_accept_load_failures=True,
+    def test_yaml_plugin_path_resolves_relative_to_config(self, tmp_path: pathlib.Path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_path = config_dir / ".pyrit_conf"
+        config_path.write_text(
+            """plugins:
+  - name: operation_foobar
+    format: source
+    source: ../plugins/operation_foobar.py
+""",
+            encoding="utf-8",
         )
 
-        with mock.patch("pyrit.setup.configuration_loader.initialize_pyrit_async") as core_init:
-            await config.initialize_pyrit_async()
+        config = ConfigurationLoader.from_yaml_file(config_path)
 
-        _, kwargs = core_init.call_args
-        assert kwargs["plugins"] == [PluginSpec(wheel=pathlib.Path("/x/plugin.whl"), package="pkg")]
-        assert kwargs["plugin_accept_load_failures"] is True
-
-    async def test_initialize_passes_none_plugins_when_empty(self):
-        """With no plug-ins configured, core is called with plugins=None (no-op path)."""
-        config = ConfigurationLoader(memory_db_type="in_memory")
-
-        with mock.patch("pyrit.setup.configuration_loader.initialize_pyrit_async") as core_init:
-            await config.initialize_pyrit_async()
-
-        _, kwargs = core_init.call_args
-        assert kwargs["plugins"] is None
+        assert config.resolve_plugins()[0].source == (tmp_path / "plugins" / "operation_foobar.py").resolve()

@@ -27,13 +27,13 @@ from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvid
 from pyrit.memory import CentralMemory
 from pyrit.models import SeedDataset
 from pyrit.registry import ScenarioRegistry
+from pyrit.setup import PluginSpec
 from pyrit.setup.initialization import IN_MEMORY, _verify_plugin_prerequisites, initialize_pyrit_async
 from pyrit.setup.plugin_loader import (
     PluginImportError,
     PluginLoader,
     PluginLoadError,
     PluginRegisteredNothingError,
-    PluginSpec,
     PluginWheelNotFoundError,
     load_plugins_if_configured_async,
 )
@@ -910,41 +910,6 @@ def test_resolve_accept_load_failures_defaults_false() -> None:
     """accept_load_failures defaults to False (fail-closed)."""
     with plugin_env():
         assert _dummy_loader()._resolve_accept_load_failures() is False
-
-
-# ---------------------------------------------------------------------------
-# PluginSpec.from_config parsing
-# ---------------------------------------------------------------------------
-
-
-def test_plugin_spec_from_config_bare_string() -> None:
-    """A bare wheel-path string parses to a spec with no explicit package."""
-    spec = PluginSpec.from_config("/abs/path/plugin.whl")
-    assert spec.wheel == Path("/abs/path/plugin.whl")
-    assert spec.package is None
-
-
-def test_plugin_spec_from_config_single_key_pair() -> None:
-    """A {package: wheel} mapping names the package."""
-    spec = PluginSpec.from_config({"my_pkg": "/abs/path/plugin.whl"})
-    assert spec.wheel == Path("/abs/path/plugin.whl")
-    assert spec.package == "my_pkg"
-
-
-def test_plugin_spec_from_config_explicit_mapping() -> None:
-    """An explicit {wheel, package} mapping parses both fields; package is optional."""
-    spec = PluginSpec.from_config({"wheel": "/abs/path/plugin.whl", "package": "my_pkg"})
-    assert spec == PluginSpec(wheel=Path("/abs/path/plugin.whl"), package="my_pkg")
-    assert PluginSpec.from_config({"wheel": "/abs/path/plugin.whl"}).package is None
-
-
-@pytest.mark.parametrize(
-    "entry", [123, {"a": "1", "b": "2"}, {"package": "no_wheel"}, {"wheel": "/x.whl", "packge": "typo"}]
-)
-def test_plugin_spec_from_config_rejects_bad_shapes(entry: object) -> None:
-    """Unsupported entry shapes (including explicit mappings with unexpected keys) raise ValueError."""
-    with pytest.raises(ValueError):
-        PluginSpec.from_config(entry)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

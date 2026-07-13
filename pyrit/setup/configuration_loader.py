@@ -13,7 +13,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import yaml
+
 from pyrit.common.path import DEFAULT_CONFIG_PATH
+from pyrit.common.utils import verify_and_resolve_path
 from pyrit.common.yaml_loadable import YamlLoadable
 from pyrit.models import class_name_to_snake_case
 from pyrit.setup.initialization import (
@@ -24,7 +27,7 @@ from pyrit.setup.initialization import (
 )
 
 if TYPE_CHECKING:
-    from pyrit.setup.plugin_loader import PluginSpec
+    from pyrit.setup.plugin_spec import PluginSpec
     from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 
@@ -110,8 +113,6 @@ class ConfigurationLoader(YamlLoadable):
         plugins: List of plug-ins to load as the guaranteed-first initialization phase. Each
             entry is a wheel path string, a ``{package: wheel}`` mapping, or a
             ``{wheel: ..., package: ...}`` mapping. Empty means no plug-ins.
-        plugin_accept_load_failures: When True, a plug-in that fails to load is skipped with a
-            warning instead of raising. None defers to ``PLUGIN_ACCEPT_LOAD_FAILURES`` (else fail-closed).
 
     Example YAML configuration:
         memory_db_type: sqlite
@@ -155,9 +156,9 @@ class ConfigurationLoader(YamlLoadable):
     max_concurrent_scenario_runs: int = 3
     allow_custom_initializers: bool = False
     server: dict[str, Any] | None = None
-    plugins: list[str | dict[str, Any]] = field(default_factory=list)
-    plugin_accept_load_failures: bool | None = None
+    plugins: list[dict[str, Any]] = field(default_factory=list)
     extensions: dict[str, Any] = field(default_factory=dict)
+    _plugin_base_dir: pathlib.Path = field(default_factory=pathlib.Path.cwd, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Validate and normalize the configuration after loading."""
@@ -231,17 +232,18 @@ class ConfigurationLoader(YamlLoadable):
         """
         Normalize ``plugins`` entries to ``PluginSpec`` instances.
 
-        Each entry is a wheel path string, a single-key ``{package: wheel}`` mapping, or an
-        explicit ``{wheel: ..., package: ...}`` mapping. Validating here (before any other
-        normalization) fails fast on a malformed plug-in entry, since plug-ins load as the
-        guaranteed-first phase of initialization.
+        V1 accepts at most one explicit mapping that selects the ``source`` or ``wheel``
+        format. Validating here (before any other normalization) fails fast on a
+        malformed plug-in entry.
 
         Raises:
             ValueError: If a plug-in entry has an unsupported shape.
         """
-        from pyrit.setup.plugin_loader import PluginSpec
+        from pyrit.setup.plugin_spec import PluginSpec
 
-        self._plugin_specs = [PluginSpec.from_config(entry) for entry in self.plugins]
+        if len(self.plugins) > 1:
+            raise ValueError("V1 supports one plug-in at a time; plug-in composition is not supported.")
+        self._plugin_specs = [PluginSpec.from_config(entry, base_dir=self._plugin_base_dir) for entry in self.plugins]
 
     def _normalize_scenario(self) -> None:
         """
@@ -315,12 +317,13 @@ class ConfigurationLoader(YamlLoadable):
         return self._scenario_config
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ConfigurationLoader":
+    def from_dict(cls, data: dict[str, Any], *, plugin_base_dir: pathlib.Path | None = None) -> "ConfigurationLoader":
         """
         Create a ConfigurationLoader from a dictionary.
 
         Args:
             data: Dictionary containing configuration values.
+            plugin_base_dir: Directory used to resolve relative plug-in paths.
 
         Returns:
             A new ConfigurationLoader instance.
@@ -330,7 +333,7 @@ class ConfigurationLoader(YamlLoadable):
         """
         # Filter out None values only - empty lists are meaningful ("load nothing")
         filtered_data = {k: v for k, v in data.items() if v is not None}
-        known_fields = set(cls.__dataclass_fields__.keys())
+        known_fields = {name for name in cls.__dataclass_fields__ if not name.startswith("_")}
         known_data = {k: v for k, v in filtered_data.items() if k in known_fields and k != "extensions"}
         extra_data = {k: v for k, v in filtered_data.items() if k not in known_fields}
         if "extensions" in filtered_data:
@@ -338,7 +341,37 @@ class ConfigurationLoader(YamlLoadable):
             if not isinstance(extensions, dict):
                 raise ValueError(f"ConfigurationLoader.extensions must be a dict. Got: {type(extensions).__name__}")
             extra_data = {**extra_data, **extensions}
-        return cls(**known_data, extensions=extra_data)
+        return cls(
+            **known_data,
+            extensions=extra_data,
+            _plugin_base_dir=(plugin_base_dir or pathlib.Path.cwd()).resolve(),
+        )
+
+    @classmethod
+    def from_yaml_file(cls, file: pathlib.Path | str) -> "ConfigurationLoader":
+        """
+        Load configuration while retaining the file directory for plug-in paths.
+
+        Args:
+            file: The YAML configuration path.
+
+        Returns:
+            ConfigurationLoader: The parsed and normalized configuration.
+
+        Raises:
+            FileNotFoundError: If the path does not exist.
+            ValueError: If the YAML is empty, malformed, or has a non-mapping root.
+        """
+        resolved = verify_and_resolve_path(file)
+        try:
+            yaml_data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML file '{resolved}': {exc}") from exc
+        if yaml_data is None:
+            raise ValueError(f"YAML file '{resolved}' is empty.")
+        if not isinstance(yaml_data, dict):
+            raise ValueError(f"YAML file '{resolved}' must contain a top-level mapping.")
+        return cls.from_dict(yaml_data, plugin_base_dir=resolved.parent)
 
     @staticmethod
     def load_with_overrides(
@@ -390,7 +423,6 @@ class ConfigurationLoader(YamlLoadable):
             "env_akv_ref": None,
             "silent": False,
             "plugins": [],
-            "plugin_accept_load_failures": None,
         }
 
         # 1. Try loading default config file if it exists
@@ -410,8 +442,7 @@ class ConfigurationLoader(YamlLoadable):
                 config_data["env_files"] = default_config.env_files
                 config_data["env_akv_ref"] = default_config.env_akv_ref
                 config_data["silent"] = default_config.silent
-                config_data["plugins"] = list(default_config.plugins)
-                config_data["plugin_accept_load_failures"] = default_config.plugin_accept_load_failures
+                config_data["plugins"] = [spec.to_config() for spec in default_config.resolve_plugins()]
                 if default_config.operator:
                     config_data["operator"] = default_config.operator
                 if default_config.operation:
@@ -438,8 +469,7 @@ class ConfigurationLoader(YamlLoadable):
             config_data["env_files"] = explicit_config.env_files
             config_data["env_akv_ref"] = explicit_config.env_akv_ref
             config_data["silent"] = explicit_config.silent
-            config_data["plugins"] = list(explicit_config.plugins)
-            config_data["plugin_accept_load_failures"] = explicit_config.plugin_accept_load_failures
+            config_data["plugins"] = [spec.to_config() for spec in explicit_config.resolve_plugins()]
             if explicit_config.operator:
                 config_data["operator"] = explicit_config.operator
             if explicit_config.operation:
@@ -618,7 +648,6 @@ class ConfigurationLoader(YamlLoadable):
             env_akv_ref=self.env_akv_ref,
             silent=self.silent,
             plugins=resolved_plugins if resolved_plugins else None,
-            plugin_accept_load_failures=self.plugin_accept_load_failures,
         )
 
 
