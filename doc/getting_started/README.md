@@ -28,4 +28,5 @@ Once you're set up:
 
 - 🔌 [Targets](../code/targets/0_prompt_targets.md) — Connect to different AI systems
 - 📦 [Scenarios](../code/scenarios/0_scenarios.ipynb) — Run standardized evaluation scenarios
+- 🧩 [Private Scenario Plug-Ins](./plugins.md) — Add private scenarios and attack techniques to stock PyRIT
 - 🖥️ [Scanner](../scanner/0_scanner.md) — Use `pyrit_scan` for automated assessments

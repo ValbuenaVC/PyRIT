@@ -51,6 +51,7 @@ project:
           children:
             - file: getting_started/populating_secrets.md
             - file: getting_started/pyrit_conf.md
+            - file: getting_started/plugins.md
         - file: getting_started/troubleshooting/README.md
           children:
             - file: getting_started/troubleshooting/installation.md
@@ -60,6 +61,7 @@ project:
                 - file: getting_started/troubleshooting/local_dev.md
                 - file: getting_started/troubleshooting/jupyter_setup.md
                 - file: getting_started/troubleshooting/azure_sql_db.md
+                - file: getting_started/troubleshooting/plugins.md
             - file: getting_started/troubleshooting/deployment.md
               children:
                 - file: getting_started/troubleshooting/deploy_hf_model_aml.ipynb

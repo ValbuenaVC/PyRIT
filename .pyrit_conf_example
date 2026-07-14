@@ -59,26 +59,32 @@ initializers:
 
 # Plug-ins
 # --------
-# Non-disclosable plug-ins (extra scenarios + datasets) shipped as pre-built wheels and
-# loaded at initialization. Plug-ins load as a guaranteed-first phase — after memory is set
-# and BEFORE the initializers above — so their scenarios/datasets register before anything
-# reads the registry. They are a dedicated phase, not an entry in `initializers:`, so there
-# is no ordering to get right. Loaded in list order; one plug-in behaves identically to
-# several. A configless setup simply has no plug-ins.
+# Private scenarios and attack techniques loaded from source or a pre-built wheel.
+# ConfigurationLoader automatically prepends a privileged PluginInitializer ahead of
+# the initializers above; do NOT list it under `initializers:`.
 #
-# Each entry can be:
-#   - a wheel path (package auto-detected):        - /abs/path/to/my_plugin.whl
-#   - a {package: wheel} pair (names the package): - my_plugin: /abs/path/to/my_plugin.whl
-#   - an explicit mapping:                         - wheel: /abs/path/to/my_plugin.whl
-#                                                    package: my_plugin
+# V1 accepts one plug-in. Exactly one of `source` or `wheel` is required.
+# Relative paths resolve against this configuration file.
 #
 # WARNING: loading a plug-in executes third-party code in the PyRIT process. Whoever can
 # write this file can run code on the host. Treat it as sensitive.
 #
-# Example:
+# Source example:
 # plugins:
-#   - my_first_plugin: /abs/path/to/first-0.0.0-py3-none-any.whl
-#   - my_second_plugin: /abs/path/to/second-0.0.0-py3-none-any.whl
+#   - name: operation_foobar
+#     format: source
+#     source: /opt/pyrit/operation_foobar.py
+#
+# Wheel example:
+# plugins:
+#   - name: partner_scenarios
+#     format: wheel
+#     wheel: /opt/pyrit/partner_scenarios-1.2.0-py3-none-any.whl
+#     package: partner_scenarios
+#
+# Help and troubleshooting:
+# - doc/getting_started/plugins.md
+# - doc/getting_started/troubleshooting/plugins.md
 
 # Default Scenario
 # ----------------

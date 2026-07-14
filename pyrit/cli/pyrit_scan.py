@@ -84,6 +84,13 @@ _DESCRIPTION = """PyRIT Scanner - Run AI security scenarios from the command lin
 Requires a running PyRIT backend server. Use --start-server to launch one,
 or connect to an existing server with --server-url.
 
+Private scenario plug-ins:
+  Use a plug-in when private scenarios or attack techniques must behave like
+  built-ins in the stock scanner/backend/catalog. If you own a custom Python
+  application, importing PyRIT as a dependency and composing it directly is
+  usually simpler. Configure trusted source or wheel artifacts in .pyrit_conf.
+  See doc/getting_started/plugins.md.
+
 Examples:
   # Start the backend server
   pyrit_scan --start-server

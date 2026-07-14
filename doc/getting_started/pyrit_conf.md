@@ -151,6 +151,33 @@ initialization_scripts:
   - ./local_initializer.py
 ```
 
+### `plugins`
+
+One private scenario/attack-technique plug-in to activate before the configured
+initializers. The plug-in can be a source file/package or a pre-built wheel:
+
+```yaml
+plugins:
+  - name: operation_foobar
+    format: source
+    source: /opt/pyrit/operation_foobar.py
+```
+
+```yaml
+plugins:
+  - name: partner_scenarios
+    format: wheel
+    wheel: /opt/pyrit/partner_scenarios-1.2.0-py3-none-any.whl
+    package: partner_scenarios
+```
+
+`ConfigurationLoader` automatically injects a privileged plug-in initializer first;
+do not add it to `initializers:`. V1 is fail-closed, supports one plug-in, and requires
+a process/backend restart after changes.
+
+See [Private Scenarios and Attack Techniques](./plugins.md) and
+[Plug-In Troubleshooting](./troubleshooting/plugins.md).
+
 ### `env_files`
 
 Environment file paths to load during initialization. Later files override values from earlier files.
@@ -196,9 +223,13 @@ The 3-layer model above determines **which config values are selected**. Once re
 1. Environment files are loaded
 2. Default values are reset
 3. Memory database is configured (from `memory_db_type`)
-4. Initializers are executed in listed order
+4. The privileged plug-in initializer runs when `plugins:` is configured
+5. User-configured initializers are executed in listed order
 
-Because initializers run last, they can modify anything set up in earlier steps — including environment variables and the memory instance. In practice, built-in initializers like `target` and `scorer` only call `set_default_value` and `set_global_variable` and do not touch memory or environment variables. However, a custom initializer could override those if needed. When this happens, the initializer's changes take effect because it runs after the other settings have been applied.
+Because initializers run after environment and memory setup, they can use those
+prerequisites. The plug-in initializer is framework-controlled and always precedes
+the listed initializers so scenario/technique registries are complete before catalog
+consumers run.
 
 ## Usage
 

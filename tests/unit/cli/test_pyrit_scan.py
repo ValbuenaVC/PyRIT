@@ -146,10 +146,13 @@ class TestParseArgs:
         with pytest.raises(SystemExit):
             pyrit_scan.parse_args(["test_scenario", "--max-retries", "-1"])
 
-    def test_parse_args_help_flag(self):
+    def test_parse_args_help_flag(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
             pyrit_scan.parse_args(["--help"])
         assert exc_info.value.code == 0
+        help_text = capsys.readouterr().out
+        assert "Private scenario plug-ins" in help_text
+        assert "doc/getting_started/plugins.md" in help_text
 
     def test_parse_args_with_target(self):
         args = pyrit_scan.parse_args(["test_scenario", "--target", "my_target"])
