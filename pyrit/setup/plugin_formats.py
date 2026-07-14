@@ -53,11 +53,20 @@ class SourcePluginFormat:
             raise ValueError("SourcePluginFormat requires a source-format PluginSpec.")
 
         source = spec.source.expanduser().resolve()
-        if not source.is_file():
-            raise PluginSourceNotFoundError(f"Plug-in source does not point to an existing Python file: {source}")
+        if source.is_file():
+            return self._prepare_file(spec=spec, source=source)
+        if source.is_dir():
+            return self._prepare_package(spec=spec, source=source)
+        raise PluginSourceNotFoundError(f"Plug-in source does not point to an existing path: {source}")
+
+    def _prepare_file(self, *, spec: PluginSpec, source: Path) -> PreparedPlugin:
         if source.suffix != ".py" or not source.stem.isidentifier():
             raise PluginSourceNotFoundError(
                 f"Plug-in source must be a Python file with an importable filename: {source}"
+            )
+        if spec.package is not None and spec.package != source.stem:
+            raise ValueError(
+                f"Single-file plug-in package must match the source module '{source.stem}', got '{spec.package}'."
             )
 
         return PreparedPlugin(
@@ -68,12 +77,55 @@ class SourcePluginFormat:
             artifact_fingerprint=self._fingerprint(source=source),
         )
 
+    def _prepare_package(self, *, spec: PluginSpec, source: Path) -> PreparedPlugin:
+        package_name = source.name
+        if not package_name.isidentifier() or not (source / "__init__.py").is_file():
+            raise PluginSourceNotFoundError(
+                f"Plug-in source directory must be an importable package containing __init__.py: {source}"
+            )
+
+        entry_module = spec.package or package_name
+        if entry_module != package_name and not entry_module.startswith(f"{package_name}."):
+            raise ValueError(f"Plug-in entry module '{entry_module}' must be inside source package '{package_name}'.")
+        self._validate_entry_module(source=source, entry_module=entry_module)
+
+        return PreparedPlugin(
+            spec=spec,
+            import_root=source.parent,
+            entry_modules=(entry_module,),
+            owned_module_prefixes=(package_name,),
+            artifact_fingerprint=self._fingerprint_package(source=source),
+        )
+
+    @staticmethod
+    def _validate_entry_module(*, source: Path, entry_module: str) -> None:
+        relative_parts = entry_module.split(".")[1:]
+        if not relative_parts:
+            return
+        module_path = source.joinpath(*relative_parts)
+        if module_path.with_suffix(".py").is_file() or (module_path / "__init__.py").is_file():
+            return
+        raise ValueError(f"Plug-in entry module '{entry_module}' does not exist inside {source}.")
+
     @staticmethod
     def _fingerprint(*, source: Path) -> str:
         digest = hashlib.sha256()
         with source.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def _fingerprint_package(cls, *, source: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted(source.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            resolved = path.resolve()
+            if not resolved.is_relative_to(source):
+                raise PluginSourceNotFoundError(f"Plug-in package file escapes the source root: {path}")
+            digest.update(path.relative_to(source).as_posix().encode("utf-8"))
+            digest.update(cls._fingerprint(source=path).encode("ascii"))
         return digest.hexdigest()
 
 

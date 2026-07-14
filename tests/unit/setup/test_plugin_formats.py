@@ -167,3 +167,80 @@ async def test_source_file_fingerprint_changes_with_content(tmp_path: Path) -> N
     second = await adapter.prepare_async(spec=spec)
 
     assert first.artifact_fingerprint != second.artifact_fingerprint
+
+
+async def test_source_package_prepare_returns_package_ownership(tmp_path: Path) -> None:
+    package = tmp_path / "operation_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "scenarios.py").write_text("VALUE = 1\n", encoding="utf-8")
+    spec = PluginSpec(
+        name="operation",
+        format=PluginFormat.SOURCE,
+        source=package,
+    )
+
+    prepared = await SourcePluginFormat().prepare_async(spec=spec)
+
+    assert prepared.import_root == tmp_path.resolve()
+    assert prepared.entry_modules == ("operation_plugin",)
+    assert prepared.owned_module_prefixes == ("operation_plugin",)
+
+
+async def test_source_package_accepts_explicit_nested_entry_module(tmp_path: Path) -> None:
+    package = tmp_path / "operation_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "entry.py").write_text("", encoding="utf-8")
+    spec = PluginSpec(
+        name="operation",
+        format=PluginFormat.SOURCE,
+        source=package,
+        package="operation_plugin.entry",
+    )
+
+    prepared = await SourcePluginFormat().prepare_async(spec=spec)
+
+    assert prepared.entry_modules == ("operation_plugin.entry",)
+    assert prepared.owned_module_prefixes == ("operation_plugin",)
+
+
+async def test_source_package_rejects_loose_directory(tmp_path: Path) -> None:
+    source = tmp_path / "loose"
+    source.mkdir()
+    (source / "scenario.py").write_text("", encoding="utf-8")
+    spec = PluginSpec(name="loose", format=PluginFormat.SOURCE, source=source)
+
+    with pytest.raises(PluginSourceNotFoundError, match="__init__.py"):
+        await SourcePluginFormat().prepare_async(spec=spec)
+
+
+async def test_source_package_rejects_foreign_entry_module(tmp_path: Path) -> None:
+    package = tmp_path / "operation_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    spec = PluginSpec(
+        name="operation",
+        format=PluginFormat.SOURCE,
+        source=package,
+        package="other_plugin",
+    )
+
+    with pytest.raises(ValueError, match="inside"):
+        await SourcePluginFormat().prepare_async(spec=spec)
+
+
+async def test_source_package_fingerprint_changes_with_nested_content(tmp_path: Path) -> None:
+    package = tmp_path / "operation_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    nested = package / "scenario.py"
+    nested.write_text("VALUE = 1\n", encoding="utf-8")
+    spec = PluginSpec(name="operation", format=PluginFormat.SOURCE, source=package)
+    adapter = SourcePluginFormat()
+
+    first = await adapter.prepare_async(spec=spec)
+    nested.write_text("VALUE = 2\n", encoding="utf-8")
+    second = await adapter.prepare_async(spec=spec)
+
+    assert first.artifact_fingerprint != second.artifact_fingerprint
