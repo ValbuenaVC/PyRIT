@@ -111,8 +111,8 @@ class ConfigurationLoader(YamlLoadable):
         operator: Name for the current operator, e.g. a team or username.
         operation: Name for the current operation.
         plugins: List of plug-ins to load as the guaranteed-first initialization phase.
-            V1 accepts at most one explicit mapping with ``name``, ``format``, exactly
-            one matching ``source`` or ``wheel`` path, and an optional ``package``.
+            V1 accepts at most one explicit mapping with ``name``, a ``source`` path, and
+            a dotted ``initializer`` (module.Class) pointing at a ``PyRITInitializer``.
             Empty means no plug-ins.
 
     Example YAML configuration:
