@@ -29,6 +29,8 @@ Two cases:
 
 import inspect
 import os
+import re
+import subprocess
 import sys
 import textwrap
 import uuid
@@ -43,17 +45,17 @@ import pytest
 from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
 from pyrit.models import ScenarioResult, ScenarioRunState
 from pyrit.prompt_target import OpenAIChatTarget
-from pyrit.registry import ScenarioRegistry
+from pyrit.registry import AttackTechniqueRegistry, ScenarioRegistry
 from pyrit.registry.discovery import discover_in_directory
 from pyrit.scenario.core import DatasetAttackConfiguration, Scenario
 from pyrit.score import SelfAskTrueFalseScorer, TrueFalseQuestionPaths
-from pyrit.setup import IN_MEMORY, PluginSpec, initialize_pyrit_async
+from pyrit.setup import ConfigurationLoader, PluginFormat, PluginSpec
 
 # (module stem, class name, registry name) for the scenarios the self-contained wheel ships.
 _MOCK_SCENARIOS = [
-    ("alpha", "MockAlphaScenario", "airt.mock_alpha"),
-    ("beta", "MockBetaScenario", "airt.mock_beta"),
-    ("gamma", "MockGammaScenario", "airt.mock_gamma"),
+    ("alpha", "MockAlphaScenario", "alpha"),
+    ("beta", "MockBetaScenario", "beta"),
+    ("gamma", "MockGammaScenario", "gamma"),
 ]
 
 # Substring of the ValueError ``Scenario.run_async`` raises when an atomic attack's
@@ -61,6 +63,19 @@ _MOCK_SCENARIOS = [
 # the public pipeline, so this outcome proves execution while a drift regression -- which
 # surfaces a different exception type before or during the run -- still fails loudly.
 _OBJECTIVES_INCOMPLETE_MARKER = "objectives incomplete"
+
+
+async def _initialize_plugin_async(*, spec: PluginSpec, plugin_dir: Path | None) -> None:
+    """Initialize PyRIT through the config-owned privileged plug-in path."""
+    config = ConfigurationLoader(
+        memory_db_type="in_memory",
+        initializers=["technique"],
+        env_files=[],
+        silent=True,
+        plugins=[spec.to_config()],
+    )
+    with _plugin_dir_env(plugin_dir=plugin_dir):
+        await config.initialize_pyrit_async()
 
 
 def _build_scenario_plugin_wheel(dest_dir: Path, *, package: str) -> Path:
@@ -293,6 +308,7 @@ def plugin_sandbox() -> Iterator[None]:
         del sys.modules[name]
     SeedDatasetProvider._registry.clear()
     SeedDatasetProvider._registry.update(provider_snapshot)
+    AttackTechniqueRegistry.reset_registry_singleton()
     ScenarioRegistry.reset_registry_singleton()
 
 
@@ -309,8 +325,15 @@ async def test_built_wheel_scenarios_are_discovered(
     registry = ScenarioRegistry.get_registry_singleton()
     before = set(registry.get_class_names())
 
-    with _plugin_dir_env(plugin_dir=plugin_dir):
-        await initialize_pyrit_async(IN_MEMORY, plugins=[PluginSpec(wheel=wheel)])
+    await _initialize_plugin_async(
+        spec=PluginSpec(
+            name=package,
+            format=PluginFormat.WHEEL,
+            wheel=wheel,
+            package=package,
+        ),
+        plugin_dir=plugin_dir,
+    )
 
     registry = ScenarioRegistry.get_registry_singleton()
     after = set(registry.get_class_names())
@@ -348,8 +371,15 @@ async def test_injected_wheel_scenarios_are_discovered(
     if not scenario_dirs_env and not package:
         pytest.skip("Set PLUGIN_TEST_SCENARIO_DIRS or PLUGIN_TEST_PACKAGE to define the expected scenarios.")
 
-    with _plugin_dir_env(plugin_dir=None):
-        await initialize_pyrit_async(IN_MEMORY, plugins=[PluginSpec(wheel=wheel, package=package)])
+    await _initialize_plugin_async(
+        spec=PluginSpec(
+            name=package or "injected_plugin",
+            format=PluginFormat.WHEEL,
+            wheel=wheel,
+            package=package,
+        ),
+        plugin_dir=None,
+    )
 
     found = _registered_scenario_class_names()
 
@@ -379,8 +409,15 @@ async def test_injected_wheel_scenarios_instantiate(plugin_sandbox: None) -> Non
     wheel = Path(wheel_env).expanduser()
     assert wheel.is_file(), f"PLUGIN_TEST_WHEEL does not exist: {wheel}"
 
-    with _plugin_dir_env(plugin_dir=None):
-        await initialize_pyrit_async(IN_MEMORY, plugins=[PluginSpec(wheel=wheel, package=package)])
+    await _initialize_plugin_async(
+        spec=PluginSpec(
+            name=package,
+            format=PluginFormat.WHEEL,
+            wheel=wheel,
+            package=package,
+        ),
+        plugin_dir=None,
+    )
 
     classes = _scenario_classes_under_package(package)
     assert classes, f"No plug-in scenarios registered under package {package!r}."
@@ -413,8 +450,15 @@ async def test_injected_wheel_scenario_executes(plugin_sandbox: None) -> None:
     wheel = Path(wheel_env).expanduser()
     assert wheel.is_file(), f"PLUGIN_TEST_WHEEL does not exist: {wheel}"
 
-    with _plugin_dir_env(plugin_dir=None):
-        await initialize_pyrit_async(IN_MEMORY, plugins=[PluginSpec(wheel=wheel, package=package)])
+    await _initialize_plugin_async(
+        spec=PluginSpec(
+            name=package,
+            format=PluginFormat.WHEEL,
+            wheel=wheel,
+            package=package,
+        ),
+        plugin_dir=None,
+    )
 
     endpoint = os.getenv("ADVERSARIAL_CHAT_ENDPOINT")
     if not endpoint:
@@ -436,3 +480,122 @@ async def test_injected_wheel_scenario_executes(plugin_sandbox: None) -> None:
     if result is not None:
         assert result.scenario_run_state == ScenarioRunState.COMPLETED
         assert result.attack_results, "Completed scenario run produced no attack results."
+
+
+# ---------------------------------------------------------------------------
+# Scanner integration
+# ---------------------------------------------------------------------------
+
+
+def _write_scanner_config(*, tmp_path: Path, source: Path, plugin_name: str) -> Path:
+    config = tmp_path / f"{plugin_name}.pyrit_conf"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            memory_db_type: in_memory
+            initializers:
+              - target
+              - scorer
+              - technique
+            plugins:
+              - name: {plugin_name}
+                format: source
+                source: {source.as_posix()}
+            """
+        ),
+        encoding="utf-8",
+    )
+    return config
+
+
+def _run_scanner_with_fresh_backend(*, config: Path) -> subprocess.CompletedProcess[str]:
+    base = [sys.executable, "-m", "pyrit.cli.pyrit_scan", "--config-file", str(config)]
+    subprocess.run([*base, "--stop-server"], capture_output=True, text=True, check=False, timeout=30)
+    try:
+        return subprocess.run(
+            [*base, "--start-server", "--list-scenarios"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+    finally:
+        subprocess.run([*base, "--stop-server"], capture_output=True, text=True, check=False, timeout=30)
+
+
+@pytest.mark.run_only_if_all_tests
+def test_private_scenario_registers_from_scanner(tmp_path: Path) -> None:
+    """A source Scenario appears through the stock scanner catalog."""
+    source = tmp_path / "private_scanner_scenario.py"
+    source.write_text(
+        """from pyrit.models import SeedObjective
+from pyrit.scenario import DatasetAttackConfiguration, Scenario, ScenarioStrategy
+from pyrit.score import SubStringScorer
+
+class PrivateStrategy(ScenarioStrategy):
+    ALL = ("all", {"all"})
+    DIRECT = ("direct", {"direct"})
+
+class PrivateScannerScenario(Scenario):
+    VERSION = 1
+
+    def __init__(self, *, scenario_result_id=None):
+        super().__init__(
+            version=self.VERSION,
+            strategy_class=PrivateStrategy,
+            default_strategy=PrivateStrategy.ALL,
+            default_dataset_config=DatasetAttackConfiguration(
+                seeds=[SeedObjective(value="integration objective")]
+            ),
+            objective_scorer=SubStringScorer(substring="integration"),
+            scenario_result_id=scenario_result_id,
+        )
+
+    async def _build_atomic_attacks_async(self, *, context):
+        return []
+""",
+        encoding="utf-8",
+    )
+    config = _write_scanner_config(
+        tmp_path=tmp_path,
+        source=source,
+        plugin_name="private_scanner_scenario",
+    )
+
+    proc = _run_scanner_with_fresh_backend(config=config)
+
+    assert "private_scanner_scenario" in proc.stdout
+    assert "PrivateScannerScenario" in proc.stdout
+
+
+@pytest.mark.run_only_if_all_tests
+def test_private_attack_technique_registers_from_scanner(tmp_path: Path) -> None:
+    """A source technique applicable to RapidResponse appears in scanner metadata."""
+    source = tmp_path / "private_scanner_technique.py"
+    source.write_text(
+        """from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+
+PRIVATE = AttackTechniqueFactory(
+    name="private_scanner_technique",
+    attack_class=PromptSendingAttack,
+    strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+)
+""",
+        encoding="utf-8",
+    )
+    config = _write_scanner_config(
+        tmp_path=tmp_path,
+        source=source,
+        plugin_name="private_scanner_technique",
+    )
+
+    proc = _run_scanner_with_fresh_backend(config=config)
+
+    match = re.search(
+        r"\n  airt\.rapid_response\n(?P<body>.*?)(?=\n  [a-z][a-z0-9_.]*\n|\n={80})",
+        proc.stdout,
+        flags=re.DOTALL,
+    )
+    assert match is not None, proc.stdout
+    assert "private_scanner_technique" in match.group("body")
