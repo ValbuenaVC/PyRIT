@@ -4,11 +4,12 @@
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from pyrit.datasets import SeedDatasetProvider
-from pyrit.exceptions import PluginCollisionError
+from pyrit.exceptions import PluginCollisionError, PluginValidationError
 from pyrit.registry import AttackTechniqueRegistry, ScenarioRegistry
 from pyrit.setup import PluginFormat, PluginSpec
 from pyrit.setup.plugin_loader import PluginInitializer
@@ -60,7 +61,10 @@ OPERATION = AttackTechniqueFactory(
     assert entry.metadata["scenario_names"] == ["airt.rapid_response"]
 
 
-async def test_plugin_initializer_registers_source_scenario(tmp_path: Path) -> None:
+async def test_plugin_initializer_registers_source_scenario(
+    tmp_path: Path,
+    patch_central_database: None,
+) -> None:
     source = tmp_path / "private_scenario.py"
     source.write_text(
         """from pyrit.scenario.scenarios.airt.rapid_response import RapidResponse
@@ -71,7 +75,15 @@ class PrivateScenario(RapidResponse):
         encoding="utf-8",
     )
 
-    await PluginInitializer(plugins=[_source_spec(source)]).initialize_async()
+    with patch.dict(
+        "os.environ",
+        {
+            "OPENAI_CHAT_ENDPOINT": "https://example.test",
+            "OPENAI_CHAT_KEY": "test-key",
+            "OPENAI_CHAT_MODEL": "test-model",
+        },
+    ):
+        await PluginInitializer(plugins=[_source_spec(source)]).initialize_async()
 
     scenario_class = ScenarioRegistry.get_registry_singleton().get_class("private_scenario")
     assert scenario_class.__name__ == "PrivateScenario"
@@ -153,3 +165,21 @@ OPERATION = AttackTechniqueFactory(
     await PluginInitializer(plugins=[_source_spec(source)]).initialize_async()
 
     assert "PrivateProvider" not in SeedDatasetProvider.get_all_providers()
+
+
+async def test_plugin_initializer_rejects_scenario_that_cannot_build_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "invalid_scenario.py"
+    source.write_text(
+        """from pyrit.scenario.scenarios.airt.rapid_response import RapidResponse
+
+class InvalidScenario(RapidResponse):
+    def __init__(self, *, required_value):
+        super().__init__()
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PluginValidationError, match="metadata"):
+        await PluginInitializer(plugins=[_source_spec(source)]).initialize_async()
+
+    assert "invalid_scenario" not in ScenarioRegistry.get_registry_singleton()._classes

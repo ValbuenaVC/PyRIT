@@ -249,7 +249,10 @@ class PluginLoader:
         scenarios: Sequence[ScenarioContribution],
         techniques: Sequence[TechniqueContribution],
     ) -> None:
+        from pyrit.setup.initializers.techniques import build_technique_factories
+
         technique_registry = AttackTechniqueRegistry.get_registry_singleton()
+        technique_registry.register_from_factories(build_technique_factories(groups=["core"]))
         for contribution in techniques:
             technique_registry.register_contributed_factory(
                 factory=contribution.factory,
@@ -263,6 +266,12 @@ class PluginLoader:
                 scenario_class=contribution.scenario_class,
                 name=contribution.registry_name,
             )
+            try:
+                scenario_registry.get_class_metadata(contribution.scenario_class)
+            except Exception as exc:
+                raise PluginValidationError(
+                    f"Scenario '{contribution.registry_name}' could not build registry metadata: {exc}"
+                ) from exc
 
     @staticmethod
     def _warn_on_version_drift(*, prepared: PreparedPlugin) -> None:

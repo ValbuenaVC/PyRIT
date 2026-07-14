@@ -5,9 +5,8 @@
 Unit tests for the PyRIT plug-in loader.
 
 These tests build a **mock plug-in wheel** at test time (no dependency on any real
-plug-in) and exercise the full consumer mechanism: extract -> sys.path ->
-import -> bootstrap -> assert-loaded, plus the accept-load-failures/fail-closed policy and the
-silent-failure guards called out in the design brief.
+plug-in) and exercise the V1 consumer mechanism: prepare, import, discover, validate,
+register, and fail-closed rollback.
 """
 
 import inspect
