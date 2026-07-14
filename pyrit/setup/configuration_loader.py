@@ -110,9 +110,10 @@ class ConfigurationLoader(YamlLoadable):
         silent: Whether to suppress initialization messages.
         operator: Name for the current operator, e.g. a team or username.
         operation: Name for the current operation.
-        plugins: List of plug-ins to load as the guaranteed-first initialization phase. Each
-            entry is a wheel path string, a ``{package: wheel}`` mapping, or a
-            ``{wheel: ..., package: ...}`` mapping. Empty means no plug-ins.
+        plugins: List of plug-ins to load as the guaranteed-first initialization phase.
+            V1 accepts at most one explicit mapping with ``name``, ``format``, exactly
+            one matching ``source`` or ``wheel`` path, and an optional ``package``.
+            Empty means no plug-ins.
 
     Example YAML configuration:
         memory_db_type: sqlite

@@ -684,6 +684,80 @@ class TestCreateAttack:
             mock_memory.add_attack_results_to_memory.assert_called_once()
             mock_memory.add_message_pieces_to_memory.assert_called()
 
+    async def test_create_attack_lowers_system_prompt_to_system_message(self, attack_service, mock_memory) -> None:
+        """Test that system_prompt is lowered to a single system-role message at sequence 0."""
+        with patch("pyrit.backend.services.attack_service.get_target_service") as mock_get_target_service:
+            mock_target_obj = MagicMock()
+            mock_target_obj.get_identifier.return_value = ComponentIdentifier(
+                class_name="TextTarget", class_module="pyrit.prompt_target"
+            )
+            mock_target_service = MagicMock()
+            mock_target_service.get_target_async = AsyncMock(return_value=MagicMock(type="TextTarget"))
+            mock_target_service.get_target_object.return_value = mock_target_obj
+            mock_get_target_service.return_value = mock_target_service
+
+            await attack_service.create_attack_async(
+                request=CreateAttackRequest(target_registry_name="target-1", system_prompt="You are Bob.")
+            )
+
+            calls = mock_memory.add_message_pieces_to_memory.call_args_list
+            assert len(calls) == 1
+            piece = calls[0][1]["message_pieces"][0]
+            assert piece.api_role == "system"
+            assert piece.sequence == 0
+            assert piece.original_value == "You are Bob."
+
+    async def test_create_attack_blank_system_prompt_is_noop(self, attack_service, mock_memory) -> None:
+        """Test that an empty system_prompt stores no prepended message."""
+        with patch("pyrit.backend.services.attack_service.get_target_service") as mock_get_target_service:
+            mock_target_obj = MagicMock()
+            mock_target_obj.get_identifier.return_value = ComponentIdentifier(
+                class_name="TextTarget", class_module="pyrit.prompt_target"
+            )
+            mock_target_service = MagicMock()
+            mock_target_service.get_target_async = AsyncMock(return_value=MagicMock(type="TextTarget"))
+            mock_target_service.get_target_object.return_value = mock_target_obj
+            mock_get_target_service.return_value = mock_target_service
+
+            await attack_service.create_attack_async(
+                request=CreateAttackRequest(target_registry_name="target-1", system_prompt="")
+            )
+
+            mock_memory.add_message_pieces_to_memory.assert_not_called()
+
+    async def test_create_attack_system_prompt_prepends_before_prepended_conversation(
+        self, attack_service, mock_memory
+    ) -> None:
+        """Test that system_prompt is inserted at sequence 0, ahead of prepended_conversation messages."""
+        with patch("pyrit.backend.services.attack_service.get_target_service") as mock_get_target_service:
+            mock_target_obj = MagicMock()
+            mock_target_obj.get_identifier.return_value = ComponentIdentifier(
+                class_name="TextTarget", class_module="pyrit.prompt_target"
+            )
+            mock_target_service = MagicMock()
+            mock_target_service.get_target_async = AsyncMock(return_value=MagicMock(type="TextTarget"))
+            mock_target_service.get_target_object.return_value = mock_target_obj
+            mock_get_target_service.return_value = mock_target_service
+
+            prepended = [
+                PrependedMessageRequest(role="user", pieces=[MessagePieceRequest(original_value="Hello")]),
+            ]
+
+            await attack_service.create_attack_async(
+                request=CreateAttackRequest(
+                    target_registry_name="target-1",
+                    system_prompt="You are Bob.",
+                    prepended_conversation=prepended,
+                )
+            )
+
+            calls = mock_memory.add_message_pieces_to_memory.call_args_list
+            assert len(calls) == 2
+            roles = [call[1]["message_pieces"][0].api_role for call in calls]
+            sequences = [call[1]["message_pieces"][0].sequence for call in calls]
+            assert roles == ["system", "user"]
+            assert sequences == [0, 1]
+
     async def test_create_attack_does_not_store_labels_in_metadata(self, attack_service, mock_memory) -> None:
         """Test that labels are not stored in attack metadata (they live on pieces)."""
         with patch("pyrit.backend.services.attack_service.get_target_service") as mock_get_target_service:
@@ -1209,7 +1283,7 @@ class TestAddMessage:
             patch("pyrit.backend.services.attack_service.get_target_service") as mock_get_target_svc,
             patch("pyrit.backend.services.attack_service.get_converter_service") as mock_get_conv_svc,
             patch("pyrit.backend.services.attack_service.PromptNormalizer") as mock_normalizer_cls,
-            patch("pyrit.backend.services.attack_service.PromptConverterConfiguration") as mock_config,
+            patch("pyrit.backend.services.attack_service.ConverterConfiguration") as mock_config,
         ):
             mock_target_svc = MagicMock()
             mock_target_svc.get_target_object.return_value = _make_matching_target_mock()
@@ -1316,7 +1390,7 @@ class TestAddMessage:
         mock_converter = MagicMock()
         mock_converter.get_identifier.return_value = ComponentIdentifier(
             class_name="Base64Converter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
 
@@ -2366,29 +2440,29 @@ class TestAttackServiceAdditionalCoverage:
 
         existing_converter = ComponentIdentifier(
             class_name="ExistingConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
         duplicate_converter = ComponentIdentifier(
             class_name="ExistingConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
         new_converter = ComponentIdentifier(
             class_name="NewConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
 
         ar = make_attack_result(conversation_id="attack-1")
         # Rebuild the atomic_attack_identifier to include an existing converter child
-        strategy = ar.get_attack_strategy_identifier()
+        technique = ar.get_attack_strategy_identifier()
         ar.atomic_attack_identifier = AtomicAttackIdentifier.build(
             attack_identifier=ComponentIdentifier(
                 class_name="ManualAttack",
                 class_module="pyrit.backend",
                 children={
-                    "objective_target": strategy.get_child("objective_target") if strategy else None,
+                    "objective_target": technique.get_child("objective_target") if technique else None,
                     "request_converters": [existing_converter],
                 },
             ),
@@ -2453,7 +2527,7 @@ class TestAttackServiceAdditionalCoverage:
         """Should merge converters via fallback path when atomic_attack_identifier has no attack_technique child."""
         new_converter = ComponentIdentifier(
             class_name="NewConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
 
@@ -2530,23 +2604,23 @@ class TestAttackServiceAdditionalCoverage:
 
         existing_converter = ComponentIdentifier(
             class_name="ExistingConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
         duplicate_converter = ComponentIdentifier(
             class_name="ExistingConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
 
         ar = make_attack_result(conversation_id="attack-1")
-        strategy = ar.get_attack_strategy_identifier()
+        technique = ar.get_attack_strategy_identifier()
         ar.atomic_attack_identifier = AtomicAttackIdentifier.build(
             attack_identifier=ComponentIdentifier(
                 class_name="ManualAttack",
                 class_module="pyrit.backend",
                 children={
-                    "objective_target": strategy.get_child("objective_target") if strategy else None,
+                    "objective_target": technique.get_child("objective_target") if technique else None,
                     "request_converters": [existing_converter],
                 },
             ),
@@ -2603,13 +2677,13 @@ class TestAttackServiceAdditionalCoverage:
 
         new_converter = ComponentIdentifier(
             class_name="NewConverter",
-            class_module="pyrit.prompt_converter",
+            class_module="pyrit.converter",
             params={"supported_input_types": ("text",), "supported_output_types": ("text",)},
         )
 
         ar = make_attack_result(conversation_id="attack-1")
-        strategy = ar.get_attack_strategy_identifier()
-        objective_target = strategy.get_child("objective_target") if strategy else None
+        technique = ar.get_attack_strategy_identifier()
+        objective_target = technique.get_child("objective_target") if technique else None
         assert objective_target is not None
         original_target_hash = objective_target.hash
 

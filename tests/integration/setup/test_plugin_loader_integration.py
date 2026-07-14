@@ -529,10 +529,10 @@ def test_private_scenario_registers_from_scanner(tmp_path: Path) -> None:
     source = tmp_path / "private_scanner_scenario.py"
     source.write_text(
         """from pyrit.models import SeedObjective
-from pyrit.scenario import DatasetAttackConfiguration, Scenario, ScenarioStrategy
+from pyrit.scenario import DatasetAttackConfiguration, Scenario, ScenarioTechnique
 from pyrit.score import SubStringScorer
 
-class PrivateStrategy(ScenarioStrategy):
+class PrivateTechnique(ScenarioTechnique):
     ALL = ("all", {"all"})
     DIRECT = ("direct", {"direct"})
 
@@ -542,8 +542,8 @@ class PrivateScannerScenario(Scenario):
     def __init__(self, *, scenario_result_id=None):
         super().__init__(
             version=self.VERSION,
-            strategy_class=PrivateStrategy,
-            default_strategy=PrivateStrategy.ALL,
+            technique_class=PrivateTechnique,
+            default_technique=PrivateTechnique.ALL,
             default_dataset_config=DatasetAttackConfiguration(
                 seeds=[SeedObjective(value="integration objective")]
             ),
@@ -579,7 +579,7 @@ from pyrit.scenario import AttackTechniqueFactory
 PRIVATE = AttackTechniqueFactory(
     name="private_scanner_technique",
     attack_class=PromptSendingAttack,
-    strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+    technique_tags=["single_turn", "scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",

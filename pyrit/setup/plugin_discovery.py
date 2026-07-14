@@ -128,7 +128,7 @@ def discover_scenarios(*, imported: ImportedPlugin) -> list[ScenarioContribution
         if len(classes) > 1:
             raise PluginDiscoveryError(
                 f"Plug-in module '{module.__name__}' defines multiple Scenario classes. "
-                "Provide explicit registry names through the plug-in manifest."
+                "Move each Scenario class into a separate module."
             )
         if classes:
             contributions.append(
@@ -236,7 +236,7 @@ def _contributions_from_factory_builder(
 def _contribution_from_factory(*, factory: AttackTechniqueFactory, module_name: str) -> TechniqueContribution:
     prefix = "scenario:"
     scenario_names = frozenset(
-        tag.removeprefix(prefix) for tag in factory.strategy_tags if tag.startswith(prefix) and tag != prefix
+        tag.removeprefix(prefix) for tag in factory.technique_tags if tag.startswith(prefix) and tag != prefix
     )
     if not scenario_names:
         raise PluginDiscoveryError(

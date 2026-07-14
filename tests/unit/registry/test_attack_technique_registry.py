@@ -125,19 +125,19 @@ class TestAttackTechniqueRegistryRegister:
         core = AttackTechniqueFactory(
             name="core_technique",
             attack_class=_StubAttack,
-            strategy_tags=["core", "single_turn"],
+            technique_tags=["core", "single_turn"],
         )
         private = AttackTechniqueFactory(
             name="private_technique",
             attack_class=_StubAttack,
-            strategy_tags=["single_turn"],
+            technique_tags=["single_turn"],
         )
         unrelated = AttackTechniqueFactory(
             name="unrelated",
             attack_class=_StubAttack,
-            strategy_tags=["single_turn"],
+            technique_tags=["single_turn"],
         )
-        self.registry.register_technique(name=core.name, factory=core, tags=core.strategy_tags)
+        self.registry.register_technique(name=core.name, factory=core, tags=core.technique_tags)
         self.registry.register_contributed_factory(
             factory=private,
             plugin_name="operation",
@@ -153,7 +153,6 @@ class TestAttackTechniqueRegistryRegister:
             scenario_name="airt.rapid_response",
             base_query=TagQuery.all("core"),
         )
-        assert list(factories) == ["core_technique", "private_technique"]
         assert list(factories) == ["core_technique", "private_technique"]
 
 
@@ -299,7 +298,7 @@ class TestAttackTechniqueRegistryScorerOverridePolicy:
 
     def test_policy_passed_to_factories_via_register_from_factories(self):
         """Factories registered via register_from_factories inherit the registry's default policy."""
-        factory = AttackTechniqueFactory(name="stub_policy", attack_class=_StubAttack, strategy_tags=["test"])
+        factory = AttackTechniqueFactory(name="stub_policy", attack_class=_StubAttack, technique_tags=["test"])
         self.registry.register_from_factories([factory])
 
         stored = self.registry.instances.get_entry("stub_policy").instance
@@ -360,7 +359,7 @@ class TestPairTechniqueRegistration:
         assert len(pair_factories) == 1, "Expected exactly one 'pair' factory"
         factory = pair_factories[0]
         assert factory.attack_class is PAIRAttack
-        assert set(factory.strategy_tags) >= {"extra", "multi_turn"}
+        assert set(factory.technique_tags) >= {"extra", "multi_turn"}
         assert not factory._attack_kwargs, "PAIR defaults are encoded on PAIRAttack itself, not via attack_kwargs"
 
 

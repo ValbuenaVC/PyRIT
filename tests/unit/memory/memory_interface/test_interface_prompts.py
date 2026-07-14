@@ -1324,6 +1324,31 @@ def test_get_request_from_response_success(sqlite_instance: MemoryInterface):
     assert request.conversation_id == conversation_id
 
 
+@pytest.mark.parametrize("bad_conversation_id", ["", None])
+def test_get_conversation_messages_rejects_falsy_conversation_id(sqlite_instance: MemoryInterface, bad_conversation_id):
+    """A falsy conversation_id must raise instead of skipping the filter and returning every conversation."""
+    pieces = [
+        MessagePiece(
+            role="user",
+            original_value="conversation one",
+            converted_value="conversation one",
+            conversation_id=str(uuid4()),
+            sequence=0,
+        ),
+        MessagePiece(
+            role="user",
+            original_value="conversation two",
+            converted_value="conversation two",
+            conversation_id=str(uuid4()),
+            sequence=0,
+        ),
+    ]
+    sqlite_instance.add_message_pieces_to_memory(message_pieces=pieces)
+
+    with pytest.raises(ValueError, match="requires a non-empty conversation_id"):
+        sqlite_instance.get_conversation_messages(conversation_id=bad_conversation_id)
+
+
 def test_get_request_from_response_multi_turn_conversation(sqlite_instance: MemoryInterface):
     """Test get_request_from_response in a multi-turn conversation."""
     conversation_id = str(uuid4())
@@ -1518,11 +1543,11 @@ def test_get_message_pieces_by_target_identifier_filter(sqlite_instance: MemoryI
 def test_get_message_pieces_by_converter_identifier_filter_with_array_element_path(sqlite_instance: MemoryInterface):
     converter_a = ComponentIdentifier(
         class_name="Base64Converter",
-        class_module="pyrit.prompt_converter",
+        class_module="pyrit.converter",
     )
     converter_b = ComponentIdentifier(
         class_name="ROT13Converter",
-        class_module="pyrit.prompt_converter",
+        class_module="pyrit.converter",
     )
 
     entries = [

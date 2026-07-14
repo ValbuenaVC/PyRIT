@@ -45,7 +45,7 @@ from pyrit.scenario import AttackTechniqueFactory
 OPERATION = AttackTechniqueFactory(
     name="operation_foobar",
     attack_class=PromptSendingAttack,
-    strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+    technique_tags=["single_turn", "scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",
@@ -96,18 +96,18 @@ async def test_plugin_initializer_rejects_latent_builtin_technique_name(tmp_path
 from pyrit.scenario import AttackTechniqueFactory
 
 OPERATION = AttackTechniqueFactory(
-    name="role_play",
+    name="role_play_movie_script",
     attack_class=PromptSendingAttack,
-    strategy_tags=["scenario:airt.rapid_response"],
+    technique_tags=["scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",
     )
 
-    with pytest.raises(PluginCollisionError, match="role_play"):
+    with pytest.raises(PluginCollisionError, match="role_play_movie_script"):
         await PluginInitializer(plugins=[_source_spec(source)]).initialize_async()
 
-    assert "role_play" not in AttackTechniqueRegistry.get_registry_singleton().get_factories()
+    assert "role_play_movie_script" not in AttackTechniqueRegistry.get_registry_singleton().get_factories()
 
 
 async def test_plugin_initializer_rolls_back_scenario_when_technique_collides(tmp_path: Path) -> None:
@@ -121,9 +121,9 @@ class PartialScenario(RapidResponse):
     pass
 
 OPERATION = AttackTechniqueFactory(
-    name="role_play",
+    name="role_play_movie_script",
     attack_class=PromptSendingAttack,
-    strategy_tags=["scenario:airt.rapid_response"],
+    technique_tags=["scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",
@@ -156,7 +156,7 @@ class PrivateProvider(SeedDatasetProvider):
 OPERATION = AttackTechniqueFactory(
     name="provider_safe",
     attack_class=PromptSendingAttack,
-    strategy_tags=["scenario:airt.rapid_response"],
+    technique_tags=["scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",

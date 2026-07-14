@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pyrit.common.path import DATASETS_PATH
-from pyrit.models import ComponentIdentifier, SeedAttackGroup, SeedDataset, SeedGroup, SeedObjective
+from pyrit.models import AttackSeedGroup, ComponentIdentifier, SeedDataset, SeedGroup, SeedObjective
 from pyrit.prompt_target import OpenAIChatTarget, PromptTarget
-from pyrit.scenario.airt import Psychosocial, PsychosocialStrategy  # type: ignore[ty:unresolved-import]
+from pyrit.scenario.airt import Psychosocial, PsychosocialTechnique  # type: ignore[ty:unresolved-import]
 from pyrit.scenario.scenarios.airt.psychosocial import SubharmConfig
 from pyrit.score import FloatScaleThresholdScorer
 
@@ -21,11 +21,11 @@ SEED_PROMPT_LIST = list(SeedDataset.from_yaml_file(SEED_DATASETS_PATH / "psychos
 @pytest.fixture
 def mock_memory_seed_groups() -> list[SeedGroup]:
     """Create mock seed groups that _get_default_seed_groups() would return."""
-    return [SeedAttackGroup(seeds=[SeedObjective(value=prompt)]) for prompt in SEED_PROMPT_LIST]
+    return [AttackSeedGroup(seeds=[SeedObjective(value=prompt)]) for prompt in SEED_PROMPT_LIST]
 
 
 @pytest.fixture
-def mock_seed_groups_by_dataset(mock_memory_seed_groups) -> dict[str, list[SeedAttackGroup]]:
+def mock_seed_groups_by_dataset(mock_memory_seed_groups) -> dict[str, list[AttackSeedGroup]]:
     """Create mock by-dataset seed groups for patching _resolve_seed_groups_by_dataset_async."""
     return {"psychosocial": mock_memory_seed_groups}
 
@@ -36,7 +36,7 @@ def mock_dataset_config(mock_memory_seed_groups):
     from pyrit.scenario import DatasetAttackConfiguration
 
     mock_config = MagicMock(spec=DatasetAttackConfiguration)
-    mock_config.get_seed_attack_groups_async = AsyncMock(return_value=mock_memory_seed_groups)
+    mock_config.get_attack_seed_groups_async = AsyncMock(return_value=mock_memory_seed_groups)
     mock_config.dataset_names = ["airt_psychosocial"]
     return mock_config
 
@@ -342,15 +342,15 @@ class TestPsychosocialProperties:
 
         assert scenario.VERSION == 1
 
-    def test_get_strategy_class(self, mock_objective_scorer) -> None:
-        """Test that the strategy class is PsychosocialStrategy."""
+    def test_get_technique_class(self, mock_objective_scorer) -> None:
+        """Test that the technique class is PsychosocialTechnique."""
         scenario = Psychosocial(objective_scorer=mock_objective_scorer)
-        assert scenario._strategy_class == PsychosocialStrategy
+        assert scenario._technique_class == PsychosocialTechnique
 
-    def test_get_default_strategy(self, mock_objective_scorer) -> None:
-        """Test that the default strategy is ALL."""
+    def test_get_default_technique(self, mock_objective_scorer) -> None:
+        """Test that the default technique is ALL."""
         scenario = Psychosocial(objective_scorer=mock_objective_scorer)
-        assert scenario._default_strategy == PsychosocialStrategy.ALL
+        assert scenario._default_technique == PsychosocialTechnique.ALL
 
     async def test_no_target_duplication_async(
         self,
@@ -461,31 +461,31 @@ class TestPsychosocialTargetRequirements:
 
 
 @pytest.mark.usefixtures(*FIXTURES)
-class TestPsychosocialHarmsStrategy:
-    """Tests for PsychosocialHarmsStrategy enum."""
+class TestPsychosocialTechnique:
+    """Tests for PsychosocialTechnique enum."""
 
-    def test_strategy_tags(self):
-        """Test that strategies have correct tags."""
-        assert PsychosocialStrategy.ALL.tags == {"all"}
+    def test_technique_tags(self):
+        """Test that techniques have correct tags."""
+        assert PsychosocialTechnique.ALL.tags == {"all"}
 
     def test_aggregate_tags(self):
         """Test that only 'all' is an aggregate tag."""
-        aggregate_tags = PsychosocialStrategy.get_aggregate_tags()
+        aggregate_tags = PsychosocialTechnique.get_aggregate_tags()
         assert "all" in aggregate_tags
 
-    def test_strategy_values(self):
-        """Test that strategy values are correct."""
-        assert PsychosocialStrategy.ALL.value == "all"
+    def test_technique_values(self):
+        """Test that technique values are correct."""
+        assert PsychosocialTechnique.ALL.value == "all"
 
 
 @pytest.mark.usefixtures(*FIXTURES)
 class TestPsychosocialBaselineUniformity:
-    """ADO 9012 regression: baseline shares objectives with strategies under max_dataset_size."""
+    """ADO 9012 regression: baseline shares objectives with techniques under max_dataset_size."""
 
-    async def test_one_resolution_call_baseline_matches_strategies(self, mock_objective_target, mock_objective_scorer):
+    async def test_one_resolution_call_baseline_matches_techniques(self, mock_objective_target, mock_objective_scorer):
         from pyrit.scenario import DatasetAttackConfiguration
 
-        seed_groups = [SeedAttackGroup(seeds=[SeedObjective(value=f"obj{i}")]) for i in range(10)]
+        seed_groups = [AttackSeedGroup(seeds=[SeedObjective(value=f"obj{i}")]) for i in range(10)]
         config = DatasetAttackConfiguration(seed_groups=seed_groups, max_dataset_size=3)
 
         first_sample = seed_groups[:3]

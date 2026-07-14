@@ -87,7 +87,7 @@ Expose factories through either:
 Directly discovered factories must identify an applicable scenario, for example:
 
 ```python
-strategy_tags=["single_turn", "scenario:airt.rapid_response"]
+technique_tags=["single_turn", "scenario:airt.rapid_response"]
 ```
 
 Do not register the factory during module import. The framework owns registration and

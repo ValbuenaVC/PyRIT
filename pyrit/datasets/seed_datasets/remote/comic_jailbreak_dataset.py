@@ -236,7 +236,7 @@ class _ComicJailbreakDataset(_RemoteDatasetLoader):
         """
         Build a SeedObjective + image+text SeedPrompt group for a single rendered comic.
 
-        All three seeds share the same prompt_group_id so they form a SeedAttackGroup
+        All three seeds share the same prompt_group_id so they form a AttackSeedGroup
         when grouped by the scenario layer.
 
         Args:
@@ -324,7 +324,7 @@ class _ComicJailbreakDataset(_RemoteDatasetLoader):
         Returns:
             str: Local path to the rendered comic image.
         """
-        from pyrit.prompt_converter import AddImageTextConverter
+        from pyrit.converter import AddImageTextConverter
 
         converter = AddImageTextConverter(
             img_to_add=template_path,

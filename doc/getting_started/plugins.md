@@ -58,7 +58,7 @@ from pyrit.scenario import AttackTechniqueFactory
 OPERATION_FOOBAR = AttackTechniqueFactory(
     name="operation_foobar",
     attack_class=PromptSendingAttack,
-    strategy_tags=[
+    technique_tags=[
         "single_turn",
         "scenario:airt.rapid_response",
     ],
@@ -83,7 +83,7 @@ Then restart the backend and run:
 ```powershell
 pyrit_scan airt.rapid_response `
   --target openai_chat `
-  --strategies operation_foobar
+  --techniques operation_foobar
 ```
 
 ### Private scenario
@@ -138,7 +138,7 @@ Runtime order:
 4. execute user-configured initializers;
 5. serve catalog and scenario requests.
 
-This ordering ensures scenario metadata and technique strategies cannot be built from
+This ordering ensures scenario metadata and technique catalogs cannot be built from
 a partial catalog.
 
 For direct Python use:

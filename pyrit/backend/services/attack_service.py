@@ -45,6 +45,8 @@ from pyrit.backend.models.attacks import (
     CreateAttackResponse,
     CreateConversationRequest,
     CreateConversationResponse,
+    MessagePieceRequest,
+    PrependedMessageRequest,
     UpdateAttackRequest,
     UpdateMainConversationRequest,
     UpdateMainConversationResponse,
@@ -67,7 +69,7 @@ from pyrit.models import (
     MessagePiece,
     PromptDataType,
 )
-from pyrit.prompt_normalizer import PromptConverterConfiguration, PromptNormalizer
+from pyrit.prompt_normalizer import ConverterConfiguration, PromptNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -347,11 +349,21 @@ class AttackService:
         # Store in memory
         self._memory.add_attack_results_to_memory(attack_results=[attack_result])
 
-        # Store prepended conversation messages if provided
-        if request.prepended_conversation:
+        # Store prepended conversation messages if provided. A system_prompt is lowered to a
+        # single system-role message at the front, composing with any prepended_conversation.
+        prepended = list(request.prepended_conversation or [])
+        if request.system_prompt:
+            prepended.insert(
+                0,
+                PrependedMessageRequest(
+                    role="system",
+                    pieces=[MessagePieceRequest(original_value=request.system_prompt)],
+                ),
+            )
+        if prepended:
             await self._store_prepended_messages_async(
                 conversation_id=conversation_id,
-                prepended=request.prepended_conversation,
+                prepended=prepended,
                 labels=labels,
                 target_identifier=target_identifier,
             )
@@ -1164,19 +1176,19 @@ class AttackService:
                 vp.prompt_metadata["video_id"] = video_id
                 return
 
-    def _get_converter_configs(self, request: AddMessageRequest) -> list[PromptConverterConfiguration]:
+    def _get_converter_configs(self, request: AddMessageRequest) -> list[ConverterConfiguration]:
         """
         Get converter configurations if needed.
 
         Returns:
-            List of PromptConverterConfiguration for the converters.
+            List of ConverterConfiguration for the converters.
         """
         has_preconverted = any(p.converted_value is not None for p in request.pieces)
         if has_preconverted or not request.converter_ids:
             return []
 
         converters = get_converter_service().get_converter_objects_for_ids(converter_ids=request.converter_ids)
-        return PromptConverterConfiguration.from_converters(converters=converters)
+        return ConverterConfiguration.from_converters(converters=converters)
 
 
 # ============================================================================

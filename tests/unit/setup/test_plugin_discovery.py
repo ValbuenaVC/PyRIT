@@ -121,7 +121,7 @@ def get_technique_factories():
         AttackTechniqueFactory(
             name="operation_foobar",
             attack_class=PromptSendingAttack,
-            strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+            technique_tags=["single_turn", "scenario:airt.rapid_response"],
         )
     ]
 """,
@@ -148,7 +148,7 @@ OPERATION = TechniqueContribution(
     factory=AttackTechniqueFactory(
         name="operation_explicit",
         attack_class=PromptSendingAttack,
-        strategy_tags=["single_turn"],
+        technique_tags=["single_turn"],
     ),
     scenario_names=frozenset({"airt.rapid_response"}),
 )
@@ -172,7 +172,7 @@ from pyrit.scenario import AttackTechniqueFactory
 OPERATION = AttackTechniqueFactory(
     name="operation_global",
     attack_class=PromptSendingAttack,
-    strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+    technique_tags=["single_turn", "scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",
@@ -200,7 +200,7 @@ def build_something():
 OPERATION = AttackTechniqueFactory(
     name="visible",
     attack_class=PromptSendingAttack,
-    strategy_tags=["scenario:airt.rapid_response"],
+    technique_tags=["scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",
@@ -241,12 +241,12 @@ from pyrit.scenario import AttackTechniqueFactory
 FIRST = AttackTechniqueFactory(
     name="duplicate",
     attack_class=PromptSendingAttack,
-    strategy_tags=["scenario:airt.rapid_response"],
+    technique_tags=["scenario:airt.rapid_response"],
 )
 SECOND = AttackTechniqueFactory(
     name="duplicate",
     attack_class=PromptSendingAttack,
-    strategy_tags=["scenario:airt.rapid_response"],
+    technique_tags=["scenario:airt.rapid_response"],
 )
 """,
         encoding="utf-8",

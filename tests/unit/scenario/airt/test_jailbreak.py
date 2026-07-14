@@ -11,12 +11,11 @@ from pyrit.common.path import JAILBREAK_TEMPLATES_PATH
 from pyrit.datasets import TextJailBreak
 from pyrit.executor.attack.single_turn.many_shot_jailbreak import ManyShotJailbreakAttack
 from pyrit.executor.attack.single_turn.prompt_sending import PromptSendingAttack
-from pyrit.executor.attack.single_turn.role_play import RolePlayAttack
 from pyrit.executor.attack.single_turn.skeleton_key import SkeletonKeyAttack
-from pyrit.models import ComponentIdentifier, SeedAttackGroup, SeedObjective
+from pyrit.models import AttackSeedGroup, ComponentIdentifier, SeedObjective
 from pyrit.prompt_target import PromptTarget
 from pyrit.scenario.core import BaselineAttackPolicy
-from pyrit.scenario.scenarios.airt.jailbreak import Jailbreak, JailbreakStrategy
+from pyrit.scenario.scenarios.airt.jailbreak import Jailbreak, JailbreakTechnique
 from pyrit.score.true_false.true_false_inverter_scorer import TrueFalseInverterScorer
 
 
@@ -44,10 +43,10 @@ def mock_scenario_result_id() -> str:
 
 
 @pytest.fixture
-def mock_memory_seed_groups() -> list[SeedAttackGroup]:
+def mock_memory_seed_groups() -> list[AttackSeedGroup]:
     """Create mock seed groups that _get_default_seed_groups() would return."""
     return [
-        SeedAttackGroup(seeds=[SeedObjective(value=prompt)])
+        AttackSeedGroup(seeds=[SeedObjective(value=prompt)])
         for prompt in [
             "sample objective 1",
             "sample objective 2",
@@ -73,38 +72,38 @@ def mock_objective_scorer() -> TrueFalseInverterScorer:
 
 
 @pytest.fixture
-def all_jailbreak_strategy() -> JailbreakStrategy:
-    return JailbreakStrategy.ALL
+def all_jailbreak_technique() -> JailbreakTechnique:
+    return JailbreakTechnique.ALL
 
 
 @pytest.fixture
-def simple_jailbreak_strategy() -> JailbreakStrategy:
-    return JailbreakStrategy.SIMPLE
+def simple_jailbreak_technique() -> JailbreakTechnique:
+    return JailbreakTechnique.SIMPLE
 
 
 @pytest.fixture
-def complex_jailbreak_strategy() -> JailbreakStrategy:
-    return JailbreakStrategy.COMPLEX
+def complex_jailbreak_technique() -> JailbreakTechnique:
+    return JailbreakTechnique.COMPLEX
 
 
 @pytest.fixture
-def manyshot_jailbreak_strategy() -> JailbreakStrategy:
-    return JailbreakStrategy.ManyShot
+def manyshot_jailbreak_technique() -> JailbreakTechnique:
+    return JailbreakTechnique.ManyShot
 
 
 @pytest.fixture
-def promptsending_jailbreak_strategy() -> JailbreakStrategy:
-    return JailbreakStrategy.PromptSending
+def promptsending_jailbreak_technique() -> JailbreakTechnique:
+    return JailbreakTechnique.PromptSending
 
 
 @pytest.fixture
-def skeleton_jailbreak_attack() -> JailbreakStrategy:
-    return JailbreakStrategy.SkeletonKey
+def skeleton_jailbreak_attack() -> JailbreakTechnique:
+    return JailbreakTechnique.SkeletonKey
 
 
 @pytest.fixture
-def roleplay_jailbreak_strategy() -> JailbreakStrategy:
-    return JailbreakStrategy.RolePlay
+def roleplay_jailbreak_technique() -> JailbreakTechnique:
+    return JailbreakTechnique.RolePlay
 
 
 # Synthetic many-shot examples used to prevent real HTTP requests to GitHub during tests
@@ -285,7 +284,7 @@ class TestJailbreakAttackGeneration:
     """Tests for Jailbreak attack generation."""
 
     async def test_attack_generation_for_simple(
-        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, simple_jailbreak_strategy
+        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, simple_jailbreak_technique
     ):
         """Test that the simple attack generation works."""
         with patch.object(
@@ -299,7 +298,7 @@ class TestJailbreakAttackGeneration:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [simple_jailbreak_strategy],
+                    "scenario_techniques": [simple_jailbreak_technique],
                 }
             )
             await scenario.initialize_async()
@@ -308,7 +307,7 @@ class TestJailbreakAttackGeneration:
                 assert isinstance(run.attack_technique.attack, PromptSendingAttack)
 
     async def test_attack_generation_for_complex(
-        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, complex_jailbreak_strategy
+        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, complex_jailbreak_technique
     ):
         """Test that the complex attack generation works."""
         with patch.object(
@@ -322,7 +321,7 @@ class TestJailbreakAttackGeneration:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [complex_jailbreak_strategy],
+                    "scenario_techniques": [complex_jailbreak_technique],
                     "include_baseline": False,
                 }
             )
@@ -330,11 +329,11 @@ class TestJailbreakAttackGeneration:
             atomic_attacks = scenario._atomic_attacks
             for run in atomic_attacks:
                 assert isinstance(
-                    run.attack_technique.attack, (RolePlayAttack, ManyShotJailbreakAttack, SkeletonKeyAttack)
+                    run.attack_technique.attack, (PromptSendingAttack, ManyShotJailbreakAttack, SkeletonKeyAttack)
                 )
 
     async def test_attack_generation_for_manyshot(
-        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, manyshot_jailbreak_strategy
+        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, manyshot_jailbreak_technique
     ):
         """Test that the manyshot attack generation works."""
         with patch.object(
@@ -348,7 +347,7 @@ class TestJailbreakAttackGeneration:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [manyshot_jailbreak_strategy],
+                    "scenario_techniques": [manyshot_jailbreak_technique],
                     "include_baseline": False,
                 }
             )
@@ -358,7 +357,7 @@ class TestJailbreakAttackGeneration:
                 assert isinstance(run.attack_technique.attack, ManyShotJailbreakAttack)
 
     async def test_attack_generation_for_promptsending(
-        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, promptsending_jailbreak_strategy
+        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, promptsending_jailbreak_technique
     ):
         """Test that the prompt sending attack generation works."""
         with patch.object(
@@ -372,7 +371,7 @@ class TestJailbreakAttackGeneration:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [promptsending_jailbreak_strategy],
+                    "scenario_techniques": [promptsending_jailbreak_technique],
                     "include_baseline": False,
                 }
             )
@@ -396,7 +395,7 @@ class TestJailbreakAttackGeneration:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [skeleton_jailbreak_attack],
+                    "scenario_techniques": [skeleton_jailbreak_attack],
                     "include_baseline": False,
                 }
             )
@@ -406,7 +405,7 @@ class TestJailbreakAttackGeneration:
                 assert isinstance(run.attack_technique.attack, SkeletonKeyAttack)
 
     async def test_attack_generation_for_roleplay(
-        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, roleplay_jailbreak_strategy
+        self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups, roleplay_jailbreak_technique
     ):
         """Test that the roleplaying attack generation works."""
         with patch.object(
@@ -420,14 +419,16 @@ class TestJailbreakAttackGeneration:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [roleplay_jailbreak_strategy],
+                    "scenario_techniques": [roleplay_jailbreak_technique],
                     "include_baseline": False,
                 }
             )
             await scenario.initialize_async()
             atomic_attacks = scenario._atomic_attacks
             for run in atomic_attacks:
-                assert isinstance(run.attack_technique.attack, RolePlayAttack)
+                assert isinstance(run.attack_technique.attack, PromptSendingAttack)
+                assert run.attack_technique.seed_technique is not None
+                assert run.attack_technique.seed_technique.has_simulated_conversation
 
     async def test_attack_runs_include_objectives(
         self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups
@@ -532,7 +533,7 @@ class TestJailbreakLifecycle:
         *,
         mock_objective_target: PromptTarget,
         mock_objective_scorer: TrueFalseInverterScorer,
-        mock_memory_seed_groups: list[SeedAttackGroup],
+        mock_memory_seed_groups: list[AttackSeedGroup],
     ) -> None:
         """Test initialization with custom max_concurrency."""
         with patch.object(
@@ -556,7 +557,7 @@ class TestJailbreakLifecycle:
         *,
         mock_objective_target: PromptTarget,
         mock_objective_scorer: TrueFalseInverterScorer,
-        mock_memory_seed_groups: list[SeedAttackGroup],
+        mock_memory_seed_groups: list[AttackSeedGroup],
     ) -> None:
         """Test initialization with memory labels."""
         memory_labels = {"type": "jailbreak", "category": "scenario"}
@@ -600,7 +601,7 @@ class TestJailbreakProperties:
         assert Jailbreak.required_datasets() == ["airt_harms"]
 
     async def test_no_target_duplication_async(
-        self, *, mock_objective_target: PromptTarget, mock_memory_seed_groups: list[SeedAttackGroup]
+        self, *, mock_objective_target: PromptTarget, mock_memory_seed_groups: list[AttackSeedGroup]
     ) -> None:
         """Test that all three targets (adversarial, object, scorer) are distinct."""
         with patch.object(
@@ -650,8 +651,8 @@ class TestJailbreakAdversarialTarget:
         *,
         mock_objective_target: PromptTarget,
         mock_objective_scorer: TrueFalseInverterScorer,
-        mock_memory_seed_groups: list[SeedAttackGroup],
-        roleplay_jailbreak_strategy: JailbreakStrategy,
+        mock_memory_seed_groups: list[AttackSeedGroup],
+        roleplay_jailbreak_technique: JailbreakTechnique,
     ) -> None:
         """Test that multiple role-play attacks share the same adversarial target instance."""
         with patch.object(
@@ -664,7 +665,7 @@ class TestJailbreakAdversarialTarget:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [roleplay_jailbreak_strategy],
+                    "scenario_techniques": [roleplay_jailbreak_technique],
                     "include_baseline": False,
                 }
             )
@@ -673,21 +674,21 @@ class TestJailbreakAdversarialTarget:
             assert len(atomic_attacks) >= 2
 
             # All role-play attacks should share the same adversarial target
-            adversarial_targets = [run.attack_technique.attack._adversarial_chat for run in atomic_attacks]
+            adversarial_targets = [run._adversarial_chat for run in atomic_attacks]
             assert all(t is adversarial_targets[0] for t in adversarial_targets)
 
 
 @pytest.mark.usefixtures(*FIXTURES)
 class TestJailbreakBaselineUniformity:
-    """ADO 9012 regression: baseline shares objectives with strategies under max_dataset_size."""
+    """ADO 9012 regression: baseline shares objectives with techniques under max_dataset_size."""
 
-    async def test_one_resolution_call_baseline_matches_strategies(
-        self, mock_objective_target, mock_objective_scorer, simple_jailbreak_strategy
+    async def test_one_resolution_call_baseline_matches_techniques(
+        self, mock_objective_target, mock_objective_scorer, simple_jailbreak_technique
     ):
-        from pyrit.models import SeedAttackGroup, SeedObjective
+        from pyrit.models import AttackSeedGroup, SeedObjective
         from pyrit.scenario import DatasetAttackConfiguration
 
-        seed_groups = [SeedAttackGroup(seeds=[SeedObjective(value=f"obj{i}")]) for i in range(10)]
+        seed_groups = [AttackSeedGroup(seeds=[SeedObjective(value=f"obj{i}")]) for i in range(10)]
         config = DatasetAttackConfiguration(seed_groups=seed_groups, max_dataset_size=3)
 
         first_sample = [("inline", group) for group in seed_groups[:3]]
@@ -700,7 +701,7 @@ class TestJailbreakBaselineUniformity:
             scenario.set_params_from_args(
                 args={
                     "objective_target": mock_objective_target,
-                    "scenario_strategies": [simple_jailbreak_strategy],
+                    "scenario_techniques": [simple_jailbreak_technique],
                     "dataset_config": config,
                     "include_baseline": True,
                 }

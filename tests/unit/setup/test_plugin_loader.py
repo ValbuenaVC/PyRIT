@@ -168,11 +168,11 @@ def build_mock_wheel(
             textwrap.dedent(
                 """\
                 from pyrit.models import SeedObjective
-                from pyrit.scenario import DatasetAttackConfiguration, Scenario, ScenarioStrategy
+                from pyrit.scenario import DatasetAttackConfiguration, Scenario, ScenarioTechnique
                 from pyrit.score import SubStringScorer
 
 
-                class MockStrategy(ScenarioStrategy):
+                class MockTechnique(ScenarioTechnique):
                     ALL = ("all", {"all"})
                     DIRECT = ("direct", {"direct"})
 
@@ -185,8 +185,8 @@ def build_mock_wheel(
                     def __init__(self, *, scenario_result_id=None):
                         super().__init__(
                             version=self.VERSION,
-                            strategy_class=MockStrategy,
-                            default_strategy=MockStrategy.ALL,
+                            technique_class=MockTechnique,
+                            default_technique=MockTechnique.ALL,
                             default_dataset_config=DatasetAttackConfiguration(
                                 seeds=[SeedObjective(value="mock objective")]
                             ),
