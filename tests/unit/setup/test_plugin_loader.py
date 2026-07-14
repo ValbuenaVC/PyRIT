@@ -167,11 +167,35 @@ def build_mock_wheel(
         (pkg / "scenario.py").write_text(
             textwrap.dedent(
                 """\
-                from pyrit.scenario.scenarios.airt.rapid_response import RapidResponse
+                from pyrit.models import SeedObjective
+                from pyrit.scenario import DatasetAttackConfiguration, Scenario, ScenarioStrategy
+                from pyrit.score import SubStringScorer
 
 
-                class MockScenario(RapidResponse):
+                class MockStrategy(ScenarioStrategy):
+                    ALL = ("all", {"all"})
+                    DIRECT = ("direct", {"direct"})
+
+
+                class MockScenario(Scenario):
                     \"\"\"Mock plugin scenario for registration test.\"\"\"
+
+                    VERSION = 1
+
+                    def __init__(self, *, scenario_result_id=None):
+                        super().__init__(
+                            version=self.VERSION,
+                            strategy_class=MockStrategy,
+                            default_strategy=MockStrategy.ALL,
+                            default_dataset_config=DatasetAttackConfiguration(
+                                seeds=[SeedObjective(value="mock objective")]
+                            ),
+                            objective_scorer=SubStringScorer(substring="mock"),
+                            scenario_result_id=scenario_result_id,
+                        )
+
+                    async def _build_atomic_attacks_async(self, *, context):
+                        return []
                 """
             ),
             encoding="utf-8",
