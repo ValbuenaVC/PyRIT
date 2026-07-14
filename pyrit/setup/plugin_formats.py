@@ -13,7 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from pyrit.exceptions import PluginWheelNotFoundError
+from pyrit.exceptions import PluginSourceNotFoundError, PluginWheelNotFoundError
 from pyrit.setup.plugin_spec import PluginFormat, PluginSpec
 
 
@@ -27,6 +27,54 @@ class PreparedPlugin:
     owned_module_prefixes: tuple[str, ...]
     artifact_fingerprint: str
     declared_pyrit_version: str | None = None
+
+
+class SourcePluginFormat:
+    """Prepare a server-local Python source file for plug-in discovery."""
+
+    async def prepare_async(self, *, spec: PluginSpec) -> PreparedPlugin:
+        """
+        Validate one source-file plug-in without importing or executing it.
+
+        Args:
+            spec (PluginSpec): The normalized source declaration.
+
+        Returns:
+            PreparedPlugin: The prepared source import root and ownership metadata.
+
+        Raises:
+            ValueError: If the spec is not source format.
+            PluginSourceNotFoundError: If the source is absent or not a Python file.
+        """
+        return await asyncio.to_thread(self._prepare, spec=spec)
+
+    def _prepare(self, *, spec: PluginSpec) -> PreparedPlugin:
+        if spec.format is not PluginFormat.SOURCE or spec.source is None:
+            raise ValueError("SourcePluginFormat requires a source-format PluginSpec.")
+
+        source = spec.source.expanduser().resolve()
+        if not source.is_file():
+            raise PluginSourceNotFoundError(f"Plug-in source does not point to an existing Python file: {source}")
+        if source.suffix != ".py" or not source.stem.isidentifier():
+            raise PluginSourceNotFoundError(
+                f"Plug-in source must be a Python file with an importable filename: {source}"
+            )
+
+        return PreparedPlugin(
+            spec=spec,
+            import_root=source.parent,
+            entry_modules=(source.stem,),
+            owned_module_prefixes=(source.stem,),
+            artifact_fingerprint=self._fingerprint(source=source),
+        )
+
+    @staticmethod
+    def _fingerprint(*, source: Path) -> str:
+        digest = hashlib.sha256()
+        with source.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
 
 class WheelPluginFormat:

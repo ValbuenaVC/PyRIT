@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from pyrit.exceptions import PluginWheelNotFoundError
+from pyrit.exceptions import PluginSourceNotFoundError, PluginWheelNotFoundError
 from pyrit.setup import PluginFormat, PluginSpec
-from pyrit.setup.plugin_formats import WheelPluginFormat
+from pyrit.setup.plugin_formats import SourcePluginFormat, WheelPluginFormat
 
 
 def _build_wheel(tmp_path: Path, *, package: str = "sample_plugin") -> Path:
@@ -114,3 +114,56 @@ def test_wheel_package_resolution_rejects_ambiguous_directory(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="multiple"):
         WheelPluginFormat._resolve_package(extract_dir=tmp_path, explicit_package=None)
+
+
+async def test_source_file_prepare_returns_common_artifact_without_execution(tmp_path: Path) -> None:
+    source = tmp_path / "operation_foobar.py"
+    marker = tmp_path / "executed.txt"
+    source.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+        encoding="utf-8",
+    )
+    spec = PluginSpec(name="operation_foobar", format=PluginFormat.SOURCE, source=source)
+
+    prepared = await SourcePluginFormat().prepare_async(spec=spec)
+
+    assert prepared.spec is spec
+    assert prepared.import_root == tmp_path.resolve()
+    assert prepared.entry_modules == ("operation_foobar",)
+    assert prepared.owned_module_prefixes == ("operation_foobar",)
+    assert prepared.artifact_fingerprint
+    assert prepared.declared_pyrit_version is None
+    assert not marker.exists()
+
+
+async def test_source_file_prepare_rejects_missing_file(tmp_path: Path) -> None:
+    spec = PluginSpec(
+        name="missing",
+        format=PluginFormat.SOURCE,
+        source=tmp_path / "missing.py",
+    )
+
+    with pytest.raises(PluginSourceNotFoundError, match="existing"):
+        await SourcePluginFormat().prepare_async(spec=spec)
+
+
+async def test_source_file_prepare_rejects_non_python_file(tmp_path: Path) -> None:
+    source = tmp_path / "plugin.txt"
+    source.write_text("not Python", encoding="utf-8")
+    spec = PluginSpec(name="plugin", format=PluginFormat.SOURCE, source=source)
+
+    with pytest.raises(PluginSourceNotFoundError, match="Python"):
+        await SourcePluginFormat().prepare_async(spec=spec)
+
+
+async def test_source_file_fingerprint_changes_with_content(tmp_path: Path) -> None:
+    source = tmp_path / "plugin.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    spec = PluginSpec(name="plugin", format=PluginFormat.SOURCE, source=source)
+    adapter = SourcePluginFormat()
+
+    first = await adapter.prepare_async(spec=spec)
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    second = await adapter.prepare_async(spec=spec)
+
+    assert first.artifact_fingerprint != second.artifact_fingerprint
