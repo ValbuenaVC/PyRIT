@@ -59,28 +59,27 @@ initializers:
 
 # Plug-ins
 # --------
-# Private scenarios and attack techniques loaded from source or a pre-built wheel.
-# ConfigurationLoader automatically prepends a privileged PluginInitializer ahead of
-# the initializers above; do NOT list it under `initializers:`.
+# A plug-in points PyRIT at a private ``PyRITInitializer`` that lives outside the public
+# tree (for example, a team's internal red-teaming package). ConfigurationLoader runs it
+# as a guaranteed-first, privileged initializer -- before the initializers above -- so the
+# scenarios, attack techniques, datasets, and targets it registers exist before anything
+# else consumes the registries. Do NOT list it under `initializers:`.
 #
-# V1 accepts one plug-in. Exactly one of `source` or `wheel` is required.
-# Relative paths resolve against this configuration file.
+# The plug-in's initializer owns all registration; PyRIT discovers nothing on its own.
+# V1 accepts one plug-in with three fields:
+#   - name: an operator label (used in logs/errors)
+#   - source: a directory placed on sys.path so `import <your_package>` resolves
+#   - initializer: dotted 'module.Class' path to a PyRITInitializer subclass
+# Relative source paths resolve against this configuration file.
 #
 # WARNING: loading a plug-in executes third-party code in the PyRIT process. Whoever can
-# write this file can run code on the host. Treat it as sensitive.
+# write this file (or the source) can run code on the host. Treat it as sensitive.
 #
-# Source example:
+# Example:
 # plugins:
-#   - name: operation_foobar
-#     format: source
-#     source: /opt/pyrit/operation_foobar.py
-#
-# Wheel example:
-# plugins:
-#   - name: partner_scenarios
-#     format: wheel
-#     wheel: /opt/pyrit/partner_scenarios-1.2.0-py3-none-any.whl
-#     package: partner_scenarios
+#   - name: rapid_response
+#     source: /repos/pyrit-internal
+#     initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
 #
 # Help and troubleshooting:
 # - doc/getting_started/plugins.md

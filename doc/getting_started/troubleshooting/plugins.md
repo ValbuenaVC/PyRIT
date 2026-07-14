@@ -1,113 +1,64 @@
 # Plug-In Troubleshooting
 
-## The plug-in is missing from `pyrit_scan`
+## The plug-in did not activate
 
-Restart the backend after changing `.pyrit_conf` or the artifact:
+Restart the backend after changing `.pyrit_conf` or the source:
 
 ```powershell
 pyrit_scan --stop-server
 pyrit_scan --start-server --config-file /path/to/.pyrit_conf
 ```
 
-`pyrit_scan` is a thin client. An already-running backend keeps the plug-ins loaded
-from its startup config.
+`pyrit_scan` is a thin client. An already-running backend keeps the plug-in loaded from
+its startup config.
 
 ## Configuration is rejected
 
-V1 accepts one explicit entry:
+V1 accepts exactly one entry with three fields:
 
 ```yaml
 plugins:
-  - name: operation_foobar
-    format: source
-    source: /absolute/path/operation_foobar.py
-```
-
-or:
-
-```yaml
-plugins:
-  - name: partner_scenarios
-    format: wheel
-    wheel: /absolute/path/partner.whl
-    package: partner_scenarios
+  - name: rapid_response
+    source: /repos/pyrit-internal
+    initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
 ```
 
 Check that:
 
-- `name` is lowercase snake case;
-- `format` is `source` or `wheel`;
-- exactly one matching artifact field is present;
+- `name` is a valid lowercase snake_case registry name;
+- `source` is present (relative paths resolve against the config file);
+- `initializer` is a dotted `module.Class` path;
 - only one plug-in is configured.
 
-Relative paths resolve against the configuration file.
+## Source path does not exist
 
-## Source path is rejected
+The loader fails closed with a "source path does not exist" error. Point `source` at the
+directory that contains your package (the parent of the top-level package) so
+`import <your_package>` resolves once that directory is on `sys.path`.
 
-A source path must be:
+## Initializer cannot be imported
 
-- one `.py` file with an importable filename; or
-- one package directory containing `__init__.py`.
+- Confirm `initializer` names a real `module.Class` importable from `source`.
+- Install the plug-in's dependencies into the backend Python environment.
+- A packaged initializer must import from its own package (for example
+  `from my_package... import ...`); pointing `source` at the package root makes that
+  work.
 
-Loose directories containing unrelated Python files are not supported.
+## Target is not a PyRITInitializer
 
-## Import fails
+`initializer` must resolve to a concrete subclass of `PyRITInitializer`. A plug-in
+contributes an initializer, not loose scenario or technique objects.
 
-Plug-in dependencies are not installed automatically. Install them into the backend
-environment and restart.
+## Nothing shows up in the catalog
 
-Also verify:
+PyRIT does not discover components — the initializer must register them. For scanner
+discovery, the initializer must call
+`ScenarioRegistry.get_registry_singleton().register_class(...)` for scenarios and
+`AttackTechniqueRegistry.get_registry_singleton().register_from_factories(...)` for
+techniques. Datasets must be registered as providers and loaded into memory.
 
-- package imports work from the configured source root;
-- the configured package name matches the wheel/source package;
-- another installed package is not shadowing the plug-in.
+## Partial state after a failed load
 
-## Scenario is rejected
-
-The scenario must:
-
-- inherit from `Scenario`;
-- be concrete;
-- use a keyword-only constructor;
-- construct with no arguments for catalog metadata;
-- implement `_build_atomic_attacks_async`.
-
-Plug-in scenarios are inspected before user-configured target/scorer/technique
-initializers run. Keep import and no-argument construction side-effect-light and defer
-runtime dependency resolution.
-
-## Technique is rejected
-
-Expose factories through either:
-
-- a module-owned `get_technique_factories()` returning
-  `AttackTechniqueFactory` instances; or
-- module-global `AttackTechniqueFactory` instances.
-
-Directly discovered factories must identify an applicable scenario, for example:
-
-```python
-technique_tags=["single_turn", "scenario:airt.rapid_response"]
-```
-
-Do not register the factory during module import. The framework owns registration and
-rollback.
-
-## Name collision
-
-V1 is extend-only. A private scenario or technique cannot replace a built-in or
-existing registry name. Rename the contribution and restart.
-
-## Version drift warning
-
-The warning is advisory. PyRIT validates the live scenario/factory contract but does
-not patch incompatible code. Rebuild or update the artifact against the installed
-PyRIT version.
-
-## Partial state after failure
-
-Plug-in activation is fail-closed and transactional for supported scenario/technique
-registries. If initialization fails, fix the reported stage and restart the process.
-
-Continuing production work in the same process after failed initialization is not
-supported.
+V1 is fail-closed. A failed plug-in load aborts initialization; fix the reported stage
+and restart the process. Continuing in the same process after a failed initialization is
+not supported.

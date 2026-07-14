@@ -153,27 +153,21 @@ initialization_scripts:
 
 ### `plugins`
 
-One private scenario/attack-technique plug-in to activate before the configured
-initializers. The plug-in can be a source file/package or a pre-built wheel:
+One private plug-in to activate before the configured initializers. A plug-in points at
+a private ``PyRITInitializer`` reached by a dotted path from a source root; the
+initializer registers whatever private scenarios, attack techniques, datasets, and
+targets it wants discoverable:
 
 ```yaml
 plugins:
-  - name: operation_foobar
-    format: source
-    source: /opt/pyrit/operation_foobar.py
+  - name: rapid_response
+    source: /repos/pyrit-internal
+    initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
 ```
 
-```yaml
-plugins:
-  - name: partner_scenarios
-    format: wheel
-    wheel: /opt/pyrit/partner_scenarios-1.2.0-py3-none-any.whl
-    package: partner_scenarios
-```
-
-`ConfigurationLoader` automatically injects a privileged plug-in initializer first;
-do not add it to `initializers:`. V1 is fail-closed, supports one plug-in, and requires
-a process/backend restart after changes.
+`ConfigurationLoader` automatically injects this as a privileged initializer that runs
+first; do not add it to `initializers:`. V1 is fail-closed, supports one plug-in, and
+requires a process/backend restart after changes.
 
 See [Private Scenarios and Attack Techniques](./plugins.md) and
 [Plug-In Troubleshooting](./troubleshooting/plugins.md).

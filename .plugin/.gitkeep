@@ -1,2 +1,0 @@
-# Keeps the .plugin/ directory in version control while its contents stay ignored.
-# PyRIT extracts plug-in wheels here at runtime (override with PLUGIN_DIR).

@@ -14,7 +14,7 @@ Common issues and advanced setup guides.
 
 - **[Azure SQL Database Setup](./azure_sql_db.md)** — Setting up Azure SQL as your memory backend, including Entra ID authentication and user permissions.
 
-- **[Private Scenario Plug-Ins](./plugins.md)** — Configuration, discovery, dependency, collision, and restart troubleshooting.
+- **[Private Scenario Plug-Ins](./plugins.md)** — Configuration, initializer resolution, import, and restart troubleshooting.
 
 ## Model Deployment
 
