@@ -24,15 +24,11 @@ this ordering is true by construction. It is a no-op when no plug-ins are config
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import inspect
 import logging
-import os
 import pkgutil
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,6 +38,7 @@ from pyrit.exceptions.exception_classes import (
     PluginRegisteredNothingError,
     PluginWheelNotFoundError,
 )
+from pyrit.setup.plugin_formats import WheelPluginFormat
 from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 if TYPE_CHECKING:
@@ -148,8 +145,6 @@ class PluginLoader:
     by default.
     """
 
-    _FINGERPRINT_FILE = ".plugin_wheel_fingerprint"
-
     def __init__(self, *, spec: PluginSpec) -> None:
         """
         Initialize the loader for one plug-in.
@@ -171,7 +166,7 @@ class PluginLoader:
         if wheel is None:
             raise PluginWheelNotFoundError("The current loader only accepts wheel-format plug-ins.")
         try:
-            await self._load_plugin_async(wheel_path=wheel.expanduser())
+            await self._load_plugin_async()
         except Exception as exc:
             message = f"Failed to load plug-in from wheel '{wheel}': {exc} {_REMEDIATION}"
             # Preserve the specific failure type so callers can distinguish modes, while
@@ -181,7 +176,7 @@ class PluginLoader:
                 raise type(exc)(message) from exc
             raise PluginLoadError(message) from exc
 
-    async def _load_plugin_async(self, *, wheel_path: Path) -> None:
+    async def _load_plugin_async(self) -> None:
         """
         Extract, import, bootstrap, and verify a single plug-in wheel.
 
@@ -189,30 +184,17 @@ class PluginLoader:
         registries) is rolled back if the load fails, so a failed or accepted-failure load
         leaves no partial trace.
 
-        Args:
-            wheel_path: Path to the pre-built plug-in wheel on disk.
-
         Raises:
-            PluginWheelNotFoundError: If ``wheel_path`` is not an existing ``.whl`` file.
+            PluginWheelNotFoundError: If the configured wheel is absent or invalid.
             PluginImportError: If the plug-in package cannot be imported.
             PluginRegisteredNothingError: If the plug-in registered no datasets or scenarios.
         """
-        if not wheel_path.is_file():
-            raise PluginWheelNotFoundError(f"Plug-in wheel does not point to an existing file: {wheel_path}")
-        if wheel_path.suffix != ".whl":
-            raise PluginWheelNotFoundError(f"Plug-in wheel must be a .whl file, got: {wheel_path}")
+        prepared = await WheelPluginFormat().prepare_async(spec=self._spec)
+        extract_dir = prepared.import_root
+        package_name = prepared.entry_modules[0]
 
-        # Wheel extraction and directory scanning are blocking filesystem work; run them
-        # off the event loop so init does not stall unrelated async tasks.
-        extract_dir = await asyncio.to_thread(self._extract_wheel, wheel_path=wheel_path)
-        package_name = await asyncio.to_thread(
-            self._resolve_package_name, extract_dir=extract_dir, explicit_package=self._spec.package
-        )
+        from pyrit.setup.plugin_compat import warn_on_version_drift
 
-        from pyrit.setup.plugin_compat import bridge_scenario_extension_points, warn_on_version_drift
-
-        # Surface any host/plug-in version drift before importing, so a subsequent import or
-        # registration failure is read in the light of the mismatch (tolerate slight drift).
         warn_on_version_drift(extract_dir=extract_dir)
 
         from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
@@ -235,17 +217,6 @@ class PluginLoader:
                 self._import_submodules(module=module, package_name=package_name)
             except Exception as exc:
                 raise PluginImportError(f"Could not import plug-in package '{package_name}': {exc}") from exc
-
-            # Bridge known renamed extension points so scenarios built against an older
-            # PyRIT are made concrete (and thus discoverable) before bootstrap/registration.
-            bridged = bridge_scenario_extension_points(package_name=package_name)
-            if bridged:
-                logger.warning(
-                    "Applied %d plug-in compatibility shim(s) for '%s': %s",
-                    len(bridged),
-                    package_name,
-                    ", ".join(bridged),
-                )
 
             await self._run_bootstrap_async(package_name=package_name, module=module)
 
@@ -285,164 +256,6 @@ class PluginLoader:
             scenario_count,
             len(dataset_collisions),
             " (see PLUGIN DATASET SHADOWED warnings above)" if dataset_collisions else "",
-        )
-
-    def _extract_wheel(self, *, wheel_path: Path) -> Path:
-        """
-        Extract the wheel into ``.plugin/<wheel-stem>/``, reusing a fresh cached extraction.
-
-        A cached extraction is reused only when its recorded fingerprint (wheel size and
-        modification time) matches the wheel on disk. A wheel rebuilt at the same path
-        (common during plug-in development, where the version-stamped filename is stable)
-        has a newer fingerprint, so the stale extraction is discarded and re-extracted
-        rather than silently reused — the exact silent-staleness trap the plug-in design
-        guards against. Extraction is atomic: the wheel is unpacked into a temporary
-        sibling directory and moved into place only on success, so a crash mid-extraction
-        never leaves a partial tree that would later be treated as a valid cache.
-        ``safe_extract_zip`` validates every member first (path traversal, symlinks, and
-        size / entry-count / compression caps) so a tampered wheel cannot escape the
-        extraction directory or exhaust disk.
-
-        Args:
-            wheel_path: Path to the plug-in wheel.
-
-        Returns:
-            Path: The directory the wheel was extracted to.
-        """
-        from pyrit.common.safe_extract import safe_extract_zip
-
-        base_dir = self._plugin_base_dir()
-        base_dir.mkdir(parents=True, exist_ok=True)
-
-        extract_dir = base_dir / wheel_path.stem
-        fingerprint = self._wheel_fingerprint(wheel_path=wheel_path)
-        if extract_dir.is_dir() and any(extract_dir.iterdir()):
-            if self._cached_fingerprint(extract_dir=extract_dir) == fingerprint:
-                logger.info("Reusing cached plug-in extraction at %s", extract_dir)
-                return extract_dir
-            logger.warning(
-                "PLUGIN CACHE STALE: extraction at %s does not match the current wheel "
-                "(rebuilt or replaced); re-extracting '%s'.",
-                extract_dir,
-                wheel_path.name,
-            )
-
-        # Unique per-extraction temp dir so concurrent loads of the same wheel in one
-        # process cannot collide on a shared path (mkdtemp is atomic and 0700). safe_extract
-        # into it, then atomically move into place.
-        tmp_dir = Path(tempfile.mkdtemp(prefix=f".{wheel_path.stem}.tmp-", dir=base_dir))
-        try:
-            safe_extract_zip(source=wheel_path, dest_dir=tmp_dir)
-            (tmp_dir / self._FINGERPRINT_FILE).write_text(fingerprint, encoding="utf-8")
-            if extract_dir.exists():
-                shutil.rmtree(extract_dir)
-            os.replace(tmp_dir, extract_dir)
-        finally:
-            if tmp_dir.exists():
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        logger.info("Extracted plug-in wheel '%s' to %s", wheel_path.name, extract_dir)
-        return extract_dir
-
-    @staticmethod
-    def _wheel_fingerprint(*, wheel_path: Path) -> str:
-        """
-        Return a cheap change-detecting fingerprint (size and mtime) for a wheel.
-
-        Args:
-            wheel_path: Path to the plug-in wheel.
-
-        Returns:
-            str: A ``"<size>:<mtime_ns>"`` fingerprint that changes whenever the wheel is
-            rebuilt or replaced.
-        """
-        stat = wheel_path.stat()
-        return f"{stat.st_size}:{stat.st_mtime_ns}"
-
-    @classmethod
-    def _cached_fingerprint(cls, *, extract_dir: Path) -> str | None:
-        """
-        Return the fingerprint recorded for a cached extraction, or ``None`` if absent.
-
-        A missing marker (e.g. an extraction from before fingerprinting) reads as ``None``
-        so the cache is treated as stale and re-extracted rather than trusted blindly.
-
-        Args:
-            extract_dir: The cached extraction directory.
-
-        Returns:
-            str | None: The recorded fingerprint, or ``None`` when no valid marker exists.
-        """
-        marker = extract_dir / cls._FINGERPRINT_FILE
-        try:
-            return marker.read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
-
-    @staticmethod
-    def _plugin_base_dir() -> Path:
-        """
-        Resolve the base directory for plug-in extractions.
-
-        Uses ``PLUGIN_DIR`` when set, otherwise ``<pyrit home>/.plugin``.
-
-        Returns:
-            Path: The resolved plug-in base directory.
-        """
-        override = os.getenv("PLUGIN_DIR")
-        if override:
-            return Path(override).expanduser().resolve()
-        from pyrit.common import path
-
-        return Path(path.HOME_PATH, ".plugin").resolve()
-
-    @staticmethod
-    def _resolve_package_name(*, extract_dir: Path, explicit_package: str | None) -> str:
-        """
-        Determine the plug-in's top-level import package.
-
-        Resolution order: the spec's ``package`` (when set), then ``*.dist-info/top_level.txt``,
-        then the single importable top-level directory in the extraction.
-
-        Args:
-            extract_dir: The directory the wheel was extracted to.
-            explicit_package: The package name from the plug-in's config, if any.
-
-        Returns:
-            str: The top-level package name to import.
-
-        Raises:
-            ValueError: If the package cannot be unambiguously determined.
-        """
-        if explicit_package:
-            return explicit_package
-
-        for dist_info in sorted(extract_dir.glob("*.dist-info")):
-            top_level = dist_info / "top_level.txt"
-            if top_level.is_file():
-                for line in top_level.read_text(encoding="utf-8").splitlines():
-                    name = line.strip()
-                    if name:
-                        return name
-
-        candidates = sorted(
-            child.name
-            for child in extract_dir.iterdir()
-            if child.is_dir()
-            and not child.name.endswith(".dist-info")
-            and not child.name.endswith(".data")
-            and (child / "__init__.py").is_file()
-        )
-        if len(candidates) == 1:
-            return candidates[0]
-        if not candidates:
-            raise ValueError(
-                f"Could not find an importable top-level package in {extract_dir}. "
-                "Set the plug-in's 'package' in its .pyrit_conf entry."
-            )
-        raise ValueError(
-            f"Found multiple top-level packages in {extract_dir}: {candidates}. "
-            "Set the plug-in's 'package' in its .pyrit_conf entry to disambiguate."
         )
 
     @staticmethod

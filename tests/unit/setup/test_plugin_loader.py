@@ -33,7 +33,6 @@ from pyrit.setup.initialization import IN_MEMORY, initialize_pyrit_async
 from pyrit.setup.plugin_loader import (
     PluginImportError,
     PluginInitializer,
-    PluginLoader,
     PluginLoadError,
     PluginRegisteredNothingError,
     PluginWheelNotFoundError,
@@ -660,79 +659,6 @@ async def test_rollback_restores_overwritten_scenario(tmp_path: Path) -> None:
 
     # The original scenario is restored, not deleted or left replaced by the plug-in's.
     assert registry._classes[wheel.scenario_name] is _PreexistingScenario
-
-
-# ---------------------------------------------------------------------------
-# Extraction cache
-# ---------------------------------------------------------------------------
-
-
-def test_extract_wheel_reuses_cached_extraction(tmp_path: Path) -> None:
-    """A second extraction of an unchanged wheel reuses the cached directory."""
-    wheel = build_mock_wheel(tmp_path)
-    plugin_dir = tmp_path / ".plugin"
-
-    with plugin_env(PLUGIN_DIR=str(plugin_dir)):
-        initializer = PluginLoader(spec=_spec(wheel))
-        first = initializer._extract_wheel(wheel_path=wheel.path)
-        marker = first / "cache_marker.txt"
-        marker.write_text("kept", encoding="utf-8")
-
-        second = initializer._extract_wheel(wheel_path=wheel.path)
-
-    assert first == second
-    assert marker.is_file()  # not wiped -> cached, not re-extracted
-
-
-# ---------------------------------------------------------------------------
-# Package name resolution
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_package_name_prefers_explicit(tmp_path: Path) -> None:
-    """An explicit package name takes precedence over inference."""
-    (tmp_path / "some_pkg").mkdir()
-    (tmp_path / "some_pkg" / "__init__.py").write_text("", encoding="utf-8")
-
-    assert PluginLoader._resolve_package_name(extract_dir=tmp_path, explicit_package="explicit_pkg") == "explicit_pkg"
-
-
-def test_resolve_package_name_infers_single_package(tmp_path: Path) -> None:
-    """The single importable top-level directory is inferred when no package/top_level.txt exists."""
-    (tmp_path / "the_pkg").mkdir()
-    (tmp_path / "the_pkg" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "the_pkg-0.0.1.dist-info").mkdir()
-
-    assert PluginLoader._resolve_package_name(extract_dir=tmp_path, explicit_package=None) == "the_pkg"
-
-
-def test_resolve_package_name_uses_top_level_txt(tmp_path: Path) -> None:
-    """top_level.txt is consulted before directory inference."""
-    (tmp_path / "pkg_a").mkdir()
-    (tmp_path / "pkg_a" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "pkg_b").mkdir()
-    (tmp_path / "pkg_b" / "__init__.py").write_text("", encoding="utf-8")
-    distinfo = tmp_path / "thing-0.0.1.dist-info"
-    distinfo.mkdir()
-    (distinfo / "top_level.txt").write_text("pkg_b\n", encoding="utf-8")
-
-    assert PluginLoader._resolve_package_name(extract_dir=tmp_path, explicit_package=None) == "pkg_b"
-
-
-def test_resolve_package_name_none_raises(tmp_path: Path) -> None:
-    """No importable package raises a clear error pointing at the plug-in's config."""
-    with pytest.raises(ValueError, match="package"):
-        PluginLoader._resolve_package_name(extract_dir=tmp_path, explicit_package=None)
-
-
-def test_resolve_package_name_multiple_raises(tmp_path: Path) -> None:
-    """Multiple top-level packages require an explicit package to disambiguate."""
-    for name in ("pkg_a", "pkg_b"):
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "__init__.py").write_text("", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="disambiguate"):
-        PluginLoader._resolve_package_name(extract_dir=tmp_path, explicit_package=None)
 
 
 # ---------------------------------------------------------------------------
