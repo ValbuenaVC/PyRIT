@@ -111,7 +111,7 @@ class ConfigurationLoader(YamlLoadable):
         operator: Name for the current operator, e.g. a team or username.
         operation: Name for the current operation.
         plugins: List of plug-ins to load as the guaranteed-first initialization phase.
-            V1 accepts at most one explicit mapping with ``name``, a ``source`` path, and
+            Accepts at most one explicit mapping with ``name``, a ``source`` path, and
             a dotted ``initializer`` (module.Class) pointing at a ``PyRITInitializer``.
             Empty means no plug-ins.
 
@@ -233,9 +233,9 @@ class ConfigurationLoader(YamlLoadable):
         """
         Normalize ``plugins`` entries to ``PluginSpec`` instances.
 
-        V1 accepts at most one explicit mapping that selects the ``source`` or ``wheel``
-        format. Validating here (before any other normalization) fails fast on a
-        malformed plug-in entry.
+        Accepts at most one explicit mapping (``name`` + ``source`` + dotted
+        ``initializer``). Validating here (before any other normalization) fails fast on
+        a malformed plug-in entry.
 
         Raises:
             ValueError: If a plug-in entry has an unsupported shape.
@@ -243,7 +243,7 @@ class ConfigurationLoader(YamlLoadable):
         from pyrit.setup.plugin_spec import PluginSpec
 
         if len(self.plugins) > 1:
-            raise ValueError("V1 supports one plug-in at a time; plug-in composition is not supported.")
+            raise ValueError("Only one plug-in is supported at a time; plug-in composition is not supported.")
         self._plugin_specs = [PluginSpec.from_config(entry, base_dir=self._plugin_base_dir) for entry in self.plugins]
 
     def _normalize_scenario(self) -> None:

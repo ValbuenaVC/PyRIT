@@ -27,19 +27,33 @@ dotted path from a source root:
 ```yaml
 # .pyrit_conf
 plugins:
-  - name: rapid_response
-    source: /repos/pyrit-internal
-    initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
+  - name: my_redteam
+    source: /repos/my-redteam
+    initializer: my_redteam.setup.MyInitializer
 ```
 
 - `name` — an operator label used in logs and errors.
-- `source` — a directory placed on `sys.path` so `import <your_package>` resolves. A
-  relative path resolves against the config file.
+- `source` — the folder placed on `sys.path` so your package can be imported (see below).
 - `initializer` — a dotted `module.Class` path to a concrete `PyRITInitializer`.
 
-`ConfigurationLoader` prepends a privileged initializer that anchors `source`, imports
-the initializer, and runs it before any user-configured initializer. Do **not** list it
-under `initializers:`.
+### What `source` should point at (and why it matters)
+
+`source` should be the folder that **contains** your package — the directory you would be
+sitting in for `import my_redteam` to succeed at a Python prompt. PyRIT adds that folder
+to Python's import search path (`sys.path`) before importing your initializer.
+
+You need this because a real private package doesn't live next to PyRIT; its modules
+import from *each other* (for example `from my_redteam.datasets import load`). If Python
+can't find the package root, those imports fail and the plug-in won't load. In plain
+terms: point `source` at the folder above your package, not at the package folder itself
+and not at a single file buried inside it. If you point at the wrong place, loading fails
+closed with an import error naming what could not be found.
+
+`ConfigurationLoader` runs the plug-in as a privileged initializer, always **first** —
+before your other initializers and before anything reads the scenario/technique catalog.
+You do not (and cannot) add it to `initializers:`: it isn't a registered initializer name,
+so listing it there fails with an "initializer not found" error. The framework constructs
+and runs it for you.
 
 ## The initializer owns registration
 
@@ -50,15 +64,25 @@ wants discoverable, at whatever level of abstraction fits:
   `AttackTechniqueRegistry.get_registry_singleton().register_from_factories([...])`;
   selectable via `--techniques`.
 - **Scenarios** —
-  `ScenarioRegistry.get_registry_singleton().register_class(MyScenario, name="airt_internal.violence")`;
-  runnable via `pyrit_scan airt_internal.violence`.
+  `ScenarioRegistry.get_registry_singleton().register_class(MyScenario, name="my_redteam.violence")`;
+  runnable via `pyrit_scan my_redteam.violence`.
 - **Datasets** — register providers and load them into memory so private seeds stay in
   the operator's database and are never published.
 - **Default targets** — `set_default_value(...)`.
 
-This is why the plug-in fits gray-area content: sometimes only the *dataset* must stay
-private, sometimes a *technique*, and sometimes an entire *scenario* — the initializer
-decides.
+### Deciding what to keep private
+
+"Private" is rarely all-or-nothing. If you build a custom scenario or technique, you have
+to decide whether to contribute it publicly, keep it in your own tracked repo, or keep it
+fully private — and often only *part* of it is sensitive. A plug-in lets you keep exactly
+the sensitive layer private while everything else stays public and works out of the box:
+
+- sometimes only the **dataset** (the prompts/objectives) is sensitive;
+- sometimes it's a niche **technique**;
+- sometimes an entire **scenario** should not be exposed at all.
+
+Because the initializer registers each level independently, you can publish the generic
+parts and register only the sensitive parts from your private package.
 
 ### Example initializer
 
@@ -68,7 +92,7 @@ from pyrit.registry import AttackTechniqueRegistry, ScenarioRegistry
 from pyrit.scenario.core import AttackTechniqueFactory
 from pyrit.setup.pyrit_initializer import PyRITInitializer
 
-from my_package.scenarios import Violence
+from my_redteam.scenarios import Violence
 
 
 class MyInitializer(PyRITInitializer):
@@ -78,7 +102,7 @@ class MyInitializer(PyRITInitializer):
         AttackTechniqueRegistry.get_registry_singleton().register_from_factories(
             [AttackTechniqueFactory(name="operation_foobar", attack_class=PromptSendingAttack)]
         )
-        ScenarioRegistry.get_registry_singleton().register_class(Violence, name="airt_internal.violence")
+        ScenarioRegistry.get_registry_singleton().register_class(Violence, name="my_redteam.violence")
 ```
 
 ## Usage
@@ -88,7 +112,7 @@ class MyInitializer(PyRITInitializer):
 pyrit_scan airt.rapid_response --target openai_chat --techniques operation_foobar
 
 # A private scenario
-pyrit_scan airt_internal.violence --target openai_chat
+pyrit_scan my_redteam.violence --target openai_chat
 ```
 
 ## Behavior and limits
@@ -98,7 +122,7 @@ pyrit_scan airt_internal.violence --target openai_chat
 - Loading executes third-party Python with backend permissions; whoever can write the
   config or the source can run code on the host. Treat the config as sensitive.
 - Dependencies must already be installed in the backend environment.
-- V1 is **fail-closed** and supports **one** plug-in. A failed load aborts
+- The plug-in path is **fail-closed** and supports **one** plug-in. A failed load aborts
   initialization — fix the config or source and restart.
 - Plug-ins activate only at process/backend startup. Restart after changing the config
   or the source; there is no hot reload.

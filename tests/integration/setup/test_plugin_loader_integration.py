@@ -19,7 +19,7 @@ from pyrit.registry import AttackTechniqueRegistry, ScenarioRegistry
 from pyrit.setup import PluginSpec
 from pyrit.setup.plugin_loader import PluginInitializer
 
-_PLUGIN_PACKAGE = "airt_internal_plugin"
+_PLUGIN_PACKAGE = "my_redteam_plugin"
 
 
 def _write_source_plugin(root: Path) -> None:
@@ -97,7 +97,7 @@ def _write_source_plugin(root: Path) -> None:
                         [AttackTechniqueFactory(name="operation_foobar", attack_class=PromptSendingAttack)]
                     )
                     ScenarioRegistry.get_registry_singleton().register_class(
-                        PrivateScenario, name="airt_internal.private"
+                        PrivateScenario, name="my_redteam.private"
                     )
             '''
         ),
@@ -124,7 +124,7 @@ def _isolate_registries_and_imports():
 async def test_source_plugin_initializer_registers_real_components(tmp_path: Path) -> None:
     _write_source_plugin(tmp_path)
     spec = PluginSpec(
-        name="airt_internal",
+        name="my_redteam",
         source=tmp_path,
         initializer=f"{_PLUGIN_PACKAGE}.bootstrap.PrivateInitializer",
     )
@@ -132,8 +132,8 @@ async def test_source_plugin_initializer_registers_real_components(tmp_path: Pat
     await PluginInitializer(plugins=[spec]).initialize_async()
 
     scenario_registry = ScenarioRegistry.get_registry_singleton()
-    assert "airt_internal.private" in scenario_registry.get_class_names()
-    assert scenario_registry.get_class("airt_internal.private").__name__ == "PrivateScenario"
+    assert "my_redteam.private" in scenario_registry.get_class_names()
+    assert scenario_registry.get_class("my_redteam.private").__name__ == "PrivateScenario"
     assert "operation_foobar" in AttackTechniqueRegistry.get_registry_singleton().get_factories()
 
 
@@ -143,7 +143,7 @@ async def test_source_plugin_missing_initializer_fails_closed(tmp_path: Path) ->
 
     _write_source_plugin(tmp_path)
     spec = PluginSpec(
-        name="airt_internal",
+        name="my_redteam",
         source=tmp_path,
         initializer=f"{_PLUGIN_PACKAGE}.bootstrap.DoesNotExist",
     )

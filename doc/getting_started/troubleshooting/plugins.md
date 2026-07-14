@@ -14,13 +14,13 @@ its startup config.
 
 ## Configuration is rejected
 
-V1 accepts exactly one entry with three fields:
+A plug-in is one entry with three fields:
 
 ```yaml
 plugins:
-  - name: rapid_response
-    source: /repos/pyrit-internal
-    initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
+  - name: my_redteam
+    source: /repos/my-redteam
+    initializer: my_redteam.setup.MyInitializer
 ```
 
 Check that:
@@ -41,8 +41,7 @@ directory that contains your package (the parent of the top-level package) so
 - Confirm `initializer` names a real `module.Class` importable from `source`.
 - Install the plug-in's dependencies into the backend Python environment.
 - A packaged initializer must import from its own package (for example
-  `from my_package... import ...`); pointing `source` at the package root makes that
-  work.
+  `from my_redteam... import ...`); pointing `source` at the package root makes that work.
 
 ## Target is not a PyRITInitializer
 
@@ -59,6 +58,6 @@ techniques. Datasets must be registered as providers and loaded into memory.
 
 ## Partial state after a failed load
 
-V1 is fail-closed. A failed plug-in load aborts initialization; fix the reported stage
-and restart the process. Continuing in the same process after a failed initialization is
-not supported.
+Plug-in loading is fail-closed. A failed load aborts initialization; fix the reported
+stage and restart the process. Continuing in the same process after a failed
+initialization is not supported.

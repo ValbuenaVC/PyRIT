@@ -66,9 +66,10 @@ initializers:
 # else consumes the registries. Do NOT list it under `initializers:`.
 #
 # The plug-in's initializer owns all registration; PyRIT discovers nothing on its own.
-# V1 accepts one plug-in with three fields:
+# A plug-in is one entry with three fields:
 #   - name: an operator label (used in logs/errors)
-#   - source: a directory placed on sys.path so `import <your_package>` resolves
+#   - source: the folder that contains your package, placed on sys.path so
+#     `import <your_package>` resolves
 #   - initializer: dotted 'module.Class' path to a PyRITInitializer subclass
 # Relative source paths resolve against this configuration file.
 #
@@ -77,9 +78,9 @@ initializers:
 #
 # Example:
 # plugins:
-#   - name: rapid_response
-#     source: /repos/pyrit-internal
-#     initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
+#   - name: my_redteam
+#     source: /repos/my-redteam
+#     initializer: my_redteam.setup.MyInitializer
 #
 # Help and troubleshooting:
 # - doc/getting_started/plugins.md

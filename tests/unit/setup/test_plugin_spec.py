@@ -14,12 +14,12 @@ def test_from_config_normalizes_source_and_initializer(tmp_path: Path) -> None:
     entry = {
         "name": "rapid_response",
         "source": "pkg_root",
-        "initializer": "pyrit_internal.setup.RapidResponseInitializer",
+        "initializer": "my_redteam.setup.MyInitializer",
     }
     spec = PluginSpec.from_config(entry, base_dir=tmp_path)
     assert spec.name == "rapid_response"
     assert spec.source == (tmp_path / "pkg_root").resolve()
-    assert spec.initializer == "pyrit_internal.setup.RapidResponseInitializer"
+    assert spec.initializer == "my_redteam.setup.MyInitializer"
 
 
 def test_from_config_keeps_absolute_source(tmp_path: Path) -> None:

@@ -51,6 +51,7 @@ flowchart LR
 ### Using .env.local for Overrides
 
 You can use `~/.pyrit/.env.local` to override values in `~/.pyrit/.env` without modifying the base file. This is useful for:
+
 - Testing different targets
 - Using personal credentials instead of shared ones
 - Switching between configurations quickly
@@ -160,14 +161,15 @@ targets it wants discoverable:
 
 ```yaml
 plugins:
-  - name: rapid_response
-    source: /repos/pyrit-internal
-    initializer: pyrit_internal.setup.initializers.RapidResponseInitializer
+  - name: my_redteam
+    source: /repos/my-redteam
+    initializer: my_redteam.setup.MyInitializer
 ```
 
 `ConfigurationLoader` automatically injects this as a privileged initializer that runs
-first; do not add it to `initializers:`. V1 is fail-closed, supports one plug-in, and
-requires a process/backend restart after changes.
+first; you cannot add it to `initializers:` yourself (it is not a registered initializer
+name). It is fail-closed, supports one plug-in, and requires a process/backend restart
+after changes.
 
 See [Private Scenarios and Attack Techniques](./plugins.md) and
 [Plug-In Troubleshooting](./troubleshooting/plugins.md).

@@ -44,11 +44,11 @@ class PluginInitializer(PyRITInitializer):
             plugins (Sequence[PluginSpec]): The normalized plug-in declarations.
 
         Raises:
-            ValueError: If anything other than exactly one plug-in is supplied (V1).
+            ValueError: If anything other than exactly one plug-in is supplied.
         """
         super().__init__()
         if len(plugins) != 1:
-            raise ValueError("PluginInitializer requires exactly one plug-in in V1.")
+            raise ValueError("PluginInitializer requires exactly one plug-in.")
         self._spec = plugins[0]
 
     @property
