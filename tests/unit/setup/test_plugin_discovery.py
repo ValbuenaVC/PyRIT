@@ -9,7 +9,11 @@ import pytest
 
 from pyrit.exceptions import PluginDiscoveryError
 from pyrit.setup import PluginFormat, PluginSpec
-from pyrit.setup.plugin_discovery import discover_scenarios, import_plugin_async
+from pyrit.setup.plugin_discovery import (
+    discover_scenarios,
+    discover_techniques,
+    import_plugin_async,
+)
 from pyrit.setup.plugin_formats import SourcePluginFormat
 
 
@@ -103,3 +107,152 @@ class AbuseScenario(RapidResponse):
     contributions = discover_scenarios(imported=imported)
 
     assert [item.registry_name for item in contributions] == ["image.abuse"]
+
+
+@pytest.mark.usefixtures("restore_import_state")
+async def test_discover_technique_from_conventional_factory_function(tmp_path: Path) -> None:
+    source = tmp_path / "private_technique.py"
+    source.write_text(
+        """from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+
+def get_technique_factories():
+    return [
+        AttackTechniqueFactory(
+            name="operation_foobar",
+            attack_class=PromptSendingAttack,
+            strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+        )
+    ]
+""",
+        encoding="utf-8",
+    )
+
+    imported = await _prepare_and_import_source(source, name="private_technique")
+    contributions = discover_techniques(imported=imported)
+
+    assert len(contributions) == 1
+    assert contributions[0].factory.name == "operation_foobar"
+    assert contributions[0].scenario_names == frozenset({"airt.rapid_response"})
+
+
+@pytest.mark.usefixtures("restore_import_state")
+async def test_discover_technique_from_explicit_contribution(tmp_path: Path) -> None:
+    source = tmp_path / "explicit_technique.py"
+    source.write_text(
+        """from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+from pyrit.setup.plugin_discovery import TechniqueContribution
+
+OPERATION = TechniqueContribution(
+    factory=AttackTechniqueFactory(
+        name="operation_explicit",
+        attack_class=PromptSendingAttack,
+        strategy_tags=["single_turn"],
+    ),
+    scenario_names=frozenset({"airt.rapid_response"}),
+)
+""",
+        encoding="utf-8",
+    )
+
+    imported = await _prepare_and_import_source(source, name="explicit_technique")
+    contributions = discover_techniques(imported=imported)
+
+    assert [item.factory.name for item in contributions] == ["operation_explicit"]
+
+
+@pytest.mark.usefixtures("restore_import_state")
+async def test_discover_technique_from_module_global_factory(tmp_path: Path) -> None:
+    source = tmp_path / "global_technique.py"
+    source.write_text(
+        """from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+
+OPERATION = AttackTechniqueFactory(
+    name="operation_global",
+    attack_class=PromptSendingAttack,
+    strategy_tags=["single_turn", "scenario:airt.rapid_response"],
+)
+""",
+        encoding="utf-8",
+    )
+
+    imported = await _prepare_and_import_source(source, name="global_technique")
+    contributions = discover_techniques(imported=imported)
+
+    assert [item.factory.name for item in contributions] == ["operation_global"]
+
+
+@pytest.mark.usefixtures("restore_import_state")
+async def test_discover_technique_does_not_call_arbitrary_helpers(tmp_path: Path) -> None:
+    source = tmp_path / "safe_discovery.py"
+    marker = tmp_path / "helper_called.txt"
+    source.write_text(
+        f"""from pathlib import Path
+from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+
+def build_something():
+    Path({str(marker)!r}).write_text("called")
+    return AttackTechniqueFactory(name="hidden", attack_class=PromptSendingAttack)
+
+OPERATION = AttackTechniqueFactory(
+    name="visible",
+    attack_class=PromptSendingAttack,
+    strategy_tags=["scenario:airt.rapid_response"],
+)
+""",
+        encoding="utf-8",
+    )
+
+    imported = await _prepare_and_import_source(source, name="safe_discovery")
+    contributions = discover_techniques(imported=imported)
+
+    assert [item.factory.name for item in contributions] == ["visible"]
+    assert not marker.exists()
+
+
+@pytest.mark.usefixtures("restore_import_state")
+async def test_discover_technique_requires_scenario_applicability(tmp_path: Path) -> None:
+    source = tmp_path / "missing_applicability.py"
+    source.write_text(
+        """from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+
+OPERATION = AttackTechniqueFactory(name="missing_scope", attack_class=PromptSendingAttack)
+""",
+        encoding="utf-8",
+    )
+
+    imported = await _prepare_and_import_source(source, name="missing_applicability")
+
+    with pytest.raises(PluginDiscoveryError, match="applicable scenario"):
+        discover_techniques(imported=imported)
+
+
+@pytest.mark.usefixtures("restore_import_state")
+async def test_discover_technique_rejects_duplicate_names(tmp_path: Path) -> None:
+    source = tmp_path / "duplicate_techniques.py"
+    source.write_text(
+        """from pyrit.executor.attack import PromptSendingAttack
+from pyrit.scenario import AttackTechniqueFactory
+
+FIRST = AttackTechniqueFactory(
+    name="duplicate",
+    attack_class=PromptSendingAttack,
+    strategy_tags=["scenario:airt.rapid_response"],
+)
+SECOND = AttackTechniqueFactory(
+    name="duplicate",
+    attack_class=PromptSendingAttack,
+    strategy_tags=["scenario:airt.rapid_response"],
+)
+""",
+        encoding="utf-8",
+    )
+
+    imported = await _prepare_and_import_source(source, name="duplicate_techniques")
+
+    with pytest.raises(PluginDiscoveryError, match="duplicate"):
+        discover_techniques(imported=imported)

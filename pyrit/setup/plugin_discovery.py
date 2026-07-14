@@ -12,13 +12,14 @@ import pkgutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pyrit.exceptions import PluginDiscoveryError, PluginImportError
 from pyrit.models import class_name_to_snake_case
-from pyrit.scenario import Scenario
+from pyrit.scenario import AttackTechniqueFactory, Scenario
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
     from types import ModuleType
 
     from pyrit.setup.plugin_formats import PreparedPlugin
@@ -38,6 +39,14 @@ class ScenarioContribution:
 
     scenario_class: type[Scenario]
     registry_name: str
+
+
+@dataclass(frozen=True)
+class TechniqueContribution:
+    """A configured attack technique and the scenarios that expose it."""
+
+    factory: AttackTechniqueFactory
+    scenario_names: frozenset[str]
 
 
 async def import_plugin_async(*, prepared: PreparedPlugin) -> ImportedPlugin:
@@ -129,6 +138,112 @@ def discover_scenarios(*, imported: ImportedPlugin) -> list[ScenarioContribution
                 )
             )
     return sorted(contributions, key=lambda item: item.registry_name)
+
+
+def discover_techniques(*, imported: ImportedPlugin) -> list[TechniqueContribution]:
+    """
+    Discover configured attack-technique factories from owned modules.
+
+    Args:
+        imported (ImportedPlugin): The imported plug-in modules.
+
+    Returns:
+        list[TechniqueContribution]: Deterministically ordered technique contributions.
+
+    Raises:
+        PluginDiscoveryError: If a factory export is malformed, lacks applicability,
+            or duplicates another contribution name.
+    """
+    contributions: list[TechniqueContribution] = []
+    seen_objects: set[int] = set()
+    for module in imported.modules:
+        explicit = [
+            value
+            for value in vars(module).values()
+            if isinstance(value, TechniqueContribution) and id(value.factory) not in seen_objects
+        ]
+        contributions.extend(explicit)
+        seen_objects.update(id(item.factory) for item in explicit)
+
+        factory_builder = getattr(module, "get_technique_factories", None)
+        if callable(factory_builder) and getattr(factory_builder, "__module__", None) == module.__name__:
+            contributions.extend(
+                _contributions_from_factory_builder(
+                    module=module,
+                    factory_builder=factory_builder,
+                    seen_objects=seen_objects,
+                )
+            )
+
+        for value in vars(module).values():
+            if isinstance(value, AttackTechniqueFactory) and id(value) not in seen_objects:
+                contributions.append(_contribution_from_factory(factory=value, module_name=module.__name__))
+                seen_objects.add(id(value))
+
+    by_name: dict[str, TechniqueContribution] = {}
+    for contribution in contributions:
+        if not contribution.scenario_names:
+            raise PluginDiscoveryError(
+                f"Attack technique '{contribution.factory.name}' must declare at least one applicable scenario."
+            )
+        existing = by_name.get(contribution.factory.name)
+        if existing is not None and existing.factory is not contribution.factory:
+            raise PluginDiscoveryError(
+                f"Plug-in discovered duplicate attack technique name '{contribution.factory.name}'."
+            )
+        contribution.factory.get_identifier()
+        by_name[contribution.factory.name] = contribution
+    return [by_name[name] for name in sorted(by_name)]
+
+
+def _contributions_from_factory_builder(
+    *,
+    module: ModuleType,
+    factory_builder: Callable[[], object],
+    seen_objects: set[int],
+) -> list[TechniqueContribution]:
+    signature = inspect.signature(factory_builder)
+    required = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.default is inspect.Parameter.empty
+        and parameter.kind
+        not in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }
+    ]
+    if required:
+        raise PluginDiscoveryError(
+            f"Plug-in function '{module.__name__}.get_technique_factories' must take no required arguments."
+        )
+    result = factory_builder()
+    if not isinstance(result, (list, tuple)) or not all(isinstance(item, AttackTechniqueFactory) for item in result):
+        raise PluginDiscoveryError(
+            f"Plug-in function '{module.__name__}.get_technique_factories' must return "
+            "AttackTechniqueFactory instances."
+        )
+    factories = cast("Sequence[AttackTechniqueFactory]", result)
+    contributions = [
+        _contribution_from_factory(factory=factory, module_name=module.__name__)
+        for factory in factories
+        if id(factory) not in seen_objects
+    ]
+    seen_objects.update(id(item.factory) for item in contributions)
+    return contributions
+
+
+def _contribution_from_factory(*, factory: AttackTechniqueFactory, module_name: str) -> TechniqueContribution:
+    prefix = "scenario:"
+    scenario_names = frozenset(
+        tag.removeprefix(prefix) for tag in factory.strategy_tags if tag.startswith(prefix) and tag != prefix
+    )
+    if not scenario_names:
+        raise PluginDiscoveryError(
+            f"Attack technique '{factory.name}' from '{module_name}' must declare an applicable scenario "
+            f"using a '{prefix}<registry-name>' tag or an explicit TechniqueContribution."
+        )
+    return TechniqueContribution(factory=factory, scenario_names=scenario_names)
 
 
 def _module_defined_subclasses(*, module: ModuleType, base_class: type[Scenario]) -> list[type[Scenario]]:
