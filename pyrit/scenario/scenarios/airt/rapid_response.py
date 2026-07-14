@@ -35,8 +35,9 @@ def _build_rapid_response_technique() -> type[ScenarioTechnique]:
     """
     Build the RapidResponse technique class dynamically from the registered factories.
 
-    Reads the singleton ``AttackTechniqueRegistry`` and filters to factories
-    tagged ``core``.
+    Reads the singleton ``AttackTechniqueRegistry`` and exposes every registered
+    technique. Which techniques are available is decided by what initializers
+    (including a plug-in initializer) have registered before this runs.
 
     Returns:
         type[ScenarioTechnique]: The dynamically generated technique enum class.
@@ -45,14 +46,7 @@ def _build_rapid_response_technique() -> type[ScenarioTechnique]:
     from pyrit.registry.tag_query import TagQuery
 
     registry = AttackTechniqueRegistry.get_registry_singleton()
-    factories = list(
-        registry.get_factories_for_scenario(
-            scenario_name="airt.rapid_response",
-            base_query=TagQuery.all("core"),
-        ).values()
-    )
-    if not factories:
-        registry.get_factories_or_raise()
+    factories = list(registry.get_factories_or_raise().values())
 
     return AttackTechniqueRegistry.build_technique_class_from_factories(  # type: ignore[ty:invalid-return-type]
         class_name="RapidResponseTechnique",
