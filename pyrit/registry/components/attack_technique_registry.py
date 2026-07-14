@@ -129,39 +129,6 @@ class AttackTechniqueRegistry(Registry["AttackTechniqueFactory", AttackTechnique
         self.instances.register(factory, name=name, tags=tags, metadata=metadata)
         logger.debug(f"Registered attack technique factory: {name} ({factory.attack_class.__name__})")
 
-    def register_contributed_factory(
-        self,
-        *,
-        factory: AttackTechniqueFactory,
-        plugin_name: str,
-        scenario_names: frozenset[str],
-    ) -> None:
-        """
-        Register one extend-only plug-in technique contribution.
-
-        Args:
-            factory (AttackTechniqueFactory): The configured attack technique.
-            plugin_name (str): The owning plug-in name.
-            scenario_names (frozenset[str]): Scenarios that expose the technique.
-
-        Raises:
-            PluginCollisionError: If the technique name is already registered.
-        """
-        from pyrit.exceptions import PluginCollisionError
-
-        if factory.name in self.instances:
-            raise PluginCollisionError(f"Attack technique name '{factory.name}' is already registered.")
-        self.register_technique(
-            name=factory.name,
-            factory=factory,
-            tags=factory.technique_tags,
-            metadata={
-                "plugin_name": plugin_name,
-                "scenario_names": sorted(scenario_names),
-                "identifier_hash": factory.get_identifier().hash,
-            },
-        )
-
     def get_factories(self) -> dict[str, AttackTechniqueFactory]:
         """
         Return all registered factories as a name→factory dict.
@@ -200,32 +167,6 @@ class AttackTechniqueRegistry(Registry["AttackTechniqueFactory", AttackTechnique
                 "AttackTechniqueRegistry.register_from_factories(...), or registering "
                 "factories directly via AttackTechniqueRegistry.get_registry_singleton()."
             )
-        return factories
-
-    def get_factories_for_scenario(
-        self,
-        *,
-        scenario_name: str,
-        base_query: TagQuery | None = None,
-    ) -> dict[str, AttackTechniqueFactory]:
-        """
-        Return built-in-query matches plus contributions applicable to a scenario.
-
-        Args:
-            scenario_name (str): The scanner-facing scenario registry name.
-            base_query (TagQuery | None): Optional query selecting the scenario's
-                built-in technique pool.
-
-        Returns:
-            dict[str, AttackTechniqueFactory]: Matching factories, sorted by name.
-        """
-        factories: dict[str, AttackTechniqueFactory] = {}
-        for entry in self.instances.get_all_instances():
-            built_in_match = base_query is not None and base_query.matches(set(entry.instance.technique_tags))
-            applicable_scenarios = entry.metadata.get("scenario_names", [])
-            contributed_match = scenario_name in applicable_scenarios
-            if built_in_match or contributed_match:
-                factories[entry.name] = entry.instance
         return factories
 
     @property
