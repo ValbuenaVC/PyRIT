@@ -202,6 +202,32 @@ class AttackTechniqueRegistry(Registry["AttackTechniqueFactory", AttackTechnique
             )
         return factories
 
+    def get_factories_for_scenario(
+        self,
+        *,
+        scenario_name: str,
+        base_query: TagQuery | None = None,
+    ) -> dict[str, AttackTechniqueFactory]:
+        """
+        Return built-in-query matches plus contributions applicable to a scenario.
+
+        Args:
+            scenario_name (str): The scanner-facing scenario registry name.
+            base_query (TagQuery | None): Optional query selecting the scenario's
+                built-in technique pool.
+
+        Returns:
+            dict[str, AttackTechniqueFactory]: Matching factories, sorted by name.
+        """
+        factories: dict[str, AttackTechniqueFactory] = {}
+        for entry in self.instances.get_all_instances():
+            built_in_match = base_query is not None and base_query.matches(set(entry.instance.strategy_tags))
+            applicable_scenarios = entry.metadata.get("scenario_names", [])
+            contributed_match = scenario_name in applicable_scenarios
+            if built_in_match or contributed_match:
+                factories[entry.name] = entry.instance
+        return factories
+
     @property
     def scorer_override_policy(self) -> ScorerOverridePolicy:
         """The policy applied when a scenario scorer is incompatible with an attack's annotation."""

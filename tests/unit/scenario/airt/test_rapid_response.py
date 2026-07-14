@@ -161,6 +161,25 @@ class TestRapidResponseBasic:
         ):
             assert RapidResponse()._strategy_class is strat
 
+    def test_strategy_class_includes_applicable_contributed_technique(self):
+        from pyrit.scenario.scenarios.airt.rapid_response import _build_rapid_response_strategy
+
+        factory = AttackTechniqueFactory(
+            name="operation_foobar",
+            attack_class=PromptSendingAttack,
+            strategy_tags=["single_turn"],
+        )
+        AttackTechniqueRegistry.get_registry_singleton().register_contributed_factory(
+            factory=factory,
+            plugin_name="operation",
+            scenario_names=frozenset({"airt.rapid_response"}),
+        )
+        _build_rapid_response_strategy.cache_clear()
+
+        strategy_class = _build_rapid_response_strategy()
+
+        assert strategy_class("operation_foobar").value == "operation_foobar"
+
     def test_get_default_strategy_returns_default(self, mock_objective_scorer):
         strat = _strategy_class()
         with patch(

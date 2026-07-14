@@ -45,11 +45,18 @@ def _build_rapid_response_strategy() -> type[ScenarioStrategy]:
     from pyrit.registry.tag_query import TagQuery
 
     registry = AttackTechniqueRegistry.get_registry_singleton()
-    factories = list(registry.get_factories_or_raise().values())
+    factories = list(
+        registry.get_factories_for_scenario(
+            scenario_name="airt.rapid_response",
+            base_query=TagQuery.all("core"),
+        ).values()
+    )
+    if not factories:
+        registry.get_factories_or_raise()
 
     return AttackTechniqueRegistry.build_strategy_class_from_factories(  # type: ignore[ty:invalid-return-type]
         class_name="RapidResponseStrategy",
-        factories=TagQuery.all("core").filter(factories),
+        factories=factories,
         aggregate_tags={
             "default": TagQuery.any_of("default"),
             "single_turn": TagQuery.any_of("single_turn"),

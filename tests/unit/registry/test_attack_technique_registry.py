@@ -13,6 +13,7 @@ from pyrit.models import ComponentIdentifier
 from pyrit.prompt_target import PromptTarget
 from pyrit.registry import TargetRegistry
 from pyrit.registry.components.attack_technique_registry import AttackTechniqueRegistry
+from pyrit.registry.tag_query import TagQuery
 from pyrit.scenario.core.attack_technique_factory import AttackTechniqueFactory, ScorerOverridePolicy
 from pyrit.setup.initializers.techniques import build_technique_factories
 
@@ -119,6 +120,41 @@ class TestAttackTechniqueRegistryRegister:
 
         assert len(self.registry.instances) == 2
         assert self.registry.instances.get_names() == ["stub_20", "stub_5"]
+
+    def test_get_factories_for_scenario_unions_base_query_and_applicability(self):
+        core = AttackTechniqueFactory(
+            name="core_technique",
+            attack_class=_StubAttack,
+            strategy_tags=["core", "single_turn"],
+        )
+        private = AttackTechniqueFactory(
+            name="private_technique",
+            attack_class=_StubAttack,
+            strategy_tags=["single_turn"],
+        )
+        unrelated = AttackTechniqueFactory(
+            name="unrelated",
+            attack_class=_StubAttack,
+            strategy_tags=["single_turn"],
+        )
+        self.registry.register_technique(name=core.name, factory=core, tags=core.strategy_tags)
+        self.registry.register_contributed_factory(
+            factory=private,
+            plugin_name="operation",
+            scenario_names=frozenset({"airt.rapid_response"}),
+        )
+        self.registry.register_contributed_factory(
+            factory=unrelated,
+            plugin_name="operation",
+            scenario_names=frozenset({"airt.cyber"}),
+        )
+
+        factories = self.registry.get_factories_for_scenario(
+            scenario_name="airt.rapid_response",
+            base_query=TagQuery.all("core"),
+        )
+        assert list(factories) == ["core_technique", "private_technique"]
+        assert list(factories) == ["core_technique", "private_technique"]
 
 
 class TestAttackTechniqueRegistryMetadata:
