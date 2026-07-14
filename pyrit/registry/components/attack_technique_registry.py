@@ -113,6 +113,7 @@ class AttackTechniqueRegistry(Registry["AttackTechniqueFactory", AttackTechnique
         name: str,
         factory: AttackTechniqueFactory,
         tags: dict[str, str] | list[str] | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         """
         Register an attack technique factory.
@@ -123,9 +124,43 @@ class AttackTechniqueRegistry(Registry["AttackTechniqueFactory", AttackTechnique
             tags (dict[str, str] | list[str] | None): Optional tags for categorisation.
                 Accepts a ``dict[str, str]`` or a ``list[str]`` (each string becomes a
                 key with value ``""``).
+            metadata (dict[str, object] | None): Optional non-selection metadata.
         """
-        self.instances.register(factory, name=name, tags=tags)
+        self.instances.register(factory, name=name, tags=tags, metadata=metadata)
         logger.debug(f"Registered attack technique factory: {name} ({factory.attack_class.__name__})")
+
+    def register_contributed_factory(
+        self,
+        *,
+        factory: AttackTechniqueFactory,
+        plugin_name: str,
+        scenario_names: frozenset[str],
+    ) -> None:
+        """
+        Register one extend-only plug-in technique contribution.
+
+        Args:
+            factory (AttackTechniqueFactory): The configured attack technique.
+            plugin_name (str): The owning plug-in name.
+            scenario_names (frozenset[str]): Scenarios that expose the technique.
+
+        Raises:
+            PluginCollisionError: If the technique name is already registered.
+        """
+        from pyrit.exceptions import PluginCollisionError
+
+        if factory.name in self.instances:
+            raise PluginCollisionError(f"Attack technique name '{factory.name}' is already registered.")
+        self.register_technique(
+            name=factory.name,
+            factory=factory,
+            tags=factory.strategy_tags,
+            metadata={
+                "plugin_name": plugin_name,
+                "scenario_names": sorted(scenario_names),
+                "identifier_hash": factory.get_identifier().hash,
+            },
+        )
 
     def get_factories(self) -> dict[str, AttackTechniqueFactory]:
         """

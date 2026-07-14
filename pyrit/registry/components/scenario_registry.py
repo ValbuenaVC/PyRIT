@@ -138,6 +138,24 @@ class ScenarioRegistry(ParamBagRegistry["Scenario", ScenarioMetadata]):
                 break
         return relative or class_name_to_snake_case(cls.__name__, suffix="Scenario")
 
+    def register_contributed_scenario(self, *, scenario_class: type[Scenario], name: str) -> None:
+        """
+        Register one extend-only plug-in scenario contribution.
+
+        Args:
+            scenario_class (type[Scenario]): The concrete scenario class.
+            name (str): The scanner-facing dotted registry name.
+
+        Raises:
+            PluginCollisionError: If the name belongs to a built-in or prior contribution.
+        """
+        from pyrit.exceptions import PluginCollisionError
+
+        self._ensure_discovered()
+        if name in self._classes:
+            raise PluginCollisionError(f"Scenario name '{name}' is already registered.")
+        self.register_class(scenario_class, name=name)
+
     def _build_metadata(self, name: str, cls: type[Scenario]) -> ScenarioMetadata:
         """
         Build metadata for a Scenario class.

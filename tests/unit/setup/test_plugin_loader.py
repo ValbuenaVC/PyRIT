@@ -11,7 +11,6 @@ silent-failure guards called out in the design brief.
 """
 
 import inspect
-import logging
 import os
 import sys
 import textwrap
@@ -25,17 +24,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
+from pyrit.exceptions import (
+    PluginImportError,
+    PluginLoadError,
+    PluginRegisteredNothingError,
+    PluginWheelNotFoundError,
+)
 from pyrit.memory import CentralMemory
-from pyrit.models import SeedDataset
 from pyrit.registry import ScenarioRegistry
 from pyrit.setup import PluginSpec
 from pyrit.setup.initialization import IN_MEMORY, initialize_pyrit_async
 from pyrit.setup.plugin_loader import (
-    PluginImportError,
     PluginInitializer,
-    PluginLoadError,
-    PluginRegisteredNothingError,
-    PluginWheelNotFoundError,
     load_plugins_if_configured_async,
 )
 
@@ -376,53 +376,8 @@ async def test_no_op_when_no_plugins() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Silent-failure trap: extraction, not zipimport
-# ---------------------------------------------------------------------------
-
-
-def test_raw_wheel_on_syspath_loses_datasets(tmp_path: Path) -> None:
-    """A raw .whl on sys.path imports but __file__-relative datasets vanish (regression guard)."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="none", include_scenario=False)
-
-    sys.path.insert(0, str(wheel.path))
-    module = __import__(wheel.package)
-    paths_module = __import__(f"{wheel.package}.paths", fromlist=["MOCK_DATASETS_PATH"])
-
-    assert ".whl" in (module.__file__ or "")
-    assert not paths_module.MOCK_DATASETS_PATH.exists()
-    assert list(paths_module.MOCK_DATASETS_PATH.glob("**/*.yaml")) == []
-
-
-def test_extracted_wheel_loads_datasets(tmp_path: Path) -> None:
-    """Extracting the wheel to disk makes __file__-relative datasets resolve and load."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="none", include_scenario=False)
-    extract_dir = tmp_path / "extracted"
-    extract_dir.mkdir()
-    with zipfile.ZipFile(wheel.path) as archive:
-        archive.extractall(extract_dir)
-
-    sys.path.insert(0, str(extract_dir))
-    paths_module = __import__(f"{wheel.package}.paths", fromlist=["MOCK_DATASETS_PATH"])
-
-    yamls = list(paths_module.MOCK_DATASETS_PATH.glob("**/*.yaml"))
-    assert len(yamls) == 1
-
-    dataset = SeedDataset.from_yaml_file(yamls[0])
-    assert len(dataset.seeds) == 3
-
-
-# ---------------------------------------------------------------------------
 # Loading via the initializer
 # ---------------------------------------------------------------------------
-
-
-async def test_load_registers_provider_on_import(tmp_path: Path) -> None:
-    """Importing the plug-in package self-registers its SeedDatasetProvider."""
-    wheel = build_mock_wheel(tmp_path)
-
-    await load_plugin(wheel, tmp_path / ".plugin")
-
-    assert "MockProvider" in SeedDatasetProvider.get_all_providers()
 
 
 async def test_load_extracts_to_plugin_dir(tmp_path: Path) -> None:
@@ -444,24 +399,23 @@ async def test_scenario_registration_survives_discovery(tmp_path: Path) -> None:
     await load_plugin(wheel, tmp_path / ".plugin")
 
     registry = ScenarioRegistry.get_registry_singleton()
-    assert registry._discovered is False  # register_class must not trigger discovery
-
-    names = registry.get_class_names()  # triggers built-in discovery
-    assert wheel.scenario_name in names
+    names = registry.get_class_names()
+    assert "scenario" in names
     assert "airt.rapid_response" in names
 
     mock_scenario = sys.modules[f"{wheel.package}.scenario"].MockScenario
-    assert registry.get_class(wheel.scenario_name) is mock_scenario
+    assert registry.get_class("scenario") is mock_scenario
 
 
-async def test_register_callable_bootstrap(tmp_path: Path) -> None:
-    """A plug-in exposing a top-level register() callable is bootstrapped too."""
+async def test_register_callable_bootstrap_is_not_executed(tmp_path: Path) -> None:
+    """V1 ignores plug-in-authored lifecycle hooks and discovers definitions itself."""
     wheel = build_mock_wheel(tmp_path, bootstrap="register")
 
     await load_plugin(wheel, tmp_path / ".plugin")
 
     names = ScenarioRegistry.get_registry_singleton().get_class_names()
-    assert wheel.scenario_name in names
+    assert "scenario" in names
+    assert wheel.scenario_name not in names
 
 
 async def test_ordering_scenario_visible_to_preload(tmp_path: Path) -> None:
@@ -473,7 +427,7 @@ async def test_ordering_scenario_visible_to_preload(tmp_path: Path) -> None:
     # get_class_names() is exactly what PreloadScenarioMetadata iterates; the plug-in
     # scenario being present proves it registered before that read would happen.
     names = ScenarioRegistry.get_registry_singleton().get_class_names()
-    assert wheel.scenario_name in names
+    assert "scenario" in names
 
 
 async def test_plugin_scenario_auto_registered_without_bootstrap(tmp_path: Path) -> None:
@@ -487,11 +441,11 @@ async def test_plugin_scenario_auto_registered_without_bootstrap(tmp_path: Path)
     registry = ScenarioRegistry.get_registry_singleton()
     mock_scenario = sys.modules[f"{wheel.package}.scenario"].MockScenario
     assert mock_scenario in registry._classes.values()
-    assert registry._discovered is False  # auto-registration must not trigger built-in discovery
+    assert registry._discovered is True
 
 
-async def test_bootstrap_registration_not_duplicated_by_auto_register(tmp_path: Path) -> None:
-    """A scenario the bootstrap registers is not also re-registered under a fallback name."""
+async def test_framework_owns_registration_when_bootstrap_exists(tmp_path: Path) -> None:
+    """The framework owns the scenario name even when a register hook exists."""
     wheel = build_mock_wheel(tmp_path, bootstrap="register")
 
     await load_plugin(wheel, tmp_path / ".plugin")
@@ -499,26 +453,16 @@ async def test_bootstrap_registration_not_duplicated_by_auto_register(tmp_path: 
     registry = ScenarioRegistry.get_registry_singleton()
     mock_scenario = sys.modules[f"{wheel.package}.scenario"].MockScenario
     registered_names = [name for name, cls in registry._classes.items() if cls is mock_scenario]
-    assert registered_names == [wheel.scenario_name]
-
-
-async def test_datasets_only_plugin_loads_without_bootstrap(tmp_path: Path) -> None:
-    """A datasets-only plug-in (no bootstrap, no scenario) loads via import-time registration."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="none", include_scenario=False)
-
-    await load_plugin(wheel, tmp_path / ".plugin")
-
-    assert "MockProvider" in SeedDatasetProvider.get_all_providers()
+    assert registered_names == ["scenario"]
 
 
 async def test_submodule_walk_discovers_unwired_components(tmp_path: Path) -> None:
-    """Provider + bootstrap register even when __init__.py does not import them."""
+    """Scenario discovery walks submodules even when ``__init__.py`` does not import them."""
     wheel = build_mock_wheel(tmp_path, bootstrap="initializer", wire_init=False)
 
     await load_plugin(wheel, tmp_path / ".plugin")
 
-    assert "MockProvider" in SeedDatasetProvider.get_all_providers()
-    assert wheel.scenario_name in ScenarioRegistry.get_registry_singleton().get_class_names()
+    assert "scenario" in ScenarioRegistry.get_registry_singleton().get_class_names()
 
 
 async def test_shadowing_installed_package_is_rejected(tmp_path: Path) -> None:
@@ -528,62 +472,6 @@ async def test_shadowing_installed_package_is_rejected(tmp_path: Path) -> None:
     # The spec's package points at a stdlib package that imports from outside the extraction dir.
     with pytest.raises(PluginImportError, match="shadowing"):
         await load_plugin(wheel, tmp_path / ".plugin", package="json")
-
-
-# ---------------------------------------------------------------------------
-# Dataset name collision (memory-authoritative resolver guard)
-# ---------------------------------------------------------------------------
-
-
-async def test_colliding_dataset_name_warns_loudly(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A plug-in dataset_name that collides with an existing provider's name warns at load."""
-    wheel = build_mock_wheel(tmp_path)
-    colliding_name = wheel.dataset_name
-
-    class CollidingProvider(SeedDatasetProvider):
-        """Non-plug-in provider that already claims the plug-in's dataset name."""
-
-        @property
-        def dataset_name(self) -> str:
-            return colliding_name
-
-        async def fetch_dataset_async(self, *, cache: bool = True) -> SeedDataset:
-            raise NotImplementedError
-
-    with caplog.at_level(logging.WARNING, logger="pyrit.setup.plugin_loader"):
-        await load_plugin(wheel, tmp_path / ".plugin")
-
-    messages = [record.getMessage() for record in caplog.records]
-    # Un-missable: greppable prefix, names the colliding dataset and BOTH providers.
-    assert any(
-        "PLUGIN DATASET SHADOWED:" in message
-        and colliding_name in message
-        and "MockProvider" in message
-        and "CollidingProvider" in message
-        for message in messages
-    )
-
-
-async def test_unique_dataset_name_does_not_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A plug-in whose dataset name is unique produces no collision warning."""
-    wheel = build_mock_wheel(tmp_path)
-
-    with caplog.at_level(logging.WARNING, logger="pyrit.setup.plugin_loader"):
-        await load_plugin(wheel, tmp_path / ".plugin")
-
-    assert not any("PLUGIN DATASET SHADOWED:" in record.getMessage() for record in caplog.records)
-
-
-async def test_reload_does_not_self_flag(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Loading the same plug-in twice must not flag its own provider as a collision."""
-    wheel = build_mock_wheel(tmp_path)
-    plugin_dir = tmp_path / ".plugin"
-
-    await load_plugin(wheel, plugin_dir)
-    with caplog.at_level(logging.WARNING, logger="pyrit.setup.plugin_loader"):
-        await load_plugin(wheel, plugin_dir)
-
-    assert not any("PLUGIN DATASET SHADOWED:" in record.getMessage() for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -603,64 +491,6 @@ async def test_failed_load_rolls_back_syspath(tmp_path: Path) -> None:
     assert extract_dir not in sys.path
 
 
-async def test_failing_bootstrap_rolls_back_partial_registration(tmp_path: Path) -> None:
-    """A bootstrap that registers then raises has its registration rolled back."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
-    plugin_dir = tmp_path / ".plugin"
-
-    with pytest.raises(PluginLoadError):
-        await load_plugin(wheel, plugin_dir)
-
-    registry = ScenarioRegistry.get_registry_singleton()
-    assert wheel.scenario_name not in registry._classes
-    assert "MockProvider" not in SeedDatasetProvider.get_all_providers()
-    assert str(plugin_dir / wheel.path.stem) not in sys.path
-
-
-async def test_rollback_restores_overwritten_provider(tmp_path: Path) -> None:
-    """A failed load restores a provider entry the plug-in overwrote (name collision)."""
-    wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
-
-    # SeedDatasetProvider keys by class name and the mock provider is "MockProvider";
-    # occupy that key so the plug-in's import overwrites it.
-    class _PreexistingProvider(SeedDatasetProvider):
-        should_register = False
-
-        @property
-        def dataset_name(self) -> str:
-            return "preexisting"
-
-        async def fetch_dataset_async(self, *, cache: bool = True) -> SeedDataset:
-            raise NotImplementedError
-
-    SeedDatasetProvider._registry["MockProvider"] = _PreexistingProvider
-
-    with pytest.raises(PluginLoadError):
-        await load_plugin(wheel, tmp_path / ".plugin")
-
-    # The original provider is restored, not deleted or left replaced by the plug-in's.
-    assert SeedDatasetProvider._registry["MockProvider"] is _PreexistingProvider
-
-
-async def test_rollback_restores_overwritten_scenario(tmp_path: Path) -> None:
-    """A failed load restores a scenario entry the plug-in overwrote (name collision)."""
-    from pyrit.scenario.scenarios.airt.rapid_response import RapidResponse
-
-    wheel = build_mock_wheel(tmp_path, bootstrap="initializer_raises")
-
-    class _PreexistingScenario(RapidResponse):
-        """Sentinel scenario occupying the plug-in's registry name."""
-
-    registry = ScenarioRegistry.get_registry_singleton()
-    registry.register_class(_PreexistingScenario, name=wheel.scenario_name)
-
-    with pytest.raises(PluginLoadError):
-        await load_plugin(wheel, tmp_path / ".plugin")
-
-    # The original scenario is restored, not deleted or left replaced by the plug-in's.
-    assert registry._classes[wheel.scenario_name] is _PreexistingScenario
-
-
 # ---------------------------------------------------------------------------
 # Failure modes
 # ---------------------------------------------------------------------------
@@ -677,7 +507,7 @@ async def test_empty_wheel_is_loud(tmp_path: Path) -> None:
     """A wheel that imports cleanly but registers nothing fails loudly."""
     wheel = build_mock_wheel(tmp_path, bootstrap="none", include_provider=False, include_scenario=False)
 
-    with pytest.raises(PluginRegisteredNothingError, match="registered no datasets or scenarios"):
+    with pytest.raises(PluginRegisteredNothingError, match="no scenarios or attack techniques"):
         await load_plugin(wheel, tmp_path / ".plugin")
 
 

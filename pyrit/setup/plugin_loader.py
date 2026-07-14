@@ -1,111 +1,64 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""
-Load non-disclosable PyRIT plug-ins from pre-built wheels at initialization time.
-
-A plug-in is a pure-Python wheel that ships dataset providers and/or scenarios that
-must not live in the public PyRIT repo. The loader **extracts** the wheel (stdlib
-``zipfile`` — never ``pip``/``.venv``) into ``.plugin/<name>/``, prepends that directory
-to ``sys.path``, imports the package (so ``SeedDatasetProvider`` subclasses self-register),
-and runs the plug-in's bootstrap (a top-level ``register()`` callable or a shipped
-``PyRITInitializer`` subclass). The plug-in's own ``Scenario`` subclasses are then
-auto-registered by type (scoped to the plug-in package), so a plug-in's scenarios are
-discovered without the bootstrap having to register each one explicitly.
-
-Plug-ins are declared in ``.pyrit_conf`` under the dedicated ``plugins`` key (a list, so
-several plug-ins load identically to one). ``load_plugins_if_configured_async`` is invoked
-as a guaranteed-first phase inside ``initialize_pyrit_async`` — after central memory is set
-and **before** any configured initializer runs — so plug-in datasets and scenarios are
-registered before ``LoadDefaultDatasets`` / ``PreloadScenarioMetadata`` read the registry.
-Because ``plugins`` is its own always-first phase (not one of the ordered ``initializers``),
-this ordering is true by construction. It is a no-op when no plug-ins are configured.
-"""
+"""Activate private scenarios and attack techniques from configured plug-ins."""
 
 from __future__ import annotations
 
-import importlib
-import inspect
 import logging
-import pkgutil
 import sys
-from pathlib import Path
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
-from pyrit.exceptions.exception_classes import (
-    PluginImportError,
+from pyrit.datasets import SeedDatasetProvider
+from pyrit.exceptions import (
+    PluginCollisionError,
     PluginLoadError,
     PluginRegisteredNothingError,
-    PluginWheelNotFoundError,
+    PluginValidationError,
 )
-from pyrit.setup.plugin_formats import WheelPluginFormat
+from pyrit.registry import AttackTechniqueRegistry, ScenarioRegistry
+from pyrit.setup.plugin_discovery import (
+    ScenarioContribution,
+    TechniqueContribution,
+    discover_scenarios,
+    discover_techniques,
+    import_plugin_async,
+)
+from pyrit.setup.plugin_formats import PreparedPlugin, SourcePluginFormat, WheelPluginFormat
+from pyrit.setup.plugin_spec import PluginFormat
 from pyrit.setup.pyrit_initializer import PyRITInitializer
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-    from types import ModuleType
+    from collections.abc import Sequence
 
-    from pyrit.registry import ScenarioRegistry
+    from pyrit.models import ComponentIdentifier
+    from pyrit.registry import ScenarioMetadata
+    from pyrit.registry.instance_registry import DefaultInstanceRegistry, RegistryEntry
+    from pyrit.scenario import AttackTechniqueFactory, Scenario
     from pyrit.setup.plugin_spec import PluginSpec
 
 logger = logging.getLogger(__name__)
 
+_REMEDIATION = "Fix or remove the plug-in entry from .pyrit_conf, then restart PyRIT."
+
 
 async def load_plugins_if_configured_async(*, plugins: Sequence[PluginSpec]) -> None:
     """
-    Load every configured plug-in, in order. A no-op when ``plugins`` is empty.
-
-    Convenience entry point invoked by ``initialize_pyrit_async`` after memory is set and
-    before the configured initializers run. Plug-ins are loaded in list order, so one
-    plug-in behaves identically to several — the single-plug-in case is just a
-    one-element list.
+    Activate the configured V1 plug-in.
 
     Args:
-        plugins: The plug-in specs to load, in order.
+        plugins: The normalized plug-in declarations.
 
     Raises:
-        PluginLoadError: If a plug-in fails to load.
+        PluginLoadError: If activation fails.
         ValueError: If more than one plug-in is supplied.
     """
     if not plugins:
-        logger.debug("No plug-ins configured; plug-in loading is a no-op.")
         return
     if len(plugins) > 1:
         raise ValueError("V1 supports one plug-in at a time; plug-in composition is not supported.")
-
-    for spec in plugins:
-        await PluginLoader(spec=spec).load_async()
-
-
-def _name_owned_by(module_name: str, package_name: str) -> bool:
-    """
-    Return whether a module name belongs to the given plug-in package.
-
-    Args:
-        module_name: A dotted module name.
-        package_name: The plug-in's top-level package name.
-
-    Returns:
-        bool: True if ``module_name`` is the package or one of its submodules.
-    """
-    return module_name == package_name or module_name.startswith(f"{package_name}.")
-
-
-def _module_owned_by(cls: type, package_name: str) -> bool:
-    """
-    Return whether ``cls`` is defined within the given plug-in package.
-
-    Args:
-        cls: The class to check.
-        package_name: The plug-in's top-level package name.
-
-    Returns:
-        bool: True if the class's module is the package or one of its submodules.
-    """
-    return _name_owned_by(cls.__module__ or "", package_name)
-
-
-_REMEDIATION = "Fix or remove the plug-in entry from .pyrit_conf, then restart PyRIT."
+    await PluginLoader(spec=plugins[0]).load_async()
 
 
 class PluginInitializer(PyRITInitializer):
@@ -136,401 +89,209 @@ class PluginInitializer(PyRITInitializer):
         await load_plugins_if_configured_async(plugins=self._plugins)
 
 
-class PluginLoader:
-    """
-    Extract and register a single PyRIT plug-in wheel described by a ``PluginSpec``.
+@dataclass
+class _RegistrySnapshot:
+    scenario_classes: dict[str, type[Scenario]]
+    scenario_metadata: dict[str, ScenarioMetadata] | None
+    scenario_discovered: bool
+    technique_entries: dict[str, RegistryEntry[AttackTechniqueFactory]]
+    technique_metadata: list[ComponentIdentifier] | None
+    providers: dict[str, type[SeedDatasetProvider]]
+    sys_path: list[str]
+    module_names: set[str]
 
-    The wheel is extracted to ``.plugin/<name>/`` (never installed), imported, and its
-    bootstrap is run so its datasets and scenarios register like built-ins. Fails closed
-    by default.
-    """
+    @classmethod
+    def capture(cls) -> _RegistrySnapshot:
+        scenario_registry = ScenarioRegistry.get_registry_singleton()
+        technique_registry = AttackTechniqueRegistry.get_registry_singleton()
+        technique_instances = cast(
+            "DefaultInstanceRegistry[AttackTechniqueFactory]",
+            technique_registry.instances,
+        )
+        return cls(
+            scenario_classes=dict(scenario_registry._classes),
+            scenario_metadata=(
+                dict(scenario_registry._metadata_cache) if scenario_registry._metadata_cache is not None else None
+            ),
+            scenario_discovered=scenario_registry._discovered,
+            technique_entries=dict(technique_instances._registry_items),
+            technique_metadata=(
+                list(technique_instances._metadata_cache) if technique_instances._metadata_cache is not None else None
+            ),
+            providers=dict(SeedDatasetProvider._registry),
+            sys_path=list(sys.path),
+            module_names=set(sys.modules),
+        )
+
+    def restore(self, *, owned_prefixes: tuple[str, ...] = ()) -> None:
+        scenario_registry = ScenarioRegistry.get_registry_singleton()
+        scenario_registry._classes = dict(self.scenario_classes)
+        scenario_registry._metadata_cache = dict(self.scenario_metadata) if self.scenario_metadata is not None else None
+        scenario_registry._discovered = self.scenario_discovered
+
+        technique_instances = cast(
+            "DefaultInstanceRegistry[AttackTechniqueFactory]",
+            AttackTechniqueRegistry.get_registry_singleton().instances,
+        )
+        technique_instances._registry_items = dict(self.technique_entries)
+        technique_instances._metadata_cache = (
+            list(self.technique_metadata) if self.technique_metadata is not None else None
+        )
+
+        SeedDatasetProvider._registry.clear()
+        SeedDatasetProvider._registry.update(self.providers)
+        sys.path[:] = self.sys_path
+        for name in list(sys.modules):
+            if name not in self.module_names and _name_owned_by_any(name=name, prefixes=owned_prefixes):
+                del sys.modules[name]
+
+    def restore_unsupported_provider_side_effects(self) -> None:
+        """Remove provider registrations because datasets are outside the V1 contract."""
+        SeedDatasetProvider._registry.clear()
+        SeedDatasetProvider._registry.update(self.providers)
+
+
+class PluginLoader:
+    """Prepare, discover, validate, and transactionally register one plug-in."""
 
     def __init__(self, *, spec: PluginSpec) -> None:
         """
-        Initialize the loader for one plug-in.
+        Initialize the loader.
 
         Args:
-            spec: The plug-in to load (wheel path plus optional package name).
+            spec (PluginSpec): The normalized source or wheel declaration.
         """
         self._spec = spec
 
     async def load_async(self) -> None:
         """
-        Load the plug-in described by this loader's ``PluginSpec``.
+        Activate the configured plug-in.
 
         Raises:
-            PluginWheelNotFoundError: If the spec is not a wheel-format plug-in.
-            PluginLoadError: If the plug-in fails to load.
+            PluginLoadError: If preparation, discovery, validation, or registration fails.
         """
-        wheel = self._spec.wheel
-        if wheel is None:
-            raise PluginWheelNotFoundError("The current loader only accepts wheel-format plug-ins.")
+        snapshot = _RegistrySnapshot.capture()
+        prepared: PreparedPlugin | None = None
         try:
-            await self._load_plugin_async()
+            prepared = await self._prepare_async()
+            imported = await import_plugin_async(prepared=prepared)
+            self._reject_import_time_registration(snapshot=snapshot)
+            scenarios = discover_scenarios(imported=imported)
+            techniques = discover_techniques(imported=imported)
+            self._validate_names(scenarios=scenarios, techniques=techniques)
+            self._register(scenarios=scenarios, techniques=techniques)
+            snapshot.restore_unsupported_provider_side_effects()
+            logger.info(
+                "Loaded plug-in '%s': %d scenario(s), %d attack technique(s).",
+                self._spec.name,
+                len(scenarios),
+                len(techniques),
+            )
         except Exception as exc:
-            message = f"Failed to load plug-in from wheel '{wheel}': {exc} {_REMEDIATION}"
-            # Preserve the specific failure type so callers can distinguish modes, while
-            # always surfacing the remediation guidance. Unknown errors (e.g. a raising
-            # bootstrap or an unsafe archive) become a plain PluginLoadError.
+            prefixes = prepared.owned_module_prefixes if prepared else ()
+            snapshot.restore(owned_prefixes=prefixes)
+            message = f"Failed to load plug-in '{self._spec.name}': {exc} {_REMEDIATION}"
             if isinstance(exc, PluginLoadError):
                 raise type(exc)(message) from exc
             raise PluginLoadError(message) from exc
 
-    async def _load_plugin_async(self) -> None:
-        """
-        Extract, import, bootstrap, and verify a single plug-in wheel.
+    async def _prepare_async(self) -> PreparedPlugin:
+        if self._spec.format is PluginFormat.SOURCE:
+            return await SourcePluginFormat().prepare_async(spec=self._spec)
+        if self._spec.format is PluginFormat.WHEEL:
+            prepared = await WheelPluginFormat().prepare_async(spec=self._spec)
+            self._warn_on_version_drift(prepared=prepared)
+            return prepared
+        raise PluginValidationError(f"Unsupported plug-in format: {self._spec.format}")
 
-        Global state (``sys.path``, imported plug-in modules, and the provider/scenario
-        registries) is rolled back if the load fails, so a failed or accepted-failure load
-        leaves no partial trace.
+    @staticmethod
+    def _reject_import_time_registration(*, snapshot: _RegistrySnapshot) -> None:
+        scenario_registry = ScenarioRegistry.get_registry_singleton()
+        technique_instances = cast(
+            "DefaultInstanceRegistry[AttackTechniqueFactory]",
+            AttackTechniqueRegistry.get_registry_singleton().instances,
+        )
+        technique_entries = technique_instances._registry_items
+        if scenario_registry._classes != snapshot.scenario_classes or technique_entries != snapshot.technique_entries:
+            raise PluginValidationError(
+                "Plug-in source registered components during import. V1 plug-ins must expose definitions "
+                "and let the framework register them transactionally."
+            )
 
-        Raises:
-            PluginWheelNotFoundError: If the configured wheel is absent or invalid.
-            PluginImportError: If the plug-in package cannot be imported.
-            PluginRegisteredNothingError: If the plug-in registered no datasets or scenarios.
-        """
-        prepared = await WheelPluginFormat().prepare_async(spec=self._spec)
-        extract_dir = prepared.import_root
-        package_name = prepared.entry_modules[0]
-
-        from pyrit.setup.plugin_compat import warn_on_version_drift
-
-        warn_on_version_drift(extract_dir=extract_dir)
-
-        from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
-        from pyrit.registry import ScenarioRegistry
+    @staticmethod
+    def _validate_names(
+        *,
+        scenarios: Sequence[ScenarioContribution],
+        techniques: Sequence[TechniqueContribution],
+    ) -> None:
+        if not scenarios and not techniques:
+            raise PluginRegisteredNothingError("Plug-in contributed no scenarios or attack techniques.")
 
         scenario_registry = ScenarioRegistry.get_registry_singleton()
-        provider_snapshot = dict(SeedDatasetProvider._registry)
-        scenario_snapshot = dict(scenario_registry._classes)
-        modules_snapshot = {name for name in sys.modules if _name_owned_by(name, package_name)}
-        syspath_entry = str(extract_dir)
-        added_to_syspath = syspath_entry not in sys.path
-        if added_to_syspath:
-            sys.path.insert(0, syspath_entry)
+        builtin_scenarios = set(scenario_registry.get_class_names())
+        collisions = sorted(item.registry_name for item in scenarios if item.registry_name in builtin_scenarios)
+        if collisions:
+            raise PluginCollisionError(f"Scenario name collision(s): {collisions}.")
 
-        try:
-            logger.info("Importing plug-in package '%s'", package_name)
-            try:
-                module = importlib.import_module(package_name)
-                self._verify_module_location(module=module, extract_dir=extract_dir, package_name=package_name)
-                self._import_submodules(module=module, package_name=package_name)
-            except Exception as exc:
-                raise PluginImportError(f"Could not import plug-in package '{package_name}': {exc}") from exc
+        from pyrit.setup.initializers.techniques import build_technique_factories
 
-            await self._run_bootstrap_async(package_name=package_name, module=module)
-
-            # Register the plug-in's own Scenario subclasses the same way built-ins are
-            # discovered (by type, scoped to the plug-in package), so plug-in scenarios are
-            # picked up without the bootstrap having to register each one explicitly. Classes
-            # the bootstrap already registered are left untouched.
-            registered_scenarios = scenario_registry.register_external_subclasses(package_name=package_name)
-            if registered_scenarios:
-                logger.info("Auto-registered %d plug-in scenario(s) from '%s'.", registered_scenarios, package_name)
-
-            provider_count, scenario_count = self._count_registered(
-                package_name=package_name, scenario_registry=scenario_registry
-            )
-            if not provider_count and not scenario_count:
-                raise PluginRegisteredNothingError(
-                    f"Plug-in package '{package_name}' imported successfully but registered no datasets or "
-                    "scenarios. The wheel is likely mis-packaged (imports cleanly yet loads nothing)."
-                )
-
-            dataset_collisions = self._warn_on_dataset_name_collisions(package_name=package_name)
-        except Exception:
-            self._rollback(
-                package_name=package_name,
-                syspath_entry=syspath_entry if added_to_syspath else None,
-                modules_snapshot=modules_snapshot,
-                provider_snapshot=provider_snapshot,
-                scenario_registry=scenario_registry,
-                scenario_snapshot=scenario_snapshot,
-            )
-            raise
-
-        logger.info(
-            "Loaded plug-in '%s': %d dataset provider(s), %d scenario(s) registered; %d dataset name collision(s)%s.",
-            package_name,
-            provider_count,
-            scenario_count,
-            len(dataset_collisions),
-            " (see PLUGIN DATASET SHADOWED warnings above)" if dataset_collisions else "",
+        builtin_techniques = {factory.name for factory in build_technique_factories()}
+        registered_techniques = set(AttackTechniqueRegistry.get_registry_singleton().get_factories())
+        technique_collisions = sorted(
+            item.factory.name for item in techniques if item.factory.name in builtin_techniques | registered_techniques
         )
+        if technique_collisions:
+            raise PluginCollisionError(f"Attack technique name collision(s): {technique_collisions}.")
 
-    @staticmethod
-    def _verify_module_location(*, module: ModuleType, extract_dir: Path, package_name: str) -> None:
-        """
-        Verify the imported package resolves inside the extraction directory.
-
-        Guards against an installed package of the same name shadowing the extracted
-        plug-in — a silent failure where import succeeds but the wheel's code/data is
-        ignored.
-
-        Args:
-            module: The imported plug-in package module.
-            extract_dir: The directory the wheel was extracted to.
-            package_name: The plug-in's top-level package name.
-
-        Raises:
-            ValueError: If the imported package resolves outside ``extract_dir``.
-        """
-        extract_resolved = extract_dir.resolve()
-        raw_locations = list(getattr(module, "__path__", []) or [])
-        module_file = getattr(module, "__file__", None)
-        if module_file:
-            raw_locations.append(module_file)
-
-        locations = [Path(location).resolve() for location in raw_locations if location]
-        if not locations:
-            return
-        if not any(location.is_relative_to(extract_resolved) for location in locations):
-            raise ValueError(
-                f"Imported package '{package_name}' resolved to {locations[0]} which is outside the "
-                f"plug-in extraction directory {extract_resolved}. An installed package with the same "
-                "name is likely shadowing the plug-in; set the plug-in's 'package' in .pyrit_conf or "
-                "resolve the name conflict."
-            )
-
-    @staticmethod
-    def _import_submodules(*, module: ModuleType, package_name: str) -> None:
-        """
-        Import every submodule of the plug-in package.
-
-        Ensures dataset providers self-register and bootstrap initializers become
-        discoverable even when the package ``__init__`` does not import them. Import
-        errors surface (plug-in dependencies must be pre-satisfied — fail loud).
-
-        Args:
-            module: The imported plug-in package module.
-            package_name: The plug-in's top-level package name.
-        """
-        module_path = getattr(module, "__path__", None)
-        if not module_path:
-            return  # Single-module plug-in (not a package); nothing to walk.
-
-        def _raise_on_error(name: str) -> None:
-            raise ImportError(f"Failed to import plug-in submodule '{name}'")
-
-        for submodule in pkgutil.walk_packages(module_path, prefix=f"{package_name}.", onerror=_raise_on_error):
-            importlib.import_module(submodule.name)
-
-    async def _run_bootstrap_async(self, *, package_name: str, module: ModuleType) -> None:
-        """
-        Run the plug-in's bootstrap so its scenarios register.
-
-        Prefers a top-level ``register()`` callable on the package, then any
-        ``PyRITInitializer`` subclass defined within the package. If neither exists the
-        plug-in is assumed to register everything on import (datasets-only plug-ins).
-
-        Args:
-            package_name: The plug-in's top-level package name.
-            module: The imported plug-in package module.
-        """
-        register = getattr(module, "register", None)
-        if callable(register):
-            logger.info("Running plug-in bootstrap register() from '%s'", package_name)
-            result = register()
-            if inspect.isawaitable(result):
-                await result
-            return
-
-        initializer_classes = self._find_plugin_initializers(package_name=package_name)
-        if initializer_classes:
-            for initializer_class in initializer_classes:
-                logger.info("Running plug-in bootstrap initializer %s", initializer_class.__name__)
-                await initializer_class().initialize_async()
-            return
-
-        logger.info(
-            "Plug-in '%s' exposes no register() or PyRITInitializer bootstrap; relying on "
-            "import-time registration only.",
-            package_name,
-        )
-
-    @staticmethod
-    def _find_plugin_initializers(*, package_name: str) -> list[type[PyRITInitializer]]:
-        """
-        Find concrete ``PyRITInitializer`` subclasses defined within the plug-in package.
-
-        Args:
-            package_name: The plug-in's top-level package name.
-
-        Returns:
-            list[type[PyRITInitializer]]: Bootstrap initializer classes owned by the plug-in.
-        """
-        prefix = f"{package_name}."
-        found: list[type[PyRITInitializer]] = []
-        seen: set[type[PyRITInitializer]] = set()
-
-        stack: list[type[PyRITInitializer]] = list(PyRITInitializer.__subclasses__())
-        while stack:
-            cls = stack.pop()
-            if cls in seen:
-                continue
-            seen.add(cls)
-            stack.extend(cls.__subclasses__())
-
-            module_name = cls.__module__ or ""
-            if inspect.isabstract(cls):
-                continue
-            if module_name == package_name or module_name.startswith(prefix):
-                found.append(cls)
-        return found
-
-    @staticmethod
-    def _count_registered(*, package_name: str, scenario_registry: ScenarioRegistry) -> tuple[int, int]:
-        """
-        Count providers and scenarios registered by the plug-in package.
-
-        Both are counted by matching each registered class's module against the plug-in
-        package, so the check is precise to this plug-in and safe to re-run.
-
-        Args:
-            package_name: The plug-in's top-level package name.
-            scenario_registry: The scenario registry singleton the bootstrap registered into.
-
-        Returns:
-            tuple[int, int]: (dataset provider count, scenario count) owned by the plug-in.
-        """
-        from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
-
-        provider_count = sum(
-            1 for cls in SeedDatasetProvider.get_all_providers().values() if _module_owned_by(cls, package_name)
-        )
-
-        # Read the raw class catalog directly: this snapshot must not trigger built-in
-        # discovery, and the plug-in's register_class writes straight into it.
-        scenario_count = sum(1 for cls in scenario_registry._classes.values() if _module_owned_by(cls, package_name))
-
-        return provider_count, scenario_count
-
-    @staticmethod
-    def _warn_on_dataset_name_collisions(*, package_name: str) -> list[str]:
-        """
-        Warn loudly when a plug-in dataset name collides with an existing dataset name.
-
-        The dataset resolver treats central memory as authoritative and only consults a
-        provider when memory has no seeds for that ``dataset_name``. Once a same-named
-        dataset is in memory, a scan uses it and never consults the plug-in's provider, so
-        the plug-in's copy is silently bypassed. Any collision with **another** registered
-        provider's ``dataset_name`` is surfaced prominently at load time so the mismatch is
-        never silent.
-
-        This compares the **provider registry**, not live memory, on purpose. At this phase
-        memory is not populated yet, and a live-memory check would false-positive on the
-        plug-in's own datasets persisted from a prior run (the seed rows carry no trustworthy
-        source, so "already in memory" cannot be told apart from "this plug-in loaded it last
-        run" — it is fundamentally undecidable at load time). The registry check is a
-        **conservative proxy** for the shadowing that ``LoadDefaultDatasets`` will cause by
-        loading provider datasets into memory: if the operator's config does not run
-        ``load_default_datasets`` (or loads only a tag subset), a built-in name may not actually
-        land in memory and this warning can fire without real shadowing. Over-warning is the
-        safe direction — do NOT "fix" this into a memory check (it reintroduces the false
-        positives). Governing principle: a guard's value is its precision — a check that cries
-        wolf on legitimate plug-in data every run desensitizes operators and defeats itself for
-        the real collision, so false-positive-free with a documented gap beats high-recall-but-
-        noisy. Hard enforcement that can tell a real mismatch from a harmless name coincidence
-        belongs to the scenario's declared required-dataset-names / expected-source mechanism
-        (which knows the operator's intent), not this loader.
-
-        Args:
-            package_name: The plug-in's top-level package name.
-
-        Returns:
-            list[str]: The sorted colliding dataset names (empty when there are none).
-        """
-        from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
-
-        def _safe_name(provider_class: type[SeedDatasetProvider]) -> str | None:
-            try:
-                return provider_class().dataset_name
-            except Exception:
-                return None
-
-        providers = SeedDatasetProvider.get_all_providers()
-
-        # Map dataset_name -> owning provider class name(s), split into the plug-in's own
-        # providers vs. everything else. "Other" deliberately EXCLUDES the plug-in's own
-        # providers, so a plug-in shipping multiple datasets (or a re-run) never self-flags.
-        plugin_owned: dict[str, str] = {}
-        other_owned: dict[str, list[str]] = {}
-        for class_name, provider_class in providers.items():
-            name = _safe_name(provider_class)
-            if name is None:
-                continue
-            if _module_owned_by(provider_class, package_name):
-                plugin_owned.setdefault(name, class_name)
-            else:
-                other_owned.setdefault(name, []).append(class_name)
-
-        collisions = sorted(plugin_owned.keys() & other_owned.keys())
-        for name in collisions:
-            logger.warning(
-                "PLUGIN DATASET SHADOWED: plug-in '%s' provider %s registers dataset_name '%s', which is "
-                "already provided by %s. Central memory is authoritative, so a scan will use the existing "
-                "dataset and the plug-in's copy will NOT take effect. Rename the plug-in dataset to a unique name.",
-                package_name,
-                plugin_owned[name],
-                name,
-                ", ".join(sorted(other_owned[name])),
-            )
-        return collisions
-
-    @staticmethod
-    def _rollback(
+    def _register(
+        self,
         *,
-        package_name: str,
-        syspath_entry: str | None,
-        modules_snapshot: set[str],
-        provider_snapshot: Mapping[str, type],
-        scenario_registry: ScenarioRegistry,
-        scenario_snapshot: Mapping[str, type],
+        scenarios: Sequence[ScenarioContribution],
+        techniques: Sequence[TechniqueContribution],
     ) -> None:
-        """
-        Undo the partial global-state changes made while loading a plug-in.
+        technique_registry = AttackTechniqueRegistry.get_registry_singleton()
+        for contribution in techniques:
+            technique_registry.register_contributed_factory(
+                factory=contribution.factory,
+                plugin_name=self._spec.name or "",
+                scenario_names=contribution.scenario_names,
+            )
 
-        Removes the plug-in's ``sys.path`` entry, the modules it newly imported, and the
-        provider/scenario registrations it added, and **restores any entries the plug-in
-        overwrote**. Both registries key by a name the plug-in does not control
-        (``SeedDatasetProvider`` by ``cls.__name__``; the scenario catalog by registry
-        name) and assign unconditionally, so a plug-in whose provider/scenario name
-        collides with an existing one silently replaces it; rollback must put the original
-        back, not just drop the new key. State present before the load — including modules
-        that already existed and built-ins discovered meanwhile — is preserved.
+        scenario_registry = ScenarioRegistry.get_registry_singleton()
+        for contribution in scenarios:
+            scenario_registry.register_contributed_scenario(
+                scenario_class=contribution.scenario_class,
+                name=contribution.registry_name,
+            )
 
-        Args:
-            package_name: The plug-in's top-level package name.
-            syspath_entry: The ``sys.path`` entry to remove, or None if it was already present.
-            modules_snapshot: Package-owned module names present before the load.
-            provider_snapshot: Provider registry contents captured before the load.
-            scenario_registry: The scenario registry singleton to clean up.
-            scenario_snapshot: Scenario catalog contents captured before the load.
-        """
-        from pyrit.datasets.seed_datasets.seed_dataset_provider import SeedDatasetProvider
+    @staticmethod
+    def _warn_on_version_drift(*, prepared: PreparedPlugin) -> None:
+        declared = prepared.declared_pyrit_version
+        if not declared:
+            return
+        import pyrit
 
-        if syspath_entry and syspath_entry in sys.path:
-            sys.path.remove(syspath_entry)
+        running = getattr(pyrit, "__version__", "") or ""
+        if _major_minor(declared) == _major_minor(running) and _major_minor(declared) is not None:
+            return
+        logger.warning(
+            "PLUGIN VERSION DRIFT: plug-in '%s' declares pyrit %s but pyrit %s is running. "
+            "Compatibility is the artifact author's responsibility.",
+            prepared.spec.name,
+            declared,
+            running or "(unknown)",
+        )
 
-        for name in [m for m in sys.modules if _name_owned_by(m, package_name) and m not in modules_snapshot]:
-            del sys.modules[name]
 
-        # For every entry the plug-in now owns: restore the pre-load value if the key
-        # existed before (the plug-in overwrote it), otherwise drop the key it added.
-        for key in list(SeedDatasetProvider._registry):
-            if _module_owned_by(SeedDatasetProvider._registry[key], package_name):
-                if key in provider_snapshot:
-                    SeedDatasetProvider._registry[key] = provider_snapshot[key]  # type: ignore[ty:invalid-assignment]
-                else:
-                    del SeedDatasetProvider._registry[key]
+def _major_minor(version: str) -> tuple[int, int] | None:
+    parts = version.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
 
-        changed_scenarios = False
-        for name in list(scenario_registry._classes):
-            if _module_owned_by(scenario_registry._classes[name], package_name):
-                if name in scenario_snapshot:
-                    scenario_registry._classes[name] = scenario_snapshot[name]  # type: ignore[ty:invalid-assignment]
-                else:
-                    del scenario_registry._classes[name]
-                changed_scenarios = True
-        if changed_scenarios:
-            scenario_registry._metadata_cache = None
+
+def _name_owned_by_any(*, name: str, prefixes: tuple[str, ...]) -> bool:
+    return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
