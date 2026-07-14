@@ -726,22 +726,23 @@ class TestConfigurationLoaderPlugins:
             plugins=[
                 {
                     "name": "operation_foobar",
-                    "format": "source",
-                    "source": str(tmp_path / "operation_foobar.py"),
+                    "source": str(tmp_path / "operation_foobar"),
+                    "initializer": "operation_foobar.setup.OperationInitializer",
                 }
             ]
         )
 
         spec = config.resolve_plugins()[0]
         assert spec.name == "operation_foobar"
-        assert spec.source == (tmp_path / "operation_foobar.py").resolve()
+        assert spec.source == (tmp_path / "operation_foobar").resolve()
+        assert spec.initializer == "operation_foobar.setup.OperationInitializer"
 
     def test_multiple_plugins_rejected(self, tmp_path: pathlib.Path):
         with pytest.raises(ValueError, match="one plug-in"):
             ConfigurationLoader(
                 plugins=[
-                    {"name": "first", "format": "source", "source": str(tmp_path / "first.py")},
-                    {"name": "second", "format": "source", "source": str(tmp_path / "second.py")},
+                    {"name": "first", "source": str(tmp_path / "first"), "initializer": "first.Init"},
+                    {"name": "second", "source": str(tmp_path / "second"), "initializer": "second.Init"},
                 ]
             )
 
@@ -757,14 +758,13 @@ class TestConfigurationLoaderPlugins:
                 "plugins": [
                     {
                         "name": "partner",
-                        "format": "wheel",
-                        "wheel": str(tmp_path / "plugin.whl"),
-                        "package": "partner.plugin",
+                        "source": str(tmp_path / "partner"),
+                        "initializer": "partner.setup.PartnerInitializer",
                     }
                 ]
             }
         )
-        assert config.resolve_plugins()[0].package == "partner.plugin"
+        assert config.resolve_plugins()[0].initializer == "partner.setup.PartnerInitializer"
 
     def test_yaml_plugin_path_resolves_relative_to_config(self, tmp_path: pathlib.Path):
         config_dir = tmp_path / "config"
@@ -773,15 +773,15 @@ class TestConfigurationLoaderPlugins:
         config_path.write_text(
             """plugins:
   - name: operation_foobar
-    format: source
-    source: ../plugins/operation_foobar.py
+    source: ../plugins/operation_foobar
+    initializer: operation_foobar.setup.OperationInitializer
 """,
             encoding="utf-8",
         )
 
         config = ConfigurationLoader.from_yaml_file(config_path)
 
-        assert config.resolve_plugins()[0].source == (tmp_path / "plugins" / "operation_foobar.py").resolve()
+        assert config.resolve_plugins()[0].source == (tmp_path / "plugins" / "operation_foobar").resolve()
 
     async def test_initialize_prepends_privileged_plugin_initializer(self, tmp_path: pathlib.Path):
         from pyrit.setup.plugin_loader import PluginInitializer
@@ -792,9 +792,8 @@ class TestConfigurationLoaderPlugins:
             plugins=[
                 {
                     "name": "partner",
-                    "format": "wheel",
-                    "wheel": str(tmp_path / "partner.whl"),
-                    "package": "partner.plugin",
+                    "source": str(tmp_path / "partner"),
+                    "initializer": "partner.setup.PartnerInitializer",
                 }
             ],
         )

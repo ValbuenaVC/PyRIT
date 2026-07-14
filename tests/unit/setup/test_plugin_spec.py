@@ -1,69 +1,55 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+"""Tests for the source-only, initializer-pointing ``PluginSpec`` schema."""
+
 from pathlib import Path
 
 import pytest
 
-from pyrit.setup import PluginFormat, PluginSpec
+from pyrit.setup import PluginSpec
 
 
-def test_source_spec_resolves_relative_path(tmp_path: Path) -> None:
+def test_from_config_normalizes_source_and_initializer(tmp_path: Path) -> None:
+    entry = {
+        "name": "rapid_response",
+        "source": "pkg_root",
+        "initializer": "pyrit_internal.setup.RapidResponseInitializer",
+    }
+    spec = PluginSpec.from_config(entry, base_dir=tmp_path)
+    assert spec.name == "rapid_response"
+    assert spec.source == (tmp_path / "pkg_root").resolve()
+    assert spec.initializer == "pyrit_internal.setup.RapidResponseInitializer"
+
+
+def test_from_config_keeps_absolute_source(tmp_path: Path) -> None:
+    absolute = (tmp_path / "artifacts").resolve()
     spec = PluginSpec.from_config(
-        {
-            "name": "operation_foobar",
-            "format": "source",
-            "source": "plugins/operation_foobar.py",
-        },
-        base_dir=tmp_path,
+        {"name": "p", "source": str(absolute), "initializer": "m.C"},
+        base_dir=tmp_path / "elsewhere",
     )
-
-    assert spec.name == "operation_foobar"
-    assert spec.format is PluginFormat.SOURCE
-    assert spec.source == (tmp_path / "plugins" / "operation_foobar.py").resolve()
-    assert spec.wheel is None
-    assert spec.artifact_path == spec.source
+    assert spec.source == absolute
 
 
-def test_wheel_spec_resolves_package_and_path(tmp_path: Path) -> None:
-    spec = PluginSpec.from_config(
-        {
-            "name": "partner_scenarios",
-            "format": "wheel",
-            "wheel": "plugins/partner.whl",
-            "package": "partner_scenarios.plugin",
-        },
-        base_dir=tmp_path,
-    )
-
-    assert spec.name == "partner_scenarios"
-    assert spec.format is PluginFormat.WHEEL
-    assert spec.wheel == (tmp_path / "plugins" / "partner.whl").resolve()
-    assert spec.source is None
-    assert spec.package == "partner_scenarios.plugin"
-    assert spec.artifact_path == spec.wheel
+def test_to_config_round_trips() -> None:
+    spec = PluginSpec(name="p", source=Path("/opt/plugin").resolve(), initializer="m.C")
+    assert spec.to_config() == {
+        "name": "p",
+        "source": str(Path("/opt/plugin").resolve()),
+        "initializer": "m.C",
+    }
 
 
 @pytest.mark.parametrize(
     "entry",
     [
-        {},
-        {"name": "x", "format": "source"},
-        {"name": "x", "format": "wheel"},
-        {"name": "x", "format": "source", "source": "x.py", "wheel": "x.whl"},
-        {"name": "x", "format": "source", "wheel": "x.whl"},
-        {"name": "x", "format": "wheel", "source": "x.py"},
-        {"name": "Bad-Name", "format": "source", "source": "x.py"},
-        {"name": "x", "format": "wheel", "wheel": "x.whl", "package": "bad-package"},
-        {"name": "x", "format": "archive", "wheel": "x.whl"},
-        {"name": "x", "format": "source", "source": "x.py", "unexpected": True},
+        {"source": "s", "initializer": "m.C"},  # missing name
+        {"name": "p", "initializer": "m.C"},  # missing source
+        {"name": "p", "source": "s"},  # missing initializer
+        {"name": "p", "source": "s", "initializer": "no_dot"},  # non-dotted initializer
+        {"name": "p", "source": "s", "initializer": "m.C", "wheel": "x"},  # unexpected key
     ],
 )
-def test_plugin_spec_rejects_invalid_config(entry: dict[str, object], tmp_path: Path) -> None:
+def test_from_config_rejects_malformed_entries(entry: dict) -> None:
     with pytest.raises(ValueError):
-        PluginSpec.from_config(entry, base_dir=tmp_path)
-
-
-def test_plugin_spec_rejects_legacy_shorthand() -> None:
-    with pytest.raises(ValueError, match="mapping"):
-        PluginSpec.from_config("plugin.whl")  # type: ignore[arg-type]
+        PluginSpec.from_config(entry)
