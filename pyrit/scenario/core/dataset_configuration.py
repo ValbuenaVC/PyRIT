@@ -23,18 +23,22 @@ Memory is the source of truth. When a configured dataset name is not yet in memo
 from the registered ``SeedDatasetProvider`` into memory. If a configured dataset
 name still yields nothing, the resolver raises loudly rather than silently skipping it.
 Inline configs (``seeds=`` / ``seed_groups=``) never touch memory.
+File-backed configs created by ``DatasetAttackConfiguration.from_yaml_file`` also bypass
+memory and reread their local YAML file whenever the configuration resolves.
 """
 
 from __future__ import annotations
 
+import asyncio
 import random
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pyrit.memory import CentralMemory
-from pyrit.models import AttackSeedGroup, Seed, SeedGroup, group_seeds_into_attack_groups
+from pyrit.models import AttackSeedGroup, Seed, SeedDataset, SeedGroup, group_seeds_into_attack_groups
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -709,6 +713,74 @@ class DatasetAttackConfiguration(DatasetConfiguration):
         for name, group in self._apply_max_dataset_size(pairs):
             result.setdefault(name, []).append(group)
         return result
+
+    @staticmethod
+    def from_yaml_file(
+        *,
+        file_path: str | Path,
+        max_dataset_size: int | None = None,
+        validators: Sequence[Callable[[ResolvedDataset], None]] | None = None,
+    ) -> DatasetAttackConfiguration:
+        """
+        Build a file-backed configuration that rereads local YAML on every resolution.
+
+        The file is treated as an inline source: it never queries or writes seed memory.
+        Existing grouping, validation, and sampling behavior is preserved, while the
+        YAML dataset name is retained for scenario result grouping and identity.
+
+        Args:
+            file_path (str | Path): The local YAML seed dataset file.
+            max_dataset_size (int | None): Optional global cap on resolved attack groups.
+            validators (Sequence[Callable[[ResolvedDataset], None]] | None): Validators
+                run against the full file contents before sampling.
+
+        Returns:
+            DatasetAttackConfiguration: A file-backed attack dataset configuration.
+        """
+        return _LocalFileDatasetAttackConfiguration(
+            file_path=file_path,
+            max_dataset_size=max_dataset_size,
+            validators=validators,
+        )
+
+
+class _LocalFileDatasetAttackConfiguration(DatasetAttackConfiguration):
+    """A local YAML dataset that is reread whenever seed groups are resolved."""
+
+    def __init__(
+        self,
+        *,
+        file_path: str | Path,
+        max_dataset_size: int | None = None,
+        validators: Sequence[Callable[[ResolvedDataset], None]] | None = None,
+    ) -> None:
+        super().__init__(max_dataset_size=max_dataset_size, validators=validators)
+        self._file_path = Path(file_path)
+        self._resolved_dataset_name: str | None = None
+
+    @property
+    def dataset_names(self) -> list[str]:
+        """The resolved YAML dataset name, or the file stem before first resolution."""
+        return [self._resolved_dataset_name or self._file_path.stem]
+
+    @property
+    def source_kind(self) -> DatasetSourceKind:
+        """The inline source kind for the local file."""
+        return DatasetSourceKind.INLINE
+
+    async def _build_groups_by_dataset_async(self) -> tuple[dict[str, list[AttackSeedGroup]], ResolvedDataset]:
+        dataset = await asyncio.to_thread(SeedDataset.from_yaml_file, self._file_path)
+        dataset_name = dataset.dataset_name or dataset.name or self._file_path.stem
+        self._resolved_dataset_name = dataset_name
+
+        seeds = cast("list[Seed]", list(dataset.seeds))
+        groups = self._build_attack_groups(seeds)
+        resolved = ResolvedDataset(
+            seeds=seeds,
+            source_kind=self.source_kind,
+            dataset_names=(dataset_name,),
+        )
+        return {dataset_name: groups}, resolved
 
 
 class CompoundDatasetAttackConfiguration(DatasetAttackConfiguration):

@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 # ---
 
 # %% [markdown]
@@ -19,6 +19,7 @@
 # ## Setup
 
 # %%
+from pyrit.common.path import DATASETS_PATH
 from pyrit.output import output_scenario_async
 from pyrit.prompt_target import OpenAIChatTarget
 from pyrit.scenario import DatasetAttackConfiguration
@@ -53,11 +54,20 @@ objective_target = OpenAIChatTarget()
 # ```
 #
 # **Available techniques:** ALL, DEFAULT, SINGLE_TURN, MULTI_TURN, role_play_movie_script, many_shot, tap
+#
+# For rapid local iteration, point `local_dataset_path` at a Copilot-created or edited seed dataset.
+# The file-backed configuration rereads the YAML whenever it resolves and never synchronizes its seeds
+# to PyRIT memory. After editing the file, rerun this cell; create a fresh scenario instance for each
+# iteration so the run receives a new scenario result ID.
 
 # %%
 from pyrit.scenario.airt import RapidResponse, RapidResponseTechnique
 
-dataset_config = DatasetAttackConfiguration(dataset_names=["airt_hate"], max_dataset_size=1)
+local_dataset_path = DATASETS_PATH / "seed_datasets" / "local" / "airt" / "hate.prompt"
+dataset_config = DatasetAttackConfiguration.from_yaml_file(
+    file_path=local_dataset_path,
+    max_dataset_size=1,
+)
 
 scenario = RapidResponse()
 scenario.set_params_from_args(  # type: ignore

@@ -3,6 +3,7 @@
 
 """Tests for the DatasetConfiguration base class and DatasetAttackConfiguration."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -74,6 +75,14 @@ def sample_seed_groups() -> list[SeedGroup]:
 def make_objectives(*values: str) -> list[SeedObjective]:
     """Build a list of SeedObjective seeds (each becomes its own attack group)."""
     return [SeedObjective(value=v) for v in values]
+
+
+def write_objective_dataset(*, file_path: Path, dataset_name: str, objectives: list[str]) -> None:
+    """Write a minimal objective dataset for local-file resolution tests."""
+    lines = [f"dataset_name: {dataset_name}", "seeds:"]
+    for objective in objectives:
+        lines.extend(["  - seed_type: objective", f"    value: {objective}"])
+    file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 class TestDatasetConfigurationInit:
@@ -471,6 +480,89 @@ class TestResolvedDatasetNames:
         config = DatasetAttackConfiguration(dataset_names=["d1"], validators=[restrict_dataset_names({"d1", "d2"})])
         groups = await config.get_attack_seed_groups_async()
         assert [g.objective.value for g in groups] == ["a"]
+
+
+class TestLocalFileDatasetAttackConfiguration:
+    """Resolution of local YAML files without seed-memory synchronization."""
+
+    async def test_preserves_dataset_name_and_grouping(self, *, tmp_path: Path, mock_memory: MagicMock) -> None:
+        file_path = tmp_path / "rapid-response.prompt"
+        file_path.write_text(
+            """dataset_name: copilot_generated
+seeds:
+  - seed_type: objective
+    value: Test the generated objective
+    prompt_group_alias: group_1
+  - seed_type: prompt
+    value: Use this system context
+    role: system
+    sequence: 0
+    prompt_group_alias: group_1
+""",
+            encoding="utf-8",
+        )
+
+        config = DatasetAttackConfiguration.from_yaml_file(file_path=file_path)
+        groups_by_dataset = await config.get_attack_groups_by_dataset_async()
+
+        assert list(groups_by_dataset) == ["copilot_generated"]
+        assert config.dataset_names == ["copilot_generated"]
+        assert config.source_kind is DatasetSourceKind.INLINE
+        assert len(groups_by_dataset["copilot_generated"]) == 1
+        assert {seed.value for seed in groups_by_dataset["copilot_generated"][0].seeds} == {
+            "Test the generated objective",
+            "Use this system context",
+        }
+        mock_memory.get_seeds.assert_not_called()
+        mock_memory.add_seed_datasets_to_memory_async.assert_not_awaited()
+
+    async def test_rereads_file_on_every_resolution(self, *, tmp_path: Path) -> None:
+        file_path = tmp_path / "rapid-response.prompt"
+        write_objective_dataset(
+            file_path=file_path,
+            dataset_name="local_iteration",
+            objectives=["first objective", "remove me"],
+        )
+        config = DatasetAttackConfiguration.from_yaml_file(file_path=file_path)
+
+        first = await config.get_attack_groups_by_dataset_async()
+        write_objective_dataset(
+            file_path=file_path,
+            dataset_name="local_iteration",
+            objectives=["updated objective"],
+        )
+        second = await config.get_attack_groups_by_dataset_async()
+
+        assert sorted(group.objective.value for group in first["local_iteration"]) == [
+            "first objective",
+            "remove me",
+        ]
+        assert [group.objective.value for group in second["local_iteration"]] == ["updated objective"]
+
+    async def test_validates_full_file_before_sampling(self, *, tmp_path: Path) -> None:
+        file_path = tmp_path / "rapid-response.prompt"
+        write_objective_dataset(
+            file_path=file_path,
+            dataset_name="local_iteration",
+            objectives=["first objective", "second objective"],
+        )
+        config = DatasetAttackConfiguration.from_yaml_file(
+            file_path=file_path,
+            max_dataset_size=1,
+            validators=[require_min_size(2)],
+        )
+
+        groups = await config.get_attack_seed_groups_async()
+
+        assert len(groups) == 1
+
+    async def test_invalid_file_raises(self, *, tmp_path: Path) -> None:
+        file_path = tmp_path / "invalid.prompt"
+        file_path.write_text("dataset_name: invalid\nseeds: []\n", encoding="utf-8")
+        config = DatasetAttackConfiguration.from_yaml_file(file_path=file_path)
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            await config.get_attack_groups_by_dataset_async()
 
 
 class TestCompoundDatasetAttackConfiguration:
