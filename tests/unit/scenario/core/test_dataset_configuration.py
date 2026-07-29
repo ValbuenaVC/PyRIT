@@ -3,6 +3,7 @@
 
 """Tests for the DatasetConfiguration base class and DatasetAttackConfiguration."""
 
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -523,6 +524,37 @@ seeds:
         mock_memory.get_seeds.assert_not_called()
         mock_memory.add_seed_datasets_to_memory_async.assert_not_awaited()
 
+    async def test_warns_on_every_resolution_that_disk_is_authoritative(
+        self,
+        *,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        file_path = tmp_path / "rapid-response.prompt"
+        write_objective_dataset(
+            file_path=file_path,
+            dataset_name="local_iteration",
+            objectives=["first objective"],
+        )
+        config = DatasetAttackConfiguration.from_yaml_file(file_path=file_path)
+
+        with caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.dataset_configuration"):
+            await config.get_attack_groups_by_dataset_async()
+            await config.get_attack_groups_by_dataset_async()
+
+        warnings = [
+            record.message
+            for record in caplog.records
+            if record.name == "pyrit.scenario.core.dataset_configuration"
+            and "Local file-backed dataset" in record.message
+        ]
+        assert len(warnings) == 2
+        assert all(str(file_path) in message for message in warnings)
+        assert all("not persisted to PyRIT seed memory" in message for message in warnings)
+        assert all(
+            "save edits to disk before the next resolution or they will be lost" in message for message in warnings
+        )
+
     async def test_rereads_file_on_every_resolution(self, *, tmp_path: Path) -> None:
         file_path = tmp_path / "rapid-response.prompt"
         write_objective_dataset(
@@ -596,15 +628,22 @@ seeds:
 
         assert len(groups) == 1
 
-    async def test_invalid_file_raises(self, *, tmp_path: Path) -> None:
+    async def test_invalid_file_raises_without_persistence_warning(
+        self,
+        *,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         file_path = tmp_path / "invalid.prompt"
         file_path.write_text("dataset_name: invalid\nseeds: []\n", encoding="utf-8")
         config = DatasetAttackConfiguration.from_yaml_file(file_path=file_path)
 
-        with pytest.raises(DatasetConstraintError, match=r"invalid\.prompt.*could not be loaded") as exc_info:
-            await config.get_attack_groups_by_dataset_async()
+        with caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.dataset_configuration"):
+            with pytest.raises(DatasetConstraintError, match=r"invalid\.prompt.*could not be loaded") as exc_info:
+                await config.get_attack_groups_by_dataset_async()
         assert exc_info.value.__cause__ is not None
         assert "cannot be empty" in str(exc_info.value.__cause__)
+        assert "Local file-backed dataset" not in caplog.text
 
     async def test_deleted_file_raises_dataset_constraint_error(self, *, tmp_path: Path) -> None:
         file_path = tmp_path / "deleted.prompt"

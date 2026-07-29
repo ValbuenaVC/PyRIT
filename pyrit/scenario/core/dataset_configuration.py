@@ -31,6 +31,7 @@ memory and reread their local YAML file whenever the configuration resolves. The
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from dataclasses import dataclass
 from enum import Enum
@@ -45,6 +46,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from pyrit.memory import MemoryInterface
+
+logger = logging.getLogger(__name__)
 
 # Dataset-name label that inline ``seeds`` / ``seed_groups`` carry in by-dataset views, since
 # they have no real dataset name. Inline and named sources are mutually exclusive, so this
@@ -733,7 +736,8 @@ class DatasetAttackConfiguration(DatasetConfiguration):
         Existing grouping, validation, and sampling behavior is preserved, while the
         YAML dataset name is retained for scenario result grouping and identity. Resolution
         normally occurs once per scenario initialization. Filters configured through
-        ``update_filters`` are ignored, matching other inline sources.
+        ``update_filters`` are ignored, matching other inline sources. Every resolution
+        warns that disk is authoritative and in-process seed mutations are not persisted.
 
         Args:
             file_path (str | Path): The local YAML seed dataset file.
@@ -800,8 +804,8 @@ class _LocalFileDatasetAttackConfiguration(DatasetAttackConfiguration):
                 by the YAML dataset name and the full resolved seed set.
 
         Raises:
-            DatasetConstraintError: If the local file cannot be read or parsed as a
-                valid ``SeedDataset``.
+            DatasetConstraintError: If the local file cannot be read, parsed as a
+                valid ``SeedDataset``, or grouped into valid attack groups.
         """
         dataset = await self._load_dataset_async()
         dataset_name = dataset.dataset_name or dataset.name or self._file_path.stem
@@ -809,6 +813,12 @@ class _LocalFileDatasetAttackConfiguration(DatasetAttackConfiguration):
 
         seeds = cast("list[Seed]", list(dataset.seeds))
         groups = self._build_file_attack_groups(seeds=seeds)
+        logger.warning(
+            "Local file-backed dataset '%s' was loaded from disk. Changes made to loaded seeds are not persisted "
+            "to PyRIT seed memory or written back to the file; save edits to disk before the next resolution or "
+            "they will be lost.",
+            self._file_path,
+        )
         resolved = ResolvedDataset(
             seeds=seeds,
             source_kind=self.source_kind,

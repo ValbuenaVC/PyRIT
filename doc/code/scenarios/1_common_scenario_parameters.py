@@ -68,6 +68,10 @@ dataset_config = DatasetAttackConfiguration(seed_groups=seed_groups, max_dataset
 # scenario initialization and never queries or writes seed memory. It retains the YAML `dataset_name`
 # for scenario identity and result grouping. As with other inline sources, memory-query `filters` do
 # not apply. Create or copy the scratch file before initializing the scenario.
+#
+# > **Warning:** The YAML file is authoritative. Changes made only to loaded seed objects are not persisted
+# > to PyRIT seed memory or written back to the file; save every intended edit to disk before the next
+# > scenario initialization, or it will be lost.
 
 # %%
 local_dataset_config = DatasetAttackConfiguration.from_yaml_file(

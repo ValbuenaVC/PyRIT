@@ -82,6 +82,10 @@ await output_scenario_async(scenario_result)
 # configuration rereads YAML during scenario initialization and never synchronizes these seeds to PyRIT
 # memory. Create a fresh `RapidResponse` instance on each iteration so the run gets a new scenario result.
 #
+# > **Warning:** The YAML file is authoritative. Changes made only to loaded seed objects are not persisted
+# > to PyRIT seed memory or written back to the file; save every intended edit to disk before reinitializing,
+# > or the next resolution will discard it.
+#
 # ```python
 # from pyrit.common.path import CONFIGURATION_DIRECTORY_PATH
 #
