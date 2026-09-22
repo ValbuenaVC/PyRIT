@@ -46,6 +46,24 @@ the constructor — no classmethod indirection required.
    abstract extension point every scenario must define (see "AtomicAttack Construction" below).
    Matrix-shaped scenarios delegate to `build_matrix_atomic_attacks(context=...)` in one line.
 
+## Modality Validation
+
+`Scenario.initialize_async` validates every `AtomicAttack` returned by
+`_build_atomic_attacks_async` before any of them is queued, and applies `MODALITY_POLICY`
+(`ModalityPolicy.SKIP` by default, also `WARN` and `RAISE`). Scenario authors get this for free
+and normally do not override it.
+
+- The **request chain** projects each seed group's data types through the attack's request
+  converters; one of the target's advertised `input_modalities` combinations must cover the result.
+- The **response chain** requires the scorer to declare every data type the target may emit. This
+  is a type check only — it does not establish that the resulting score is meaningful.
+- Anything indeterminate is `UNKNOWN` and never blocks a run.
+- Only turn 0 is checked. Media routing across later turns belongs to `_ModalityFeedbackRouter`,
+  which multi-turn attacks consult at execution time.
+
+Override `MODALITY_POLICY` to `RAISE` when an incompatible pairing means the run is
+misconfigured rather than merely narrower than intended.
+
 ## Constructor Pattern
 
 ```python

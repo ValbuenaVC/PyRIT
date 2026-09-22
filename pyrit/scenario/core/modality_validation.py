@@ -15,7 +15,7 @@ Two chains are checked, both for turn 0 only:
 * the **response chain** — every data type the target may emit must be one the scorer declares
   it can read.
 
-Anything indeterminate resolves to :data:`ModalityVerdict.UNKNOWN` and never blocks a run. A
+Anything indeterminate resolves to ``ModalityVerdict.UNKNOWN`` and never blocks a run. A
 target whose capabilities cannot be read, an attack that exposes no scoring config, and a
 scorer that never declared its data types are all "cannot tell", not "incompatible".
 
