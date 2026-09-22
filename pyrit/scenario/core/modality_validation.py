@@ -404,8 +404,12 @@ def _read_modalities(*, target: PromptTarget, direction: str) -> frozenset[froze
         value = capabilities.input_modalities if direction == "input" else capabilities.output_modalities
     except AttributeError:
         return None
-    # A test double that never configured capabilities yields a mock here, not a frozenset.
-    return value if isinstance(value, frozenset) else None
+    # Statically this is always a frozenset, because ``TargetCapabilities`` validates it, and ty
+    # says so. At runtime a test double that never configured capabilities yields a mock instead,
+    # and this guard is what turns that into "unknown" rather than an empty combination set that
+    # would wrongly read as incompatible. Deliberately redundant, like the defensive checks the
+    # Alembic revisions keep.
+    return value if isinstance(value, frozenset) else None  # ty: ignore[redundant-condition-strict]
 
 
 def _format_modalities(modalities: frozenset[frozenset[PromptDataType]] | None) -> str:
