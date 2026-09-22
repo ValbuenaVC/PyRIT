@@ -89,11 +89,9 @@ class VideoHelper:
         Raises:
             ValueError: If the scorer does not support audio_path data type.
         """
-        if "audio_path" not in scorer._validator._supported_data_types:
-            raise ValueError(
-                f"audio_scorer must support 'audio_path' data type. "
-                f"Supported types: {scorer._validator._supported_data_types}"
-            )
+        declared = scorer.supported_data_types
+        if declared is not None and "audio_path" not in declared:
+            raise ValueError(f"audio_scorer must support 'audio_path' data type. Supported types: {sorted(declared)}")
 
     async def _score_frames_async(self, *, message_piece: MessagePiece, objective: str | None = None) -> list[Score]:
         """

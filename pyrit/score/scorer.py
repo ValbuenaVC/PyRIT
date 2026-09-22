@@ -20,6 +20,7 @@ from pyrit.models import (
     Message,
     MessageScorable,
     Observation,
+    PromptDataType,
     Scorable,
     ScorableUnion,
     Score,
@@ -199,6 +200,20 @@ class Scorer(Identifiable, abc.ABC):
                 self._validator = validator
         if chat_target is not None:
             type(self).TARGET_REQUIREMENTS.validate(target=chat_target)
+
+    @property
+    def supported_data_types(self) -> frozenset[PromptDataType] | None:
+        """
+        The data types this scorer declares it can score, or ``None`` when undeclared.
+
+        ``None`` means "unknown", not "none of them": the scorer either has no validator, or its
+        validator fell back to the permissive all-types default. Callers deciding compatibility
+        before a run must treat ``None`` as indeterminate rather than as a failure.
+
+        Returns:
+            frozenset[PromptDataType] | None: The declared data types, or ``None`` if unknown.
+        """
+        return None
 
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """

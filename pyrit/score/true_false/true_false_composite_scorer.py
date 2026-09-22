@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from pyrit.models import (
     ComponentIdentifier,
     Condition,
+    PromptDataType,
     Scorable,
     ScorableUnion,
     Score,
@@ -69,6 +70,27 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
                 raise ValueError("All scorers must be true_false scorers.")
 
         self._scorers = scorers
+
+    @property
+    def supported_data_types(self) -> frozenset[PromptDataType] | None:
+        """
+        The intersection of what every child scorer declares.
+
+        A composite can only score evidence all of its children can score. One child with an
+        undeclared (unknown) set makes the whole composite unknown — a declared sibling cannot
+        vouch for it.
+
+        Returns:
+            frozenset[PromptDataType] | None: The shared declared data types, or ``None`` if any
+            child is undeclared.
+        """
+        shared: frozenset[PromptDataType] | None = None
+        for scorer in self._scorers:
+            declared = scorer.supported_data_types
+            if declared is None:
+                return None
+            shared = declared if shared is None else shared & declared
+        return shared
 
     def _build_identifier(self) -> ComponentIdentifier:
         """

@@ -21,6 +21,7 @@ from pyrit.models import (
     MessagePiece,
     MessageScorable,
     Observation,
+    PromptDataType,
     PromptResponseError,
     Scorable,
     ScorableUnion,
@@ -244,6 +245,18 @@ class MessageScorer(Scorer):
         self._validator = validator
         self._message_resolver = message_resolver or MessageScorableResolver()
         super().__init__(chat_target=chat_target)
+
+    @property
+    def supported_data_types(self) -> frozenset[PromptDataType] | None:
+        """
+        The data types this scorer's validator declares, or ``None`` when it declared none.
+
+        Returns:
+            frozenset[PromptDataType] | None: The declared data types, or ``None`` if undeclared.
+        """
+        if not self._validator.has_declared_data_types:
+            return None
+        return frozenset(self._validator.supported_data_types)
 
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """

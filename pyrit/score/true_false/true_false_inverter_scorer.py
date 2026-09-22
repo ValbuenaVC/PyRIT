@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from pyrit.models import (
     ComponentIdentifier,
     Condition,
+    PromptDataType,
     Scorable,
     Score,
     ScoringExpectation,
@@ -38,6 +39,16 @@ class TrueFalseInverterScorer(TrueFalseScorer):
         self._scorer = scorer
 
         super().__init__()
+
+    @property
+    def supported_data_types(self) -> frozenset[PromptDataType] | None:
+        """
+        The wrapped scorer's declared data types — inverting a verdict does not change them.
+
+        Returns:
+            frozenset[PromptDataType] | None: The wrapped scorer's declaration, or ``None``.
+        """
+        return self._scorer.supported_data_types
 
     def _build_identifier(self) -> ComponentIdentifier:
         """

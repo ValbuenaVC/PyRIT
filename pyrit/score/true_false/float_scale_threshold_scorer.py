@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from pyrit.models import (
     ComponentIdentifier,
     Condition,
+    PromptDataType,
     Scorable,
     ScorableUnion,
     Score,
@@ -77,6 +78,16 @@ class FloatScaleThresholdScorer(TrueFalseScorer):
     def threshold(self) -> float:
         """The threshold value used for score comparison."""
         return self._threshold
+
+    @property
+    def supported_data_types(self) -> frozenset[PromptDataType] | None:
+        """
+        The wrapped float-scale scorer's declared types — thresholding does not change them.
+
+        Returns:
+            frozenset[PromptDataType] | None: The wrapped scorer's declaration, or ``None``.
+        """
+        return self._scorer.supported_data_types
 
     def _build_identifier(self) -> ComponentIdentifier:
         """
