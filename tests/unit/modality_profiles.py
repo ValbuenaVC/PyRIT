@@ -18,8 +18,13 @@ from unit.mocks import modality_combos
 #: Text in, text out. Matches the production default on ``TargetCapabilities``.
 TEXT_ONLY_MODALITIES: frozenset[frozenset[PromptDataType]] = modality_combos({"text"})
 
-#: A vision chat model: text alone, or text accompanied by an image.
-VISION_INPUT_MODALITIES: frozenset[frozenset[PromptDataType]] = modality_combos({"text"}, {"text", "image_path"})
+#: A vision chat model: text alone, an image alone, or both together — the shape every vision
+#: entry in ``_KNOWN_CAPABILITIES`` and the ``OpenAIChatTarget`` default declare. Each accepted
+#: shape is listed explicitly; ``{text, image_path}`` on its own would mean "an image only with
+#: text", which is what a video-generation target declares.
+VISION_INPUT_MODALITIES: frozenset[frozenset[PromptDataType]] = modality_combos(
+    {"text"}, {"image_path"}, {"text", "image_path"}
+)
 
 #: An image-edit model: media is required on *every* request — there is no bare ``{"text"}`` combo.
 IMAGE_EDIT_INPUT_MODALITIES: frozenset[frozenset[PromptDataType]] = modality_combos({"text", "image_path"})

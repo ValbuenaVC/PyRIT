@@ -254,22 +254,36 @@ def test_target_accepts_exact_combo_is_compatible():
     assert target_accepts(target=target, request_types={"text"}) is ModalityVerdict.COMPATIBLE
 
 
-def test_target_accepts_subset_of_combo_is_compatible():
-    """A projection that is a subset of an advertised combo is compatible."""
+def test_target_accepts_advertised_multi_type_combo_is_compatible():
+    """A text-plus-image request matches a target that advertises that exact combination."""
     target = get_mock_target(input_modalities=VISION_INPUT_MODALITIES)
     assert target_accepts(target=target, request_types={"text", "image_path"}) is ModalityVerdict.COMPATIBLE
 
 
-def test_target_accepts_no_covering_combo_is_incompatible():
+def test_target_accepts_no_matching_combo_is_incompatible():
     """The canonical failure: an image reaches a text-only target."""
     target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES)
     assert target_accepts(target=target, request_types={"image_path"}) is ModalityVerdict.INCOMPATIBLE
 
 
-def test_target_accepts_requires_one_combo_to_cover_all_types():
-    """Types spread across two separate combos do not satisfy a single request."""
+def test_target_accepts_types_split_across_combos_is_incompatible():
+    """Types advertised only separately do not satisfy one request that carries both."""
     target = get_mock_target(input_modalities=[{"text"}, {"image_path"}])
     assert target_accepts(target=target, request_types={"text", "image_path"}) is ModalityVerdict.INCOMPATIBLE
+
+
+def test_target_accepts_lone_media_needs_its_own_advertised_combo():
+    """
+    A lone image is acceptable only if the target advertises ``{image_path}`` by itself.
+
+    ``{text, image_path}`` means "text with an image", not "an image alone". A video-generation
+    target declares exactly that shape and genuinely cannot take a bare reference image; a
+    vision chat model that can take one declares ``{image_path}`` too, and is accepted.
+    """
+    text_with_image_only = get_mock_target(input_modalities=[{"text"}, {"text", "image_path"}])
+    assert target_accepts(target=text_with_image_only, request_types={"image_path"}) is ModalityVerdict.INCOMPATIBLE
+    vision = get_mock_target(input_modalities=VISION_INPUT_MODALITIES)
+    assert target_accepts(target=vision, request_types={"image_path"}) is ModalityVerdict.COMPATIBLE
 
 
 def test_target_accepts_edit_only_target_with_media_seed_is_compatible():

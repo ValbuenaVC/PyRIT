@@ -11,7 +11,7 @@ the answer instead.
 Two chains are checked, both for turn 0 only:
 
 * the **request chain** — the seed's own data types, projected through the request converters,
-  must be covered by one of the objective target's advertised input modality combinations;
+  must be exactly one of the objective target's advertised input modality combinations;
 * the **response chain** — every data type the target may emit must be one the scorer declares
   it can read.
 
@@ -168,9 +168,13 @@ def target_accepts(*, target: PromptTarget, request_types: set[PromptDataType]) 
     """
     Check a projected request against a target's advertised input modality combinations.
 
-    A target advertises *combinations* it accepts in a single request, so one combination must
-    cover every projected type at once. Types spread across two combinations do not satisfy a
-    request that carries both.
+    A target advertises the *combinations* of data types it accepts in a single request, and the
+    request's own set of data types must be exactly one of them. ``{text, image_path}`` means
+    "text with an image", not "an image alone": a target that accepts a lone image also
+    advertises ``{image_path}``, as the vision profiles do, while a video-generation target that
+    needs a prompt does not. Reading the declarations literally keeps plan-time in step with
+    ``_ModalityFeedbackRouter``, which treats a missing bare ``{text}`` combination as "media
+    required on every request".
 
     Args:
         target (PromptTarget): The objective target.
@@ -178,25 +182,16 @@ def target_accepts(*, target: PromptTarget, request_types: set[PromptDataType]) 
 
     Returns:
         ModalityVerdict: ``UNKNOWN`` when the target's capabilities cannot be read, otherwise
-        whether some advertised combination covers ``request_types``.
+        whether ``request_types`` is one of the advertised combinations.
     """
     supported = _read_modalities(target=target, direction="input")
     if supported is None:
         return ModalityVerdict.UNKNOWN
     if not request_types:
         return ModalityVerdict.INCOMPATIBLE
-
-    requested = frozenset(request_types)
-
-    # A target that advertises no bare ``{"text"}`` combination requires media on every request
-    # -- an image-edit model, for example. ``_ModalityFeedbackRouter`` reads the same signal to
-    # decide whether turn 0 can be constructed, and raises when it cannot, so a text-only
-    # request is genuinely unrunnable rather than merely unadvertised.
-    if requested == frozenset({"text"}) and frozenset({"text"}) not in supported:
-        return ModalityVerdict.INCOMPATIBLE
-
-    covered = any(requested <= combination for combination in supported)
-    return ModalityVerdict.COMPATIBLE if covered else ModalityVerdict.INCOMPATIBLE
+    if frozenset(request_types) in supported:
+        return ModalityVerdict.COMPATIBLE
+    return ModalityVerdict.INCOMPATIBLE
 
 
 def scorer_accepts(*, scorer: Scorer | None, target: PromptTarget) -> tuple[ModalityVerdict, str | None]:

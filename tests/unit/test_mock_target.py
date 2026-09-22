@@ -221,9 +221,12 @@ def test_profile_text_only():
     assert TargetCapabilities().input_modalities == TEXT_ONLY_MODALITIES  # matches production default
 
 
-def test_profile_vision_input_allows_bare_text_and_text_with_image():
-    assert VISION_INPUT_MODALITIES == _TEXT_AND_IMAGE
-    assert frozenset({"text"}) in VISION_INPUT_MODALITIES
+def test_profile_vision_input_declares_text_image_and_both():
+    """Matches ``_TEXT_IMAGE_INPUT`` in ``target_capabilities.py``: every accepted shape is explicit."""
+    assert frozenset({frozenset({"text"}), frozenset({"image_path"}), frozenset({"text", "image_path"})}) == (
+        VISION_INPUT_MODALITIES
+    )
+    assert frozenset({"image_path"}) in VISION_INPUT_MODALITIES
 
 
 def test_profile_image_edit_input_has_no_bare_text_combo():

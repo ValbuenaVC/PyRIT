@@ -54,7 +54,9 @@ the constructor — no classmethod indirection required.
 and normally do not override it.
 
 - The **request chain** projects each seed group's data types through the attack's request
-  converters; one of the target's advertised `input_modalities` combinations must cover the result.
+  converters; the resulting set of data types must be exactly one of the target's advertised
+  `input_modalities` combinations. Declarations are read literally — a target that accepts a
+  lone image advertises `{image_path}` as well as `{text, image_path}`.
 - The **response chain** requires the scorer to declare every data type the target may emit. This
   is a type check only — it does not establish that the resulting score is meaningful.
 - Anything indeterminate is `UNKNOWN` and never blocks a run.
