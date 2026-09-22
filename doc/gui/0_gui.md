@@ -34,7 +34,28 @@ To deploy an isolated instance for an external team, see [Deploy a New Instance]
 
 ## Views
 
-CoPyRIT has three main views, accessible from the left sidebar: **Chat**, **Attack History**, and **Target Configuration**. A dark/light theme toggle is available at the bottom of the sidebar.
+CoPyRIT has three main views, accessible from the left sidebar: **Chat**, **Attack History**, and **Target Configuration**. The **Theme** menu is available at the bottom of the sidebar.
+
+### Themes
+
+Choose **System**, **Light**, or **Dark**, or select a preset with its own palette
+and workspace background:
+
+| Preset | Appearance |
+| --- | --- |
+| Raccoon | Warm gray with broad raccoon-tail stripes |
+| Jimothy | Mist and sage with a newly drawn, round-bodied Seattle raccoon |
+| Pirate | Navy and gold with a compass and nautical chart |
+| Seattle Rain | Dark storm gray with rain and puddle ripples |
+| Evergreen | Forest green with layered fir silhouettes |
+| Blueprint | Deep blue with a subtle technical drawing grid |
+| Night Sky | Indigo with sparse stars and constellation lines |
+
+Theme choices are saved in your browser and do not change your conversations
+or configuration. System follows your operating system's light/dark setting;
+the named presets keep their own palettes. High-contrast mode takes precedence
+and hides decorative backgrounds, restoring your chosen preset when it ends.
+Select System, Light, or Dark to return to an undecorated workspace.
 
 ### Chat View
 
@@ -96,9 +117,15 @@ Export stays available for read-only historical conversations, and is disabled w
 
 #### Labels
 
-The labels bar in the ribbon displays the current attack's labels (e.g., `operator`, `operation`). Labels are key-value pairs that help organize and filter attacks. You can add, edit, and remove labels inline. The `operator` and `operation` labels are required and cannot be removed.
+The **New run labels** bar above the page content is available across the GUI, including scanner setup, Home, Chat, and History. It shows the active labels for future attacks and scans, not the attribution of a historical run you are viewing. You can add, edit, and remove labels without leaving the page. The `operator` and `operation` labels are required and cannot be removed.
 
-Clicking the `operation` label opens a picker listing the operations already recorded in memory, so you can choose one without typing it from memory. Typing a name that doesn't exist yet offers to create it. Very long lists show the first 200 and say how many are left, so type to narrow them. The operation you pick is applied to attacks you start from then on; it does not change attacks that already exist.
+In Chat, the active target, Markdown toggle, export menu, conversations panel toggle, and **New Attack** button share the right side of this bar. They wrap below the labels on narrow screens.
+
+Clicking the `operation` label opens a picker listing the operations already recorded in memory, so you can choose one without typing it from memory. Typing a name that doesn't exist yet offers to create it. Very long lists show the first 200 and say how many are left, so type to narrow them. On narrow screens, use the labels icon to view or edit labels that do not fit inline.
+
+Your choices persist in this browser across navigation and refreshes. Backend configuration supplies defaults for labels you have not chosen, and the signed-in account alias takes precedence over the default or remembered operator during initialization. Scanner launches receive the active labels from this bar.
+
+Changing these labels does not relabel existing attacks or scenario runs. History attribution and the **Run configuration** shown for a scenario run still describe that saved run. Operator and target restrictions on existing attacks remain in effect.
 
 #### Behavioral Guards
 
@@ -151,6 +178,12 @@ Click any row to open the attack in the Chat view.
 #### Pagination
 
 Results are paginated (25 per page) with "First" and "Next" navigation buttons.
+
+### Scenario Run Results
+
+In active runs and saved scenario results, **Atomic attack groups** defaults to expanded for up to 20 group summaries and collapsed for more than 20, with group and execution counts always visible. Select **Expand** to show all group summaries or **Collapse** to hide the list. Individual groups start collapsed; expand one to inspect its executions and open attack details or conversation links.
+
+Until you expand or collapse the section, its default follows the current group count as progress loads. Once you choose, the section keeps your choice during progress updates for the same run, even if the count crosses 20. Opening a different run resets to that run's count-based default.
 
 ### Target Configuration
 
