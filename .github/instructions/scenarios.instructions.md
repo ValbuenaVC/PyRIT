@@ -55,8 +55,12 @@ and normally do not override it.
 
 - The **request chain** projects each seed group's data types through the attack's request
   converters; the resulting set of data types must be exactly one of the target's advertised
-  `input_modalities` combinations. Declarations are read literally — a target that accepts a
-  lone image advertises `{image_path}` as well as `{text, image_path}`.
+  `input_modalities` combinations. Conversion selection (including `indexes_to_apply`) is
+  **per message piece**: preserve ordered pieces through each converter configuration, then
+  collapse their resulting types to a **message-level set** for target compatibility. A single
+  text piece selected at index 0 and converted to an image leaves no text; selecting only
+  index 0 of two text pieces leaves text in the second piece. Declarations are read literally —
+  a target that accepts a lone image advertises `{image_path}` as well as `{text, image_path}`.
 - The **response chain** requires the scorer to declare every data type the target may emit. This
   is a type check only — it does not establish that the resulting score is meaningful.
 - Anything indeterminate is `UNKNOWN` and never blocks a run.

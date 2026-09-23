@@ -83,6 +83,7 @@ def _atomic(
     *,
     target,
     converters=None,
+    converter_configurations=None,
     scorer=None,
     seed_groups=None,
     seed_technique=None,
@@ -91,9 +92,13 @@ def _atomic(
 ) -> AtomicAttack:
     """Build a real AtomicAttack around a PromptSendingAttack with the given wiring."""
     kwargs = {"objective_target": target}
-    if converters is not None:
+    if converters is not None or converter_configurations is not None:
         kwargs["attack_converter_config"] = AttackConverterConfig(
-            request_converters=ConverterConfiguration.from_converters(converters=list(converters))
+            request_converters=(
+                converter_configurations
+                if converter_configurations is not None
+                else ConverterConfiguration.from_converters(converters=list(converters))
+            )
         )
     if scorer is not None:
         kwargs["attack_scoring_config"] = AttackScoringConfig(objective_scorer=scorer)
@@ -112,21 +117,21 @@ def _atomic(
 # ---------------------------------------------------------------------------
 def test_project_request_chain_no_converters_returns_start_types():
     """An empty chain passes the start types through untouched."""
-    projected, reason = project_request_chain(start_types={"text"}, request_converters=[])
+    projected, reason = project_request_chain(start_types=["text"], request_converters=[])
     assert projected == {"text"}
     assert reason is None
 
 
 def test_project_request_chain_text_converter_preserves_text():
     """A text-to-text converter leaves the projected type as text."""
-    projected, reason = project_request_chain(start_types={"text"}, request_converters=_configs(Base64Converter()))
+    projected, reason = project_request_chain(start_types=["text"], request_converters=_configs(Base64Converter()))
     assert projected == {"text"}
     assert reason is None
 
 
 def test_project_request_chain_image_converter_yields_image_path():
     """A text-to-image converter shifts the projected type to image_path."""
-    projected, reason = project_request_chain(start_types={"text"}, request_converters=_configs(QRCodeConverter()))
+    projected, reason = project_request_chain(start_types=["text"], request_converters=_configs(QRCodeConverter()))
     assert projected == {"image_path"}
     assert reason is None
 
@@ -134,7 +139,7 @@ def test_project_request_chain_image_converter_yields_image_path():
 def test_project_request_chain_audio_converter_preserves_audio():
     """An audio-to-audio converter accepts an audio start and keeps it."""
     projected, reason = project_request_chain(
-        start_types={"audio_path"}, request_converters=_configs(AudioEchoConverter())
+        start_types=["audio_path"], request_converters=_configs(AudioEchoConverter())
     )
     assert projected == {"audio_path"}
     assert reason is None
@@ -143,7 +148,7 @@ def test_project_request_chain_audio_converter_preserves_audio():
 def test_project_request_chain_two_converters_chain():
     """Consecutive converters compose: text becomes an image, which the next converter accepts."""
     projected, reason = project_request_chain(
-        start_types={"text"},
+        start_types=["text"],
         request_converters=_configs(QRCodeConverter(), ImageCompressionConverter()),
     )
     assert projected == {"image_path"}
@@ -153,7 +158,7 @@ def test_project_request_chain_two_converters_chain():
 def test_project_request_chain_image_converter_accepts_image_start():
     """A converter declaring image_path input accepts an image start with no bridge needed."""
     projected, reason = project_request_chain(
-        start_types={"image_path"}, request_converters=_configs(ImageCompressionConverter())
+        start_types=["image_path"], request_converters=_configs(ImageCompressionConverter())
     )
     assert projected == {"image_path"}
     assert reason is None
@@ -165,7 +170,7 @@ def test_project_request_chain_image_converter_accepts_image_start():
 def test_project_request_chain_unsupported_input_names_converter():
     """A converter that cannot accept the current type breaks the chain and is named in the reason."""
     projected, reason = project_request_chain(
-        start_types={"image_path"}, request_converters=_configs(Base64Converter())
+        start_types=["image_path"], request_converters=_configs(Base64Converter())
     )
     assert projected == set()
     assert reason is not None
@@ -176,7 +181,7 @@ def test_project_request_chain_unsupported_input_names_converter():
 def test_project_request_chain_reports_first_failure_only():
     """The first converter that cannot accept the current type explains the failure."""
     _, reason = project_request_chain(
-        start_types={"text"},
+        start_types=["text"],
         request_converters=_configs(QRCodeConverter(), Base64Converter()),
     )
     assert reason is not None
@@ -186,7 +191,7 @@ def test_project_request_chain_reports_first_failure_only():
 
 def test_project_request_chain_empty_start_returns_empty():
     """No start types means nothing can reach the target."""
-    projected, reason = project_request_chain(start_types=set(), request_converters=_configs(Base64Converter()))
+    projected, reason = project_request_chain(start_types=[], request_converters=_configs(Base64Converter()))
     assert projected == set()
     assert reason is None
 
@@ -194,7 +199,7 @@ def test_project_request_chain_empty_start_returns_empty():
 def test_project_request_chain_multi_type_start_fails_when_one_branch_breaks():
     """A converter that applies to a type it cannot accept breaks the whole chain."""
     projected, reason = project_request_chain(
-        start_types={"text", "image_path"},
+        start_types=["text", "image_path"],
         request_converters=_configs(Base64Converter()),
     )
     assert projected == set()
@@ -208,7 +213,7 @@ def test_project_request_chain_multi_type_start_fails_when_one_branch_breaks():
 def test_project_request_chain_conditional_not_applying_preserves_type():
     """When ``prompt_data_types_to_apply`` excludes the current type the piece passes through unchanged."""
     config = ConverterConfiguration(converters=[QRCodeConverter()], prompt_data_types_to_apply=["image_path"])
-    projected, reason = project_request_chain(start_types={"text"}, request_converters=[config])
+    projected, reason = project_request_chain(start_types=["text"], request_converters=[config])
     assert projected == {"text"}
     assert reason is None
 
@@ -216,21 +221,47 @@ def test_project_request_chain_conditional_not_applying_preserves_type():
 def test_project_request_chain_conditional_applying_converts():
     """When ``prompt_data_types_to_apply`` includes the current type the converter runs."""
     config = ConverterConfiguration(converters=[QRCodeConverter()], prompt_data_types_to_apply=["text"])
-    projected, reason = project_request_chain(start_types={"text"}, request_converters=[config])
+    projected, reason = project_request_chain(start_types=["text"], request_converters=[config])
     assert projected == {"image_path"}
     assert reason is None
 
 
-def test_project_request_chain_indexes_to_apply_keeps_both_branches():
-    """
-    Partial application branches the projection.
+@pytest.mark.parametrize(
+    ("start_types", "indexes", "expected"),
+    [
+        (["text"], [0], {"image_path"}),
+        (["text", "text"], [0], {"image_path", "text"}),
+        (["text", "text"], [0, 1], {"image_path"}),
+        (["text", "text"], [1], {"image_path", "text"}),
+        (["text", "text"], [2], {"text"}),
+    ],
+)
+def test_project_request_chain_indexes_to_apply_tracks_pieces(start_types, indexes, expected):
+    """Only the pieces not selected by an indexed converter retain their old type."""
+    config = ConverterConfiguration(converters=[QRCodeConverter()], indexes_to_apply=indexes)
+    projected, reason = project_request_chain(start_types=start_types, request_converters=[config])
+    assert projected == expected
+    assert reason is None
 
-    With ``indexes_to_apply`` set only some pieces are converted, so both the converted and the
-    unconverted type can reach the target and the target must accept both.
-    """
+
+def test_project_request_chain_unknown_indexes_keeps_possible_branches():
+    """A factory without a concrete message must allow for unselected pieces."""
     config = ConverterConfiguration(converters=[QRCodeConverter()], indexes_to_apply=[0])
-    projected, reason = project_request_chain(start_types={"text"}, request_converters=[config])
+    projected, reason = project_request_chain(
+        start_types=["text"], request_converters=[config], piece_indexes_known=False
+    )
     assert projected == {"text", "image_path"}
+    assert reason is None
+
+
+def test_project_request_chain_indexed_conversion_preserves_position_across_configurations():
+    """Later indexed configurations select the same message piece after an earlier conversion."""
+    configs = [
+        ConverterConfiguration(converters=[QRCodeConverter()], indexes_to_apply=[0]),
+        ConverterConfiguration(converters=[ImageCompressionConverter()], indexes_to_apply=[0]),
+    ]
+    projected, reason = project_request_chain(start_types=["text", "text"], request_converters=configs)
+    assert projected == {"image_path", "text"}
     assert reason is None
 
 
@@ -238,7 +269,7 @@ def test_project_request_chain_multi_type_start_projects_each_independently():
     """Each start type is projected on its own; a conditional converter touches only what it applies to."""
     config = ConverterConfiguration(converters=[QRCodeConverter()], prompt_data_types_to_apply=["text"])
     projected, reason = project_request_chain(
-        start_types={"text", "audio_path"},
+        start_types=["text", "audio_path"],
         request_converters=[config],
     )
     assert projected == {"image_path", "audio_path"}
@@ -395,6 +426,33 @@ def test_validate_atomic_attack_image_converter_into_vision_target_is_compatible
     target = get_mock_target(input_modalities=VISION_INPUT_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
     report = validate_atomic_attack(atomic_attack=_atomic(target=target, converters=[QRCodeConverter()]))
     assert report.verdict is ModalityVerdict.COMPATIBLE
+
+
+def test_validate_atomic_attack_fully_selected_index_reaches_image_only_target(patch_central_database):
+    """A one-piece text request converted at index zero no longer contains text."""
+    target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    config = ConverterConfiguration(converters=[QRCodeConverter()], indexes_to_apply=[0])
+    atomic = _atomic(target=target, converter_configurations=[config])
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({"image_path"})
+    assert report.verdict is ModalityVerdict.COMPATIBLE
+
+
+def test_validate_atomic_attack_partially_selected_index_retains_text(patch_central_database):
+    """Two text pieces with only the first converted form a text-and-image message."""
+    target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    config = ConverterConfiguration(converters=[QRCodeConverter()], indexes_to_apply=[0])
+    seed_group = AttackSeedGroup(
+        seeds=[
+            SeedObjective(value="objective"),
+            SeedPrompt(value="first", data_type="text"),
+            SeedPrompt(value="second", data_type="text"),
+        ]
+    )
+    atomic = _atomic(target=target, converter_configurations=[config], seed_groups=[seed_group])
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({"text", "image_path"})
+    assert report.verdict is ModalityVerdict.INCOMPATIBLE
 
 
 def test_validate_atomic_attack_converter_break_names_the_converter(patch_central_database):

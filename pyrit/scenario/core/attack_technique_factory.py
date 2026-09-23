@@ -489,8 +489,9 @@ class AttackTechniqueFactory(Identifiable):
         converter_config = self._attack_kwargs.get("attack_converter_config")
         request_converters = converter_config.request_converters if converter_config is not None else []
         output_types, failure_reason = project_request_chain(
-            start_types={"text"},
+            start_types=["text"],
             request_converters=request_converters,
+            piece_indexes_known=False,
         )
         if failure_reason is not None:
             return False

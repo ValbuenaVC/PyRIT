@@ -32,7 +32,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Sequence
 
     from pyrit.executor.attack.core.attack_strategy import AttackStrategy
     from pyrit.models import AttackSeedGroup, AttackTechniqueSeedGroup
@@ -105,62 +105,64 @@ class ModalityReport:
 
 def project_request_chain(
     *,
-    start_types: Iterable[PromptDataType],
+    start_types: Sequence[PromptDataType],
     request_converters: Sequence[ConverterConfiguration],
+    piece_indexes_known: bool = True,
 ) -> tuple[set[PromptDataType], str | None]:
     """
-    Project ``start_types`` through a request-converter chain.
+    Project the ordered piece types through a request-converter chain.
 
-    Each configuration is applied in order. A configuration that declares
-    ``prompt_data_types_to_apply`` only converts the types it lists; any other type passes
-    through unchanged. A configuration with ``indexes_to_apply`` converts only some pieces, so
-    the unconverted type survives alongside the converted one and both can reach the target.
+    Converter selection is per piece; target compatibility is checked against the resulting
+    message-level set of types. Retain piece positions until every configuration has run.
+    When the caller cannot know the message's indexes, an indexed configuration conservatively
+    retains both the converted and original types.
 
     Args:
-        start_types (Iterable[PromptDataType]): The data types the request starts with — the
-            pieces of the first message sent to the objective target.
+        start_types (Sequence[PromptDataType]): The ordered types of the request's message pieces.
         request_converters (Sequence[ConverterConfiguration]): The request converter chain, in
             application order.
+        piece_indexes_known (bool): Whether ``start_types`` includes every actual piece in order.
+            Set to ``False`` when projecting a factory without a concrete message.
 
     Returns:
         tuple[set[PromptDataType], str | None]: The data types that can reach the target, and
         ``None``; or an empty set and a message naming the first converter that could not accept
         the type reaching it.
     """
-    output_types: set[PromptDataType] = set(start_types)
+    piece_types: list[set[PromptDataType]] = [{data_type} for data_type in start_types]
 
     for configuration in request_converters:
-        next_output_types: set[PromptDataType] = set()
-
-        # Sorted for a deterministic failure message when several start types are in play.
-        for output_type in sorted(output_types):
-            applies_to_type = (
-                not configuration.prompt_data_types_to_apply or output_type in configuration.prompt_data_types_to_apply
-            )
-            if not applies_to_type:
-                next_output_types.add(output_type)
+        for index, types in enumerate(piece_types):
+            if piece_indexes_known and configuration.indexes_to_apply and index not in configuration.indexes_to_apply:
                 continue
 
-            converted_types: set[PromptDataType] = {output_type}
-            for built_in_converter in configuration.converters:
-                unsupported = sorted(
-                    data_type for data_type in converted_types if not built_in_converter.input_supported(data_type)
-                )
-                if unsupported:
-                    return set(), (
-                        f"{type(built_in_converter).__name__} does not accept {unsupported}; "
-                        f"it accepts {sorted(built_in_converter.supported_input_types)}"
-                    )
-                converted_types = set(built_in_converter.supported_output_types)
+            next_types: set[PromptDataType] = set()
+            for data_type in sorted(types):
+                if (
+                    configuration.prompt_data_types_to_apply
+                    and data_type not in configuration.prompt_data_types_to_apply
+                ):
+                    next_types.add(data_type)
+                    continue
 
-            next_output_types.update(converted_types)
+                converted_types: set[PromptDataType] = {data_type}
+                for converter in configuration.converters:
+                    unsupported = sorted(t for t in converted_types if not converter.input_supported(t))
+                    if unsupported:
+                        return set(), (
+                            f"{type(converter).__name__} does not accept {unsupported}; "
+                            f"it accepts {sorted(converter.supported_input_types)}"
+                        )
+                    converted_types = set(converter.supported_output_types)
+                next_types.update(converted_types)
 
-            # Partial application leaves some pieces unconverted, so the original type survives.
-            if configuration.indexes_to_apply:
-                next_output_types.add(output_type)
+                if not piece_indexes_known and configuration.indexes_to_apply:
+                    next_types.add(data_type)
+            piece_types[index] = next_types
 
-        output_types = next_output_types
-
+    output_types: set[PromptDataType] = set()
+    for types in piece_types:
+        output_types.update(types)
     return output_types, None
 
 
@@ -341,7 +343,7 @@ def _effective_start_types(
     seed_group: AttackSeedGroup,
     seed_technique: AttackTechniqueSeedGroup | None,
     reads_next_message: bool,
-) -> set[PromptDataType] | None:
+) -> list[PromptDataType] | None:
     """
     Determine the data types the first request carries for one seed group.
 
@@ -351,10 +353,10 @@ def _effective_start_types(
     that pairing is rejected elsewhere and is not a modality problem.
 
     Returns:
-        set[PromptDataType] | None: The starting data types, or ``None`` when undeterminable.
+        list[PromptDataType] | None: The ordered starting piece types, or ``None`` when undeterminable.
     """
     if not reads_next_message:
-        return {"text"}
+        return ["text"]
 
     group = seed_group
     if seed_technique is not None:
@@ -371,14 +373,14 @@ def _effective_start_types(
 
     if message is None:
         # No prompts on the group: the attack sends the objective text.
-        return {"text"}
+        return ["text"]
 
     try:
-        types = {piece.converted_value_data_type for piece in message.message_pieces}
+        types = [piece.converted_value_data_type for piece in message.message_pieces]
     except (AttributeError, TypeError):
         return None
 
-    return types or {"text"}
+    return types or ["text"]
 
 
 def _read_modalities(*, target: PromptTarget, direction: str) -> frozenset[frozenset[PromptDataType]] | None:
