@@ -3,16 +3,17 @@
 Source: Copilot review overview and inline comments, plus Roman Lutz's review,
 provided by the user. Fact-checked against local HEAD `c6c07bce1` on
 `multimodal`; this does not independently verify a newer remote PR head.
-The C1 and C2 fixes are committed. The R1 fix is local; R2-R4 remain open.
+The C1, C2, R1, R2, R3, and R4 fixes are committed. R3 and R4 share a
+regression-test helper and were committed together as `d2cea7ed1`.
 
 | ID | Reviewer | Finding | Verdict | Follow-up |
 | --- | --- | --- | --- | --- |
-| C1 | Copilot | Fully selected `indexes_to_apply` incorrectly preserves the original request type. | **Fixed locally** | Ordered piece projection and regressions for all-selected and partially selected messages. |
-| C2 | Copilot | Resume validates unsampled attacks before restoring persisted seed groups. | **Fixed locally** | Replay the stored selection before checking modalities; cover sampled and legacy resume. |
-| R1 | Roman Lutz | Composite scorer intersects child modalities although non-applicable children can return `[]`. | **Fixed locally** | Union known skippable child modalities; preserve `UNKNOWN` for undeclared or strict children. |
-| R2 | Roman Lutz | Response check requires every target output type, unlike selective message scoring. | **Confirmed** | Compare per-response combinations with the scorer's actual filtering/strictness policy. |
-| R3 | Roman Lutz | Response check omits configured response converters. | **Confirmed** | Project the response converter chain before scoring, or report `UNKNOWN` if indeterminate. |
-| R4 | Roman Lutz | A wrapper without `next_message` is assumed to send text. | **Confirmed** | Inspect the actual child contract or return `UNKNOWN`; cover a media-seeded sequential attack. |
+| C1 | Copilot | Fully selected `indexes_to_apply` incorrectly preserves the original request type. | **Committed (`0e9aa2dbe`)** | Ordered piece projection and regressions for all-selected and partially selected messages. |
+| C2 | Copilot | Resume validates unsampled attacks before restoring persisted seed groups. | **Committed (`ea6a2d24e`)** | Replay the stored selection before checking modalities; cover sampled and legacy resume. |
+| R1 | Roman Lutz | Composite scorer intersects child modalities although non-applicable children can return `[]`. | **Committed (`96aed6786`)** | Union known skippable child modalities; preserve `UNKNOWN` for undeclared or strict children. |
+| R2 | Roman Lutz | Response check requires every target output type, unlike selective message scoring. | **Committed (`1c14fad68`)** | Check each output combination against scorer strictness; report `UNKNOWN` for partially scorable alternatives. |
+| R3 | Roman Lutz | Response check omits configured response converters. | **Committed (`d2cea7ed1`)** | Project response converter declarations; report `UNKNOWN` for indexed or unsupported projection. |
+| R4 | Roman Lutz | A wrapper without `next_message` is assumed to send text. | **Committed (`d2cea7ed1`)** | Treat `SequentialAttack` as `UNKNOWN`; cover actual media-seeded child execution. |
 
 The review overview's phrase "compound attacks" refers to R1 and R4; its
 request for a fresh Copilot review is a workflow suggestion, not another finding.
@@ -70,59 +71,60 @@ unchanged.
 
 ### R2 - selective response scoring
 
-The plan-time check flattens all target output combinations into a union and
-requires every emitted type to be declared by the scorer
-(`pyrit/scenario/core/modality_validation.py:197-229`). The default
-`ScorerPromptValidator` does **not** require every piece to be valid
-(`pyrit/score/scorer_prompt_validator.py:26-34,105-130`); `MessageScorer`
-filters unsupported pieces before scoring
-(`pyrit/score/message_scorer.py:1150-1170,1264-1269`). For a response that
-contains both text and audio, `SubStringScorer` can read the text
-(`pyrit/score/true_false/substring_scorer.py:23,64-84`), yet plan-time marks
-the pair incompatible. The reviewer is right about this case; merely
-flattening alternatives also loses whether the target might emit **audio
-alone**, which a text scorer cannot meaningfully score. **Regression:** mixed
-text/audio response with a default text scorer and the corresponding
-`enforce_all_pieces_valid=True` validator; separately assess audio-only
-output rather than declaring every target/scorer pairing compatible.
+The old plan-time check flattened all target output combinations into a
+single union and required every type, even though a default message scorer
+can filter unsupported pieces. The fix checks **each
+combination**: a scorer known to skip unsupported data needs at least one
+supported type, while a strict scorer needs every type. If every combination
+is scorable, the response-chain verdict is `COMPATIBLE`; if none are, it is
+`INCOMPATIBLE`; if some are and others are not, it is `UNKNOWN`. This avoids
+rejecting a working mixed text/audio response while preserving strict
+validation and not promising that a text scorer can score audio-only output.
+The request-chain verdict can still make the overall attack report
+`COMPATIBLE` when the response leg is `UNKNOWN`; this is an existing report
+aggregation convention and does not cause policy to skip.
+
+R2 regression coverage first demonstrated the old false rejection, then
+exercised a real `SubStringScorer` scoring a text/audio message: the text
+scores true and the audio piece is ignored. The branch policy matrix checks
+`SKIP`, `WARN`, and `RAISE` for text-only, mixed text/audio, strict mixed,
+audio-only, and alternative text-or-audio target outputs (15 cases). The
+single mixed response is compatible under every policy; strict mixed and
+audio-only are rejected under `SKIP`/`RAISE` and retained under `WARN`;
+separate text-or-audio outputs yield a response-leg `UNKNOWN` and are kept.
+Cached `origin/main` has no modality-policy module, so no comparison of
+policy verdicts *on main* exists; attempts to create an isolated main
+worktree were denied by the environment. The main `SubStringScorer` source
+still declares only text, but its exact runtime matrix was **not run on
+main**. Do not claim that the main runtime matrix was verified.
 
 ### R3 - response converters
 
-`validate_atomic_attack` passes the raw target straight to `scorer_accepts`
-(`pyrit/scenario/core/modality_validation.py:244-291`); the latter only
-examines declared target output and scorer types (`modality_validation.py:197-229`).
-But `PromptSendingAttack` configures response converters and passes them to
-`PromptNormalizer` (`pyrit/executor/attack/single_turn/prompt_sending.py:95-103,325-339`).
-The normalizer converts the **last** returned response before returning it
-to the attack for scoring (`pyrit/prompt_normalizer/prompt_normalizer.py:186-210`,
-`pyrit/executor/attack/single_turn/prompt_sending.py:341-375`). An
-audio-to-text converter advertises `audio_path` input and `text` output
-(`pyrit/converter/azure_speech_audio_to_text_converter.py:22-38`), illustrating
-the reviewer example without needing a live Azure service. **Regression:**
-offline audio-to-text conversion with an audio-output target and text scorer;
-ensure opaque/conditional/indexed conversions produce `UNKNOWN` where their
-final type cannot safely be inferred. The current validation has no explicit
-response-converter accessor on `AttackStrategy`.
+The code and the newer fork head both still forwarded response converters
+through `PromptSendingAttack` to `PromptNormalizer`, which converts the
+**last** response before scoring; neither exposed them to plan-time
+`scorer_accepts`. The regression test ran an offline audio-to-text converter
+through the real normalizer, then scored its converted response successfully,
+while plan-time validation falsely rejected it before this fix. The local
+fix adds an attack response-converter accessor and projects each declared
+output combination through type-filtered converter configurations before
+testing scorer applicability. Indexed conversion (unknown response piece
+positions) and chains that fail projection return `UNKNOWN`, avoiding a
+false skip. This does not change runtime conversion or pretend to know
+the number and order of pieces in an actual target response.
 
 ### R4 - sequential wrapper
 
-`_reads_next_message` infers whether the first request is text solely from the
-presence of the `next_message` parameter, and `_effective_start_types` returns
-`{"text"}` whenever it is absent
-(`pyrit/scenario/core/modality_validation.py:322-357`).
-`SequentialAttack` deliberately excludes that parameter **because its child
-attacks own their own seed groups**; it dispatches each child and its seed to
-`AttackExecutor` (`pyrit/executor/attack/compound/sequential_attack.py:217-237,248-259,289-335`).
-`AdaptiveTechniqueDispatcher` builds real `SequentialChildAttack` instances
-from seed groups (`pyrit/scenario/scenarios/adaptive/dispatcher.py:212-234`),
-and `AdaptiveScenario` wraps those attacks in `AtomicAttack`
-(`pyrit/scenario/scenarios/adaptive/adaptive_scenario.py:466-495`).
-Consequently a media-seeded child can target an image-only endpoint while the
-outer wrapper is falsely projected as sending text. **Regression:** actual
-media-seeded `SequentialChildAttack` and image-only child target; the compound
-must not be rejected by the wrapper's invented request type. A wrapper may
-also have child targets different from its nominal target, so projecting only
-against that nominal target is not sufficient.
+`SequentialAttack` excludes `next_message` because its children each own
+their seed group, target, converters and scorer; the old wrapper check
+fabricated a text request and checked the nominal target. The new test
+**executes** a real `SequentialChildAttack` with an image seed and image-only
+target: the child succeeds, but pre-fix plan-time validation rejected its
+wrapper. The local fix returns `UNKNOWN` for the wrapper instead of
+misrepresenting its children's requests. That preserves scenario coverage
+without claiming child-level validation; a future explicit per-child
+first-request contract could add that precision. Direct attacks retain
+their existing checks.
 
 ## Verification performed
 
@@ -138,4 +140,16 @@ fail explicitly for incompatible saved groups, and `WARN` retains the saved
 selection. The scenario core suite passes (543 tests); targeted Ruff and
 `ty` checks pass. For R1, the scorer suite plus the affected scenario
 modality and policy tests pass (2,447 tests); targeted Ruff and `ty` checks
-also pass. R2-R4 are not fixed.
+also pass. The subsequent R2-R4 work is described below.
+
+Updated verification for R2-R4: scenario-core, sequential-attack, and
+prompt-sending tests pass together (686 passed). Targeted Ruff, formatter,
+`ty`, and `git diff --check` pass. The R3 audio-to-text regression first
+failed because plan-time saw raw audio, then passed after response projection;
+the test also ran the normalizer conversion and actual text score. R4 first
+ran a real image-seeded child successfully, then demonstrated a failing
+plan-time verdict; after the wrapper fix it returns `UNKNOWN` without
+altering child execution. Main-only baseline runtime testing remains blocked
+by denied worktree creation, as noted under R2. Staging and commits were denied temporarily while the user was unavailable;
+staging succeeded after the user resumed. An isolated main worktree remained
+unavailable, so the `main`-only runtime matrix was not executed; see R2.
