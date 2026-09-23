@@ -12,8 +12,8 @@ Two chains are checked, both for turn 0 only:
 
 * the **request chain** — the seed's own data types, projected through the request converters,
   must be exactly one of the objective target's advertised input modality combinations;
-* the **response chain** — every data type the target may emit must be one the scorer declares
-  it can read.
+* the **response chain** — each advertised response combination is checked against what the
+  scorer declares it can read, including whether it can ignore unsupported pieces.
 
 Anything indeterminate resolves to ``ModalityVerdict.UNKNOWN`` and never blocks a run. A
 target whose capabilities cannot be read, an attack that exposes no scoring config, and a
@@ -196,9 +196,13 @@ def target_accepts(*, target: PromptTarget, request_types: set[PromptDataType]) 
     return ModalityVerdict.INCOMPATIBLE
 
 
-def scorer_accepts(*, scorer: Scorer | None, target: PromptTarget) -> tuple[ModalityVerdict, str | None]:
+def scorer_accepts(
+    *,
+    scorer: Scorer | None,
+    target: PromptTarget,
+) -> tuple[ModalityVerdict, str | None]:
     """
-    Check what a target may emit against what its scorer declares it can read.
+    Check each target output combination against the scorer's declared data types.
 
     This is a type-compatibility check only. It establishes that the scorer can *read* the
     response, not that the resulting score is meaningful for the objective.
@@ -221,14 +225,23 @@ def scorer_accepts(*, scorer: Scorer | None, target: PromptTarget) -> tuple[Moda
     if output_modalities is None:
         return ModalityVerdict.UNKNOWN, None
 
-    emitted = {data_type for combination in output_modalities for data_type in combination}
-    missing = sorted(emitted - declared)
-    if missing:
-        return ModalityVerdict.INCOMPATIBLE, (
-            f"{type(scorer).__name__} cannot read {missing} which the objective target may emit; "
-            f"it declares {sorted(declared)}"
-        )
-    return ModalityVerdict.COMPATIBLE, None
+    if not output_modalities:
+        return ModalityVerdict.UNKNOWN, None
+
+    if scorer.skips_unsupported_data_types:
+        scorable = [bool(combination & declared) for combination in output_modalities]
+    else:
+        scorable = [bool(combination) and combination <= declared for combination in output_modalities]
+
+    if all(scorable):
+        return ModalityVerdict.COMPATIBLE, None
+    if any(scorable):
+        return ModalityVerdict.UNKNOWN, None
+
+    return ModalityVerdict.INCOMPATIBLE, (
+        f"{type(scorer).__name__} cannot score any objective target output combination "
+        f"{_format_modalities(output_modalities)}; it declares {sorted(declared)}"
+    )
 
 
 def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:

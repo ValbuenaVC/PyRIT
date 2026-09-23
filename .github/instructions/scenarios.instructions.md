@@ -64,8 +64,11 @@ retains it as configured.
   text piece selected at index 0 and converted to an image leaves no text; selecting only
   index 0 of two text pieces leaves text in the second piece. Declarations are read literally —
   a target that accepts a lone image advertises `{image_path}` as well as `{text, image_path}`.
-- The **response chain** requires the scorer to declare every data type the target may emit. This
-  is a type check only — it does not establish that the resulting score is meaningful.
+- The **response chain** checks each advertised target output combination against the scorer.
+  A scorer that skips unsupported pieces needs at least one readable type in each combination;
+  a strict scorer needs to read every piece. If only some possible combinations can be scored,
+  the response-chain verdict is `UNKNOWN`, not a reason to skip the attack. This type check
+  does not establish that the resulting score is meaningful.
 - Anything indeterminate is `UNKNOWN` and never blocks a run.
 - Only turn 0 is checked. Media routing across later turns belongs to `_ModalityFeedbackRouter`,
   which multi-turn attacks consult at execution time.

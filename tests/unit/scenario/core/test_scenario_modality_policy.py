@@ -20,7 +20,7 @@ from unit.mocks import get_mock_target
 from unit.modality_profiles import TEXT_ONLY_MODALITIES, VISION_INPUT_MODALITIES
 
 from pyrit.converter import QRCodeConverter
-from pyrit.executor.attack import AttackConverterConfig, PromptSendingAttack
+from pyrit.executor.attack import AttackConverterConfig, AttackScoringConfig, PromptSendingAttack
 from pyrit.models import SCENARIO_RUN_PLAN_METADATA_KEY, AttackSeedGroup, ComponentIdentifier, SeedObjective, SeedPrompt
 from pyrit.prompt_normalizer import ConverterConfiguration
 from pyrit.prompt_target.common.target_requirements import TargetRequirements
@@ -28,7 +28,8 @@ from pyrit.scenario.core import AtomicAttack, BaselineAttackPolicy, Scenario, Sc
 from pyrit.scenario.core.attack_technique import AttackTechnique
 from pyrit.scenario.core.dataset_configuration import DatasetAttackConfiguration, DatasetConfiguration
 from pyrit.scenario.core.modality_validation import ModalityPolicy, ModalityValidationError
-from pyrit.score import Scorer
+from pyrit.score import Scorer, SubStringScorer
+from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
 
 if TYPE_CHECKING:
     from pyrit.scenario.core.scenario_context import ScenarioContext
@@ -122,13 +123,15 @@ async def _resume_sampled_scenario(
     return resumed
 
 
-def _atomic(*, target, converters=None, name="atomic") -> AtomicAttack:
+def _atomic(*, target, converters=None, scorer=None, name="atomic") -> AtomicAttack:
     """A real AtomicAttack sending one objective through an optional converter chain."""
     kwargs = {"objective_target": target}
     if converters is not None:
         kwargs["attack_converter_config"] = AttackConverterConfig(
             request_converters=ConverterConfiguration.from_converters(converters=list(converters))
         )
+    if scorer is not None:
+        kwargs["attack_scoring_config"] = AttackScoringConfig(objective_scorer=scorer)
     return AtomicAttack(
         atomic_attack_name=name,
         attack_technique=AttackTechnique(attack=PromptSendingAttack(**kwargs)),
@@ -204,6 +207,38 @@ async def test_skip_excludes_dropped_attack_from_persisted_run_plan(patch_centra
     [stored] = scenario._memory.get_scenario_results(scenario_result_ids=[scenario._scenario_result_id])
     planned = {group["atomic_attack_name"] for group in stored.metadata["run_plan"]["atomic_groups"]}
     assert planned == {"compatible"}
+
+
+@pytest.mark.parametrize("policy", list(ModalityPolicy))
+@pytest.mark.parametrize(
+    ("outputs", "strict", "incompatible"),
+    [
+        ([{"text"}], False, False),
+        ([{"text", "audio_path"}], False, False),
+        ([{"text", "audio_path"}], True, True),
+        ([{"audio_path"}], False, True),
+        ([{"text"}, {"audio_path"}], False, False),
+    ],
+)
+async def test_modality_policy_selective_text_scorer_output_matrix(
+    patch_central_database, policy, outputs, strict, incompatible
+):
+    """A working mixed response survives all policies; unscorable responses obey policy."""
+
+    class _ConfiguredPolicyScenario(_PolicyScenario):
+        MODALITY_POLICY: ClassVar[ModalityPolicy] = policy
+
+    target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=outputs)
+    validator = ScorerPromptValidator(supported_data_types=["text"], enforce_all_pieces_valid=strict)
+    scorer = SubStringScorer(substring="match", validator=validator)
+    scenario = _ConfiguredPolicyScenario(atomic_attacks_to_return=[_atomic(target=target, scorer=scorer)])
+
+    if incompatible and policy is not ModalityPolicy.WARN:
+        with pytest.raises(ModalityValidationError):
+            await _initialize(scenario, target=target)
+    else:
+        await _initialize(scenario, target=target)
+        assert len(scenario._atomic_attacks) == 1
 
 
 @pytest.mark.parametrize("legacy_plan", [False, True])
