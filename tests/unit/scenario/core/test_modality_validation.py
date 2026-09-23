@@ -50,7 +50,7 @@ from pyrit.scenario.core.modality_validation import (
     target_accepts,
     validate_atomic_attack,
 )
-from pyrit.score import SubStringScorer
+from pyrit.score import SubStringScorer, TrueFalseCompositeScorer, TrueFalseScoreAggregator
 from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
 
 
@@ -370,6 +370,18 @@ def test_scorer_accepts_missing_emitted_type_is_incompatible():
     assert verdict is ModalityVerdict.INCOMPATIBLE
     assert reason is not None
     assert "image_path" in reason
+
+
+def test_scorer_accepts_composite_with_disjoint_child_modalities(patch_central_database):
+    """A text target can be scored by a text child even when another child reads images."""
+    target = get_mock_target(output_modalities=[{"text"}])
+    scorer = TrueFalseCompositeScorer(
+        aggregator=TrueFalseScoreAggregator.OR,
+        scorers=[_scorer_declaring(["text"]), _scorer_declaring(["image_path"])],
+    )
+    verdict, reason = scorer_accepts(scorer=scorer, target=target)
+    assert verdict is ModalityVerdict.COMPATIBLE
+    assert reason is None
 
 
 def test_scorer_accepts_none_scorer_is_unknown():

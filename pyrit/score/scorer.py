@@ -217,6 +217,11 @@ class Scorer(Identifiable, abc.ABC):
         """
         return None
 
+    @property
+    def skips_unsupported_data_types(self) -> bool:
+        """Whether unsupported data types are known to produce no score rather than an error."""
+        return False
+
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """
         Return the condition types this scorer can use as its criterion.

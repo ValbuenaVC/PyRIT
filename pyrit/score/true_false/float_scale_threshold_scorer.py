@@ -90,6 +90,11 @@ class FloatScaleThresholdScorer(TrueFalseScorer):
         """
         return self._scorer.supported_data_types
 
+    @property
+    def skips_unsupported_data_types(self) -> bool:
+        """Whether the wrapped scorer skips unsupported response types."""
+        return self._scorer.skips_unsupported_data_types
+
     def _build_identifier(self) -> ComponentIdentifier:
         """
         Build the identifier for this scorer.

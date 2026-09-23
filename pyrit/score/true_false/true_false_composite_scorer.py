@@ -74,23 +74,27 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
     @property
     def supported_data_types(self) -> frozenset[PromptDataType] | None:
         """
-        The intersection of what every child scorer declares.
+        The types for which at least one child can provide an applicable score.
 
-        A composite can only score evidence all of its children can score. One child with an
-        undeclared (unknown) set makes the whole composite unknown — a declared sibling cannot
-        vouch for it.
+        Runtime ignores children that return ``[]``, regardless of aggregator. A child with
+        undeclared types or one that may raise on unsupported data makes this unknown.
 
         Returns:
-            frozenset[PromptDataType] | None: The shared declared data types, or ``None`` if any
-            child is undeclared.
+            frozenset[PromptDataType] | None: The union of declared child types, or ``None``
+            when a child cannot safely be skipped.
         """
-        shared: frozenset[PromptDataType] | None = None
+        supported: set[PromptDataType] = set()
         for scorer in self._scorers:
             declared = scorer.supported_data_types
-            if declared is None:
+            if declared is None or not scorer.skips_unsupported_data_types:
                 return None
-            shared = declared if shared is None else shared & declared
-        return shared
+            supported.update(declared)
+        return frozenset(supported)
+
+    @property
+    def skips_unsupported_data_types(self) -> bool:
+        """Whether every child can ignore unsupported data types without raising."""
+        return all(scorer.skips_unsupported_data_types for scorer in self._scorers)
 
     def _build_identifier(self) -> ComponentIdentifier:
         """

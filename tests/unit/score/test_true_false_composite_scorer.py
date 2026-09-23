@@ -21,6 +21,7 @@ from pyrit.score import (
     MessageTrueFalseScorer,
     ScorerPromptValidator,
     TrueFalseCompositeScorer,
+    TrueFalseInverterScorer,
     TrueFalseScoreAggregator,
 )
 
@@ -220,6 +221,70 @@ async def test_composite_scorer_ignores_non_applicable_child(mock_request, true_
 
     scores = await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
 
+    assert len(scores) == 1
+    assert scores[0].get_value() is True
+
+
+@pytest.mark.parametrize("aggregator", [TrueFalseScoreAggregator.OR, TrueFalseScoreAggregator.AND])
+async def test_composite_scorer_disjoint_child_modalities_score_applicable_child(
+    mock_request, true_scorer, false_scorer, aggregator
+):
+    """OR and AND both aggregate only children that score the response."""
+    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"])
+    scorer = TrueFalseCompositeScorer(aggregator=aggregator, scorers=[true_scorer, false_scorer])
+
+    assert scorer.supported_data_types == frozenset({"text", "image_path"})
+    scores = await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
+    assert len(scores) == 1
+    assert scores[0].get_value() is True
+    assert "This is a true score" in scores[0].score_rationale
+    assert "This is a false score" not in scores[0].score_rationale
+
+
+@pytest.mark.parametrize(
+    "validator_options",
+    [{"enforce_all_pieces_valid": True}, {"raise_on_no_valid_pieces": True}],
+)
+def test_composite_scorer_strict_child_modality_is_unknown(
+    patch_central_database, true_scorer, false_scorer, validator_options
+):
+    """A child that raises instead of returning [] cannot vouch for the union."""
+    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"], **validator_options)
+    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
+    assert scorer.supported_data_types is None
+
+
+async def test_composite_scorer_strict_child_raises_instead_of_skipping(mock_request, true_scorer, false_scorer):
+    """The strict child prevents the composite from scoring text despite a text-capable sibling."""
+    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"], enforce_all_pieces_valid=True)
+    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
+
+    assert scorer.supported_data_types is None
+    with pytest.raises(RuntimeError, match="is not supported"):
+        await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
+
+
+def test_composite_scorer_undeclared_child_modality_is_unknown(patch_central_database, true_scorer, false_scorer):
+    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
+    assert scorer.supported_data_types is None
+
+
+async def test_composite_scorer_nested_wrapper_preserves_applicability(mock_request, true_scorer, false_scorer):
+    """A nested composite and inverter keep their children's skip behavior."""
+    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"])
+    nested = TrueFalseCompositeScorer(
+        aggregator=TrueFalseScoreAggregator.AND,
+        scorers=[true_scorer, TrueFalseInverterScorer(scorer=false_scorer)],
+    )
+    outer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[nested])
+
+    assert outer.supported_data_types == frozenset({"text", "image_path"})
+    scores = await outer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
     assert len(scores) == 1
     assert scores[0].get_value() is True
 

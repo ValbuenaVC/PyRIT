@@ -11,6 +11,7 @@ time. These tests pin a public, plan-time-readable surface:
 
 * ``ScorerPromptValidator.supported_data_types`` / ``has_declared_data_types``
 * ``Scorer.supported_data_types`` — ``None`` when undeclared or unknown
+* ``Scorer.skips_unsupported_data_types`` — whether unsupported evidence can be ignored
 * ``MessageScorer`` reads its validator; wrapper scorers delegate to their children
 * the two former private reach-ins (audio transcript, video frames) use the public surface
 
@@ -67,6 +68,19 @@ def test_validator_supported_data_types_declared_returns_declared():
     assert validator.has_declared_data_types is True
 
 
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({}, True),
+        ({"enforce_all_pieces_valid": True}, False),
+        ({"raise_on_no_valid_pieces": True}, False),
+    ],
+)
+def test_validator_skip_contract_reflects_strictness(options, expected):
+    validator = ScorerPromptValidator(supported_data_types=["text"], **options)
+    assert validator.skips_unsupported_data_types is expected
+
+
 def test_validator_supported_data_types_undeclared_returns_all_types():
     """
     Undeclared falls back to every PromptDataType and is marked as *not* declared.
@@ -107,6 +121,7 @@ def test_scorer_base_supported_data_types_is_none_for_non_message_scorer():
     """A TrueFalseScorer that is not a MessageScorer has no validator and reports None, not AttributeError."""
     scorer = ManualScorer(value=True, rationale="r", user_identifier="u")
     assert scorer.supported_data_types is None
+    assert scorer.skips_unsupported_data_types is False
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +129,9 @@ def test_scorer_base_supported_data_types_is_none_for_non_message_scorer():
 # ---------------------------------------------------------------------------
 def test_message_scorer_declared_types_returns_frozenset():
     """SubStringScorer's default validator declares ["text"]; the accessor reports exactly that."""
-    assert SubStringScorer(substring="x").supported_data_types == frozenset({"text"})
+    scorer = SubStringScorer(substring="x")
+    assert scorer.supported_data_types == frozenset({"text"})
+    assert scorer.skips_unsupported_data_types is True
 
 
 def test_message_scorer_multi_type_declaration_round_trips():
@@ -155,6 +172,7 @@ def test_inverter_scorer_delegates_to_wrapped_scorer():
     """TrueFalseInverterScorer reports its wrapped scorer's declaration."""
     scorer = TrueFalseInverterScorer(scorer=_substring_scorer(declared=["audio_path"]))
     assert scorer.supported_data_types == frozenset({"audio_path"})
+    assert scorer.skips_unsupported_data_types is True
 
 
 def test_inverter_scorer_delegates_none():
@@ -163,8 +181,8 @@ def test_inverter_scorer_delegates_none():
     assert scorer.supported_data_types is None
 
 
-def test_composite_scorer_intersects_children():
-    """A composite can only score what *every* child can score: the intersection."""
+def test_composite_scorer_unions_skippable_children():
+    """A composite scores whichever children apply, even when its aggregator is AND."""
     scorer = TrueFalseCompositeScorer(
         aggregator=TrueFalseScoreAggregator.AND,
         scorers=[
@@ -172,11 +190,12 @@ def test_composite_scorer_intersects_children():
             _substring_scorer(declared=["text", "audio_path"]),
         ],
     )
-    assert scorer.supported_data_types == frozenset({"text"})
+    assert scorer.supported_data_types == frozenset({"text", "image_path", "audio_path"})
+    assert scorer.skips_unsupported_data_types is True
 
 
 def test_composite_scorer_identical_children_returns_shared_set():
-    """Identical declarations intersect to themselves."""
+    """Identical declarations union to themselves."""
     scorer = TrueFalseCompositeScorer(
         aggregator=TrueFalseScoreAggregator.OR,
         scorers=[_substring_scorer(declared=["text"]), _substring_scorer(declared=["text"])],
@@ -199,7 +218,7 @@ def test_nested_wrappers_propagate_declaration():
         aggregator=TrueFalseScoreAggregator.AND,
         scorers=[_substring_scorer(declared=["text", "image_path"]), _substring_scorer(declared=["image_path"])],
     )
-    assert TrueFalseInverterScorer(scorer=composite).supported_data_types == frozenset({"image_path"})
+    assert TrueFalseInverterScorer(scorer=composite).supported_data_types == frozenset({"text", "image_path"})
 
 
 # ---------------------------------------------------------------------------

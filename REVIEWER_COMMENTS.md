@@ -3,13 +3,13 @@
 Source: Copilot review overview and inline comments, plus Roman Lutz's review,
 provided by the user. Fact-checked against local HEAD `c6c07bce1` on
 `multimodal`; this does not independently verify a newer remote PR head.
-The C1 fix is committed; the C2 fix is local. The other four findings remain open.
+The C1 and C2 fixes are committed. The R1 fix is local; R2-R4 remain open.
 
 | ID | Reviewer | Finding | Verdict | Follow-up |
 | --- | --- | --- | --- | --- |
 | C1 | Copilot | Fully selected `indexes_to_apply` incorrectly preserves the original request type. | **Fixed locally** | Ordered piece projection and regressions for all-selected and partially selected messages. |
 | C2 | Copilot | Resume validates unsampled attacks before restoring persisted seed groups. | **Fixed locally** | Replay the stored selection before checking modalities; cover sampled and legacy resume. |
-| R1 | Roman Lutz | Composite scorer intersects child modalities although non-applicable children can return `[]`. | **Confirmed** | Reflect actual child applicability, including disjoint modalities; test a real score. |
+| R1 | Roman Lutz | Composite scorer intersects child modalities although non-applicable children can return `[]`. | **Fixed locally** | Union known skippable child modalities; preserve `UNKNOWN` for undeclared or strict children. |
 | R2 | Roman Lutz | Response check requires every target output type, unlike selective message scoring. | **Confirmed** | Compare per-response combinations with the scorer's actual filtering/strictness policy. |
 | R3 | Roman Lutz | Response check omits configured response converters. | **Confirmed** | Project the response converter chain before scoring, or report `UNKNOWN` if indeterminate. |
 | R4 | Roman Lutz | A wrapper without `next_message` is assumed to send text. | **Confirmed** | Inspect the actual child contract or return `UNKNOWN`; cover a media-seeded sequential attack. |
@@ -54,20 +54,19 @@ exercise both resume formats with incompatible unsampled and saved groups.
 
 ### R1 - composite scorer
 
-`TrueFalseCompositeScorer.supported_data_types` intersects every child's
-declaration (`pyrit/score/true_false/true_false_composite_scorer.py:75-93`).
-At runtime it filters out non-applicable child results before aggregating
-(`true_false_composite_scorer.py:145-174`). A message scorer with no supported
-piece returns `[]` rather than a negative score (`pyrit/score/message_scorer.py:1150-1170`,
-`pyrit/score/true_false/true_false_scorer.py:170-185`); an existing test confirms
-the composite ignores a non-applicable child, albeit via role filtering rather
-than disjoint modalities
-(`tests/unit/score/test_true_false_composite_scorer.py:215-225`).
-Text-only and image-only children report an empty intersection even though the
-text child can score a text response. The plan-time check rejects the empty
-declaration (`modality_validation.py:214-229`). **Regression:** disjoint text
-and image children, both the declared capability and an actual text score.
-Keep `None` (undeclared child capability) distinct from an empty declared set.
+Runtime filters out children that return `[]` before aggregating, even with
+AND (`pyrit/score/true_false/true_false_composite_scorer.py:145-174`).
+The old intersection declared no types for a text-only child paired with an
+image-only child, incorrectly rejecting a working text response. The local
+fix unions declared modalities only when every child is known to skip
+unsupported pieces. `ScorerPromptValidator` exposes that behavior from its
+`enforce_all_pieces_valid` and `raise_on_no_valid_pieces` settings;
+`MessageScorer` and the nested wrappers forward it. Undeclared or strict
+children yield `None` (`UNKNOWN`) rather than falsely promising
+compatibility. New regression coverage scores actual text through disjoint
+children with **both OR and AND**, checks plan-time compatibility, and
+exercises strict, undeclared, and nested children. Runtime aggregation is
+unchanged.
 
 ### R2 - selective response scoring
 
@@ -137,4 +136,6 @@ atomic-attack regression coverage. The C2 change adds five resume regression
 cases: plan and legacy replay ignore incompatible unsampled groups, both
 fail explicitly for incompatible saved groups, and `WARN` retains the saved
 selection. The scenario core suite passes (543 tests); targeted Ruff and
-`ty` checks pass. The four remaining findings are not fixed.
+`ty` checks pass. For R1, the scorer suite plus the affected scenario
+modality and policy tests pass (2,447 tests); targeted Ruff and `ty` checks
+also pass. R2-R4 are not fixed.
