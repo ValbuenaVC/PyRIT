@@ -946,7 +946,8 @@ class Scenario(ABC):
         seed_groups_by_dataset = await self._resolve_seed_groups_by_dataset_async(apply_sampling=not is_resume)
         context = self._build_scenario_context(seed_groups_by_dataset=seed_groups_by_dataset)
         self._atomic_attacks = await self._build_atomic_attacks_async(context=context)
-        self._atomic_attacks = self._apply_modality_policy(atomic_attacks=self._atomic_attacks)
+        if not is_resume:
+            self._atomic_attacks = self._apply_modality_policy(atomic_attacks=self._atomic_attacks)
 
         # Build the canonical scenario identifier once params/techniques/datasets
         # are resolved, so both the resume check and the new-result branch share the
@@ -975,6 +976,8 @@ class Scenario(ABC):
                 self._apply_persisted_run_plan(stored_plan=stored_plan)
             else:
                 self._apply_persisted_objectives(stored_result=stored_result)
+            self._atomic_attacks = self._apply_modality_policy(atomic_attacks=self._atomic_attacks, is_resume=True)
+            if stored_plan is None:
                 reconstructed_plan = self._build_run_plan()
                 metadata = dict(stored_result.metadata)
                 metadata[SCENARIO_RUN_PLAN_METADATA_KEY] = reconstructed_plan.model_dump(mode="json", exclude_none=True)
@@ -1438,23 +1441,26 @@ class Scenario(ABC):
             seed_groups_by_dataset=seed_groups_by_dataset,
         )
 
-    def _apply_modality_policy(self, *, atomic_attacks: list[AtomicAttack]) -> list[AtomicAttack]:
+    def _apply_modality_policy(
+        self, *, atomic_attacks: list[AtomicAttack], is_resume: bool = False
+    ) -> list[AtomicAttack]:
         """
         Derive each atomic attack's modality compatibility and apply ``MODALITY_POLICY``.
 
-        Runs once per ``initialize_async``, on both the fresh and the resume path, before the
-        display-group map and the persisted result slots are built from the surviving attacks.
-        Attacks whose compatibility cannot be determined are always kept.
+        Runs once per ``initialize_async``. On resume, the saved plan is reconstructed
+        first, so unsampled seed groups do not affect the verdict. Attacks whose
+        compatibility cannot be determined are always kept.
 
         Args:
             atomic_attacks (list[AtomicAttack]): The attacks just built for this run.
+            is_resume (bool): Whether these attacks are the saved run's reconstructed plan.
 
         Returns:
             list[AtomicAttack]: The attacks that should run.
 
         Raises:
             ModalityValidationError: Under ``RAISE`` when any attack is incompatible, or under
-                ``SKIP`` when every attack would be dropped.
+                ``SKIP`` when the saved plan would change or every new attack would be dropped.
         """
         reports = [validate_atomic_attack(atomic_attack=attack) for attack in atomic_attacks]
         incompatible = [report for report in reports if report.verdict is ModalityVerdict.INCOMPATIBLE]
@@ -1474,6 +1480,12 @@ class Scenario(ABC):
                 f"Modality incompatibility in {len(incompatible)} atomic attack(s); running anyway:\n{summary}"
             )
             return atomic_attacks
+
+        if is_resume:
+            raise ModalityValidationError(
+                f"Scenario result id '{self._scenario_result_id}' cannot resume: "
+                f"{len(incompatible)} saved atomic attack(s) are modality incompatible:\n{summary}"
+            )
 
         for report in incompatible:
             logger.warning(f"Skipping atomic attack '{report.atomic_attack_name}': {'; '.join(report.reasons)}")

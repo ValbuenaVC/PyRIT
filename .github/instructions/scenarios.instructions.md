@@ -51,7 +51,10 @@ the constructor — no classmethod indirection required.
 `Scenario.initialize_async` validates every `AtomicAttack` returned by
 `_build_atomic_attacks_async` before any of them is queued, and applies `MODALITY_POLICY`
 (`ModalityPolicy.SKIP` by default, also `WARN` and `RAISE`). Scenario authors get this for free
-and normally do not override it.
+and normally do not override it. On resume, it first reconstructs the persisted seed groups
+from the full dataset without resampling, then checks only those groups. `SKIP` fails loudly
+instead of removing an incompatible saved attack and silently changing the run plan; `WARN`
+retains it as configured.
 
 - The **request chain** projects each seed group's data types through the attack's request
   converters; the resulting set of data types must be exactly one of the target's advertised

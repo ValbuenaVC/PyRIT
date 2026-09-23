@@ -4,16 +4,16 @@
 """
 Tests for ``Scenario.MODALITY_POLICY`` — plan-time enforcement of modality compatibility.
 
-Validation runs inside ``initialize_async``, immediately after ``_build_atomic_attacks_async``
-returns and before any attack is queued or any prompt is sent. The policy decides what happens
-to an attack whose payload provably cannot reach its target or scorer.
+Validation runs inside ``initialize_async`` before any attack is queued or any prompt is sent.
+Fresh runs check built attacks; resumed runs check only the replayed seed groups. The policy
+decides what happens to an attack whose payload provably cannot reach its target or scorer.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING, ClassVar
+from unittest.mock import MagicMock, patch
 
 import pytest
 from unit.mocks import get_mock_target
@@ -21,14 +21,17 @@ from unit.modality_profiles import TEXT_ONLY_MODALITIES, VISION_INPUT_MODALITIES
 
 from pyrit.converter import QRCodeConverter
 from pyrit.executor.attack import AttackConverterConfig, PromptSendingAttack
-from pyrit.models import AttackSeedGroup, ComponentIdentifier, SeedObjective
+from pyrit.models import SCENARIO_RUN_PLAN_METADATA_KEY, AttackSeedGroup, ComponentIdentifier, SeedObjective, SeedPrompt
 from pyrit.prompt_normalizer import ConverterConfiguration
 from pyrit.prompt_target.common.target_requirements import TargetRequirements
 from pyrit.scenario.core import AtomicAttack, BaselineAttackPolicy, Scenario, ScenarioTechnique
 from pyrit.scenario.core.attack_technique import AttackTechnique
-from pyrit.scenario.core.dataset_configuration import DatasetConfiguration
+from pyrit.scenario.core.dataset_configuration import DatasetAttackConfiguration, DatasetConfiguration
 from pyrit.scenario.core.modality_validation import ModalityPolicy, ModalityValidationError
 from pyrit.score import Scorer
+
+if TYPE_CHECKING:
+    from pyrit.scenario.core.scenario_context import ScenarioContext
 
 _TEST_SCORER_ID = ComponentIdentifier(class_name="MockScorer", class_module="tests.unit.scenario")
 
@@ -63,6 +66,60 @@ class _PolicyScenario(Scenario):
 
     async def _build_atomic_attacks_async(self, *, context):
         return self._atomic_attacks_to_return
+
+
+class _SampledPolicyScenario(_PolicyScenario):
+    """Build one attack from the dataset's sampled or replayed seed groups."""
+
+    async def _resolve_seed_groups_by_dataset_async(
+        self, *, apply_sampling: bool = True
+    ) -> dict[str, list[AttackSeedGroup]]:
+        return await Scenario._resolve_seed_groups_by_dataset_async(self, apply_sampling=apply_sampling)
+
+    async def _build_atomic_attacks_async(self, *, context: ScenarioContext) -> list[AtomicAttack]:
+        return [
+            AtomicAttack(
+                atomic_attack_name="sampled",
+                attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=context.objective_target)),
+                seed_groups=list(context.seed_groups),
+                memory_labels=context.memory_labels,
+            )
+        ]
+
+
+def _sampled_config() -> DatasetAttackConfiguration:
+    return DatasetAttackConfiguration(
+        seed_groups=[
+            AttackSeedGroup(seeds=[SeedObjective(value="saved text")]),
+            AttackSeedGroup(
+                seeds=[SeedObjective(value="unsampled image"), SeedPrompt(value="seed.png", data_type="image_path")]
+            ),
+        ],
+        max_dataset_size=1,
+    )
+
+
+async def _start_sampled_scenario(
+    *, target, scenario_class: type[_SampledPolicyScenario] = _SampledPolicyScenario
+) -> _SampledPolicyScenario:
+    with patch(
+        "pyrit.scenario.core.dataset_configuration.random.sample",
+        side_effect=lambda population, k: list(population)[:k],
+    ):
+        scenario = scenario_class(default_dataset_config=_sampled_config())
+        await _initialize(scenario, target=target)
+    assert len(scenario._atomic_attacks[0].seed_groups) == 1
+    assert scenario._atomic_attacks[0].seed_groups[0].objective.value == "saved text"
+    return scenario
+
+
+async def _resume_sampled_scenario(
+    *, scenario_result_id: str, target, scenario_class: type[_SampledPolicyScenario] = _SampledPolicyScenario
+) -> _SampledPolicyScenario:
+    resumed = scenario_class(default_dataset_config=_sampled_config(), scenario_result_id=scenario_result_id)
+    with patch("pyrit.scenario.core.dataset_configuration.random.sample", side_effect=AssertionError("resampled")):
+        await _initialize(resumed, target=target)
+    return resumed
 
 
 def _atomic(*, target, converters=None, name="atomic") -> AtomicAttack:
@@ -147,6 +204,75 @@ async def test_skip_excludes_dropped_attack_from_persisted_run_plan(patch_centra
     [stored] = scenario._memory.get_scenario_results(scenario_result_ids=[scenario._scenario_result_id])
     planned = {group["atomic_attack_name"] for group in stored.metadata["run_plan"]["atomic_groups"]}
     assert planned == {"compatible"}
+
+
+@pytest.mark.parametrize("legacy_plan", [False, True])
+async def test_resume_validates_only_persisted_seed_groups(patch_central_database, legacy_plan):
+    """An unsampled image group cannot invalidate the saved text-only attack."""
+    target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
+    original = await _start_sampled_scenario(target=target)
+    scenario_result_id = original._scenario_result_id
+    [stored] = original._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
+    original_metadata = dict(stored.metadata)
+    if legacy_plan:
+        original_metadata.pop(SCENARIO_RUN_PLAN_METADATA_KEY)
+        original._memory.update_scenario_metadata(scenario_result_id=scenario_result_id, metadata=original_metadata)
+
+    resumed = await _resume_sampled_scenario(scenario_result_id=scenario_result_id, target=target)
+
+    assert resumed._scenario_result_id == scenario_result_id
+    assert len(resumed._atomic_attacks) == 1
+    assert [group.logical_id for group in resumed._atomic_attacks[0].seed_groups] == [
+        original._atomic_attacks[0].seed_groups[0].logical_id
+    ]
+    [after] = resumed._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
+    assert SCENARIO_RUN_PLAN_METADATA_KEY in after.metadata
+    assert after.metadata["objective_hashes"] == original_metadata["objective_hashes"]
+    if not legacy_plan:
+        assert after.metadata[SCENARIO_RUN_PLAN_METADATA_KEY] == original_metadata[SCENARIO_RUN_PLAN_METADATA_KEY]
+
+
+@pytest.mark.parametrize("legacy_plan", [False, True])
+async def test_resume_rejects_incompatible_persisted_seed_group(patch_central_database, legacy_plan):
+    """SKIP must not silently alter a stored plan when a saved group becomes incompatible."""
+    target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
+    original = await _start_sampled_scenario(target=target)
+    scenario_result_id = original._scenario_result_id
+    [stored] = original._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
+    metadata = dict(stored.metadata)
+    if legacy_plan:
+        metadata.pop(SCENARIO_RUN_PLAN_METADATA_KEY)
+        original._memory.update_scenario_metadata(scenario_result_id=scenario_result_id, metadata=metadata)
+
+    changed_target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    with pytest.raises(ModalityValidationError, match="cannot resume.*saved.*incompatible"):
+        await _resume_sampled_scenario(scenario_result_id=scenario_result_id, target=changed_target)
+
+    [after] = original._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
+    assert after.metadata == metadata
+
+
+async def test_resume_warn_retains_incompatible_persisted_seed_group(patch_central_database, caplog):
+    """WARN keeps the saved group rather than changing the replayed plan."""
+
+    class _WarnSampledPolicyScenario(_SampledPolicyScenario):
+        MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.WARN
+
+    target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
+    original = await _start_sampled_scenario(target=target, scenario_class=_WarnSampledPolicyScenario)
+    changed_target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+
+    with caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.scenario"):
+        resumed = await _resume_sampled_scenario(
+            scenario_result_id=original._scenario_result_id,
+            target=changed_target,
+            scenario_class=_WarnSampledPolicyScenario,
+        )
+
+    assert [group.logical_id for group in resumed._atomic_attacks[0].seed_groups] == [
+        original._atomic_attacks[0].seed_groups[0].logical_id
+    ]
+    assert any("modality incompatibility" in record.getMessage().lower() for record in caplog.records)
 
 
 async def test_skip_logs_a_warning_naming_the_attack_and_reason(patch_central_database, caplog):

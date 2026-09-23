@@ -3,12 +3,12 @@
 Source: Copilot review overview and inline comments, plus Roman Lutz's review,
 provided by the user. Fact-checked against local HEAD `c6c07bce1` on
 `multimodal`; this does not independently verify a newer remote PR head.
-The C1 fix is recorded below; the other five findings remain open.
+The C1 fix is committed; the C2 fix is local. The other four findings remain open.
 
 | ID | Reviewer | Finding | Verdict | Follow-up |
 | --- | --- | --- | --- | --- |
 | C1 | Copilot | Fully selected `indexes_to_apply` incorrectly preserves the original request type. | **Fixed locally** | Ordered piece projection and regressions for all-selected and partially selected messages. |
-| C2 | Copilot | Resume validates unsampled attacks before restoring persisted seed groups. | **Confirmed** | Replay the stored selection before checking modalities; cover sampled and legacy resume. |
+| C2 | Copilot | Resume validates unsampled attacks before restoring persisted seed groups. | **Fixed locally** | Replay the stored selection before checking modalities; cover sampled and legacy resume. |
 | R1 | Roman Lutz | Composite scorer intersects child modalities although non-applicable children can return `[]`. | **Confirmed** | Reflect actual child applicability, including disjoint modalities; test a real score. |
 | R2 | Roman Lutz | Response check requires every target output type, unlike selective message scoring. | **Confirmed** | Compare per-response combinations with the scorer's actual filtering/strictness policy. |
 | R3 | Roman Lutz | Response check omits configured response converters. | **Confirmed** | Project the response converter chain before scoring, or report `UNKNOWN` if indeterminate. |
@@ -40,19 +40,17 @@ and deliberately retain their previous conservative branch projection via
 
 ### C2 - resumed plan
 
-`initialize_async` resolves all seed groups on resume and applies modality policy
-to the rebuilt attacks **before** it reads the stored run plan and restores its
-seed groups (`pyrit/scenario/core/scenario.py:941-978`). The policy checks every
-seed group and drops the whole atomic attack when any is incompatible
-(`modality_validation.py:258-299`, `scenario.py:1441-1485`). A formerly
-unsampled incompatible group can therefore remove a planned atomic group,
-which `_apply_persisted_run_plan` then declares unreconstructable
-(`scenario.py:1133-1162`). Legacy runs without a stored plan instead narrow
-by persisted objective hashes at `scenario.py:1167-1208`, also too late.
-Existing resume coverage checks sample replay with modality-neutral groups
-(`tests/unit/scenario/core/test_scenario.py:1287-1353`), not this interaction.
-**Regression:** resume a sampled, persisted plan with an incompatible
-unsampled row in the same atomic attack; repeat for legacy objective-hash replay.
+The original ordering applied modality policy to all rebuilt seed groups
+*before* narrowing to the persisted plan, so an unsampled incompatible group
+could discard an atomic attack needed by a compatible saved group. The local
+change retains full-dataset resolution without random resampling, but
+reconstructs the stored seed groups via `_apply_persisted_run_plan` (or
+`_apply_persisted_objectives` for a legacy result) **before** modality
+validation. On resume, default `SKIP` raises `ModalityValidationError` if a
+saved group is incompatible: silently removing it would change the run being
+resumed. `WARN` retains it, and new-run filtering is unchanged. Legacy run
+plan metadata is only written after validation succeeds. Regression tests
+exercise both resume formats with incompatible unsampled and saved groups.
 
 ### R1 - composite scorer
 
@@ -135,7 +133,8 @@ The initial fact-check ran four existing tests (4 passed, 70 deselected):
 `test_composite_scorer_ignores_non_applicable_child`, and
 `test_skip_excludes_dropped_attack_from_persisted_run_plan`. The C1 change
 adds all-selected, partially selected, chained-index, unknown-index, and
-atomic-attack regression coverage. The targeted modality, factory, and
-scenario-policy files now pass together (144 passed), the broader scenario
-core tests pass (538 passed), and targeted Ruff and `ty` checks pass. The
-remaining findings are not fixed.
+atomic-attack regression coverage. The C2 change adds five resume regression
+cases: plan and legacy replay ignore incompatible unsampled groups, both
+fail explicitly for incompatible saved groups, and `WARN` retains the saved
+selection. The scenario core suite passes (543 tests); targeted Ruff and
+`ty` checks pass. The four remaining findings are not fixed.
