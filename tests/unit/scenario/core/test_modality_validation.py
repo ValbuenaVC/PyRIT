@@ -17,8 +17,11 @@ scenario-level plan-time validation share one implementation rather than driftin
 
 from __future__ import annotations
 
+import asyncio
+import os
+
 import pytest
-from unit.mocks import get_mock_target
+from unit.mocks import MockPromptTarget, get_image_message_piece, get_mock_target, store_message
 from unit.modality_profiles import (
     IMAGE_EDIT_INPUT_MODALITIES,
     TEXT_ONLY_MODALITIES,
@@ -28,6 +31,8 @@ from unit.modality_profiles import (
 from pyrit.converter import (
     AudioEchoConverter,
     Base64Converter,
+    Converter,
+    ConverterResult,
     ImageCompressionConverter,
     QRCodeConverter,
 )
@@ -36,9 +41,20 @@ from pyrit.executor.attack import (
     AttackParameters,
     AttackScoringConfig,
     PromptSendingAttack,
+    SequentialAttack,
+    SequentialChildAttack,
 )
-from pyrit.models import AttackSeedGroup, AttackTechniqueSeedGroup, SeedObjective, SeedPrompt
-from pyrit.prompt_normalizer import ConverterConfiguration
+from pyrit.models import (
+    AttackSeedGroup,
+    AttackTechniqueSeedGroup,
+    Message,
+    MessagePiece,
+    PromptDataType,
+    SeedObjective,
+    SeedPrompt,
+)
+from pyrit.prompt_normalizer import ConverterConfiguration, PromptNormalizer
+from pyrit.prompt_target.common.target_capabilities import TargetCapabilities
 from pyrit.scenario.core.atomic_attack import AtomicAttack
 from pyrit.scenario.core.attack_technique import AttackTechnique
 from pyrit.scenario.core.modality_validation import (
@@ -50,13 +66,23 @@ from pyrit.scenario.core.modality_validation import (
     target_accepts,
     validate_atomic_attack,
 )
-from pyrit.score import SubStringScorer, TrueFalseCompositeScorer, TrueFalseScoreAggregator
+from pyrit.score import MessageScorable, SubStringScorer, TrueFalseCompositeScorer, TrueFalseScoreAggregator
 from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
 
 
 def _configs(*converters) -> list[ConverterConfiguration]:
     """One configuration per converter, mirroring ``ConverterConfiguration.from_converters``."""
     return ConverterConfiguration.from_converters(converters=list(converters))
+
+
+class _OfflineAudioToTextConverter(Converter):
+    SUPPORTED_INPUT_TYPES = ("audio_path",)
+    SUPPORTED_OUTPUT_TYPES = ("text",)
+
+    async def convert_async(self, *, prompt: str, input_type: PromptDataType = "audio_path") -> ConverterResult:
+        if not self.input_supported(input_type):
+            raise ValueError(f"Unsupported input type: {input_type}")
+        return ConverterResult(output_text="matched transcript", output_type="text")
 
 
 def _scorer_declaring(declared) -> SubStringScorer:
@@ -84,6 +110,7 @@ def _atomic(
     target,
     converters=None,
     converter_configurations=None,
+    response_converter_configurations=None,
     scorer=None,
     seed_groups=None,
     seed_technique=None,
@@ -92,13 +119,14 @@ def _atomic(
 ) -> AtomicAttack:
     """Build a real AtomicAttack around a PromptSendingAttack with the given wiring."""
     kwargs = {"objective_target": target}
-    if converters is not None or converter_configurations is not None:
+    if converters is not None or converter_configurations is not None or response_converter_configurations is not None:
         kwargs["attack_converter_config"] = AttackConverterConfig(
             request_converters=(
                 converter_configurations
                 if converter_configurations is not None
-                else ConverterConfiguration.from_converters(converters=list(converters))
-            )
+                else ConverterConfiguration.from_converters(converters=list(converters or []))
+            ),
+            response_converters=response_converter_configurations or [],
         )
     if scorer is not None:
         kwargs["attack_scoring_config"] = AttackScoringConfig(objective_scorer=scorer)
@@ -384,6 +412,89 @@ def test_scorer_accepts_composite_with_disjoint_child_modalities(patch_central_d
     assert reason is None
 
 
+async def test_scorer_accepts_mixed_response_with_selective_text_scorer(patch_central_database):
+    """The text piece can be scored without reading the audio piece."""
+    scorer = SubStringScorer(substring="matched")
+    response = Message(
+        message_pieces=[
+            MessagePiece(role="assistant", original_value="matched text"),
+            MessagePiece(role="assistant", original_value="audio.wav", original_value_data_type="audio_path"),
+        ]
+    )
+    scores = await scorer.score_async(scorable=MessageScorable.from_message(store_message(response)))
+    assert len(scores) == 1
+    assert scores[0].get_value() is True
+
+    target = get_mock_target(output_modalities=[{"text", "audio_path"}])
+    assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.COMPATIBLE
+
+
+def test_scorer_accepts_mixed_response_with_strict_text_scorer():
+    """A strict scorer cannot process an unsupported audio piece in the same response."""
+    scorer = SubStringScorer(
+        substring="matched",
+        validator=ScorerPromptValidator(supported_data_types=["text"], enforce_all_pieces_valid=True),
+    )
+    target = get_mock_target(output_modalities=[{"text", "audio_path"}])
+    assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.INCOMPATIBLE
+
+
+def test_scorer_accepts_audio_only_response_with_text_scorer():
+    target = get_mock_target(output_modalities=[{"audio_path"}])
+    assert scorer_accepts(scorer=_scorer_declaring(["text"]), target=target)[0] is ModalityVerdict.INCOMPATIBLE
+
+
+def test_scorer_accepts_alternative_text_or_audio_response_is_unknown():
+    """One output may be scored and another may not; neither outcome is guaranteed."""
+    target = get_mock_target(output_modalities=[{"text"}, {"audio_path"}])
+    assert scorer_accepts(scorer=_scorer_declaring(["text"]), target=target)[0] is ModalityVerdict.UNKNOWN
+
+
+async def test_scorer_accepts_converted_audio_response(patch_central_database):
+    """Runtime converts the returned audio piece to text before objective scoring."""
+    scorer = SubStringScorer(substring="matched")
+    target = get_mock_target(output_modalities=[{"audio_path"}])
+    configurations = _configs(_OfflineAudioToTextConverter())
+    response = Message(
+        message_pieces=[
+            MessagePiece(role="assistant", original_value="audio.wav", original_value_data_type="audio_path")
+        ]
+    )
+    await PromptNormalizer().convert_values_async(converter_configurations=configurations, message=response)
+    scores = await scorer.score_async(scorable=MessageScorable.from_message(store_message(response)))
+    assert [piece.converted_value_data_type for piece in response.message_pieces] == ["text"]
+    assert len(scores) == 1
+    assert scores[0].get_value() is True
+
+    atomic = _atomic(target=target, scorer=scorer, response_converter_configurations=configurations)
+    assert validate_atomic_attack(atomic_attack=atomic).verdict is ModalityVerdict.COMPATIBLE
+
+
+def test_scorer_accepts_conditional_response_conversion(patch_central_database):
+    """Only matching output types are converted, leaving any text piece readable."""
+    target = get_mock_target(output_modalities=[{"text", "audio_path"}])
+    configuration = ConverterConfiguration(
+        converters=[_OfflineAudioToTextConverter()], prompt_data_types_to_apply=["audio_path"]
+    )
+    scorer = SubStringScorer(
+        substring="matched",
+        validator=ScorerPromptValidator(supported_data_types=["text"], enforce_all_pieces_valid=True),
+    )
+    atomic = _atomic(target=target, scorer=scorer, response_converter_configurations=[configuration])
+    assert validate_atomic_attack(atomic_attack=atomic).verdict is ModalityVerdict.COMPATIBLE
+
+
+def test_scorer_accepts_indexed_response_conversion_is_unknown(patch_central_database):
+    """Without a response piece count, index 0 may or may not cover every audio piece."""
+    target = get_mock_target(output_modalities=[{"audio_path"}])
+    configuration = ConverterConfiguration(converters=[_OfflineAudioToTextConverter()], indexes_to_apply=[0])
+    scorer = SubStringScorer(substring="matched")
+    atomic = _atomic(target=target, scorer=scorer, response_converter_configurations=[configuration])
+    verdict, _ = scorer_accepts(scorer=scorer, target=target, response_converters=[configuration])
+    assert verdict is ModalityVerdict.UNKNOWN
+    assert validate_atomic_attack(atomic_attack=atomic).verdict is not ModalityVerdict.INCOMPATIBLE
+
+
 def test_scorer_accepts_none_scorer_is_unknown():
     """No scorer means nothing to check."""
     target = get_mock_target(output_modalities=[{"image_path"}])
@@ -481,6 +592,40 @@ def test_validate_atomic_attack_media_seed_reaches_capable_target(patch_central_
     target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
     atomic = _atomic(target=target, seed_groups=[_media_seed_group()])
     assert validate_atomic_attack(atomic_attack=atomic).verdict is ModalityVerdict.COMPATIBLE
+
+
+async def test_sequential_media_child_is_not_rejected_by_invented_text_request(patch_central_database):
+    """A real sequential child owns and sends its image seed to its image-only target."""
+    child_target = MockPromptTarget()
+    child_target.apply_capabilities(
+        capabilities=TargetCapabilities(
+            input_modalities=frozenset({frozenset({"image_path"})}),
+            output_modalities=frozenset({frozenset({"text"})}),
+        )
+    )
+    nominal_target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    media_piece = await asyncio.to_thread(get_image_message_piece)
+    try:
+        seed_group = _media_seed_group(value=media_piece.original_value)
+        child = SequentialChildAttack(
+            strategy=PromptSendingAttack(objective_target=child_target),
+            seed_group=seed_group,
+        )
+        wrapper = SequentialAttack(objective_target=nominal_target, child_attacks=[child])
+        atomic = AtomicAttack(
+            atomic_attack_name="sequential_image",
+            attack_technique=AttackTechnique(attack=wrapper),
+            seed_groups=[seed_group],
+        )
+
+        result = await wrapper.execute_async(objective=seed_group.objective.value)
+        assert len(result.child_attack_results) == 1
+        assert child_target.prompt_sent == [media_piece.original_value]
+        report = validate_atomic_attack(atomic_attack=atomic)
+        assert report.verdict is ModalityVerdict.UNKNOWN
+        assert report.projected_request_types == frozenset()
+    finally:
+        await asyncio.to_thread(os.remove, media_piece.original_value)
 
 
 def test_validate_atomic_attack_scorer_cannot_read_target_output(patch_central_database):

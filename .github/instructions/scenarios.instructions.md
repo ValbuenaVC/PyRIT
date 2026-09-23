@@ -65,6 +65,9 @@ retains it as configured.
   index 0 of two text pieces leaves text in the second piece. Declarations are read literally —
   a target that accepts a lone image advertises `{image_path}` as well as `{text, image_path}`.
 - The **response chain** checks each advertised target output combination against the scorer.
+  Project configured response converters before checking the types the scorer receives.
+  When response piece indexes cannot be known, report `UNKNOWN` rather than guessing which
+  pieces were converted.
   A scorer that skips unsupported pieces needs at least one readable type in each combination;
   a strict scorer needs to read every piece. If only some possible combinations can be scored,
   the response-chain verdict is `UNKNOWN`, not a reason to skip the attack. This type check
@@ -72,6 +75,9 @@ retains it as configured.
 - Anything indeterminate is `UNKNOWN` and never blocks a run.
 - Only turn 0 is checked. Media routing across later turns belongs to `_ModalityFeedbackRouter`,
   which multi-turn attacks consult at execution time.
+- A `SequentialAttack` wrapper delegates its actual request, target, converters, and scorer to
+  its children, so the wrapper itself reports `UNKNOWN` rather than treating the absence of
+  `next_message` as a text request to its nominal target.
 
 Override `MODALITY_POLICY` to `RAISE` when an incompatible pairing means the run is
 misconfigured rather than merely narrower than intended.

@@ -13,7 +13,8 @@ Two chains are checked, both for turn 0 only:
 * the **request chain** — the seed's own data types, projected through the request converters,
   must be exactly one of the objective target's advertised input modality combinations;
 * the **response chain** — each advertised response combination is checked against what the
-  scorer declares it can read, including whether it can ignore unsupported pieces.
+  scorer declares it can read after the response converters run, including whether it can
+  ignore unsupported pieces.
 
 Anything indeterminate resolves to ``ModalityVerdict.UNKNOWN`` and never blocks a run. A
 target whose capabilities cannot be read, an attack that exposes no scoring config, and a
@@ -200,6 +201,7 @@ def scorer_accepts(
     *,
     scorer: Scorer | None,
     target: PromptTarget,
+    response_converters: Sequence[ConverterConfiguration] = (),
 ) -> tuple[ModalityVerdict, str | None]:
     """
     Check each target output combination against the scorer's declared data types.
@@ -210,6 +212,8 @@ def scorer_accepts(
     Args:
         scorer (Scorer | None): The objective scorer, if the attack exposes one.
         target (PromptTarget): The objective target.
+        response_converters (Sequence[ConverterConfiguration]): Converters applied to the final
+            target response before scoring.
 
     Returns:
         tuple[ModalityVerdict, str | None]: The verdict, and a reason when incompatible.
@@ -228,10 +232,22 @@ def scorer_accepts(
     if not output_modalities:
         return ModalityVerdict.UNKNOWN, None
 
+    if any(configuration.indexes_to_apply for configuration in response_converters):
+        return ModalityVerdict.UNKNOWN, None
+
+    projected_modalities: list[set[PromptDataType]] = []
+    for combination in output_modalities:
+        projected, failure = project_request_chain(
+            start_types=sorted(combination), request_converters=response_converters
+        )
+        if failure is not None:
+            return ModalityVerdict.UNKNOWN, None
+        projected_modalities.append(projected)
+
     if scorer.skips_unsupported_data_types:
-        scorable = [bool(combination & declared) for combination in output_modalities]
+        scorable = [bool(combination & declared) for combination in projected_modalities]
     else:
-        scorable = [bool(combination) and combination <= declared for combination in output_modalities]
+        scorable = [bool(combination) and combination <= declared for combination in projected_modalities]
 
     if all(scorable):
         return ModalityVerdict.COMPATIBLE, None
@@ -240,7 +256,7 @@ def scorer_accepts(
 
     return ModalityVerdict.INCOMPATIBLE, (
         f"{type(scorer).__name__} cannot score any objective target output combination "
-        f"{_format_modalities(output_modalities)}; it declares {sorted(declared)}"
+        f"{[sorted(combination) for combination in projected_modalities]}; it declares {sorted(declared)}"
     )
 
 
@@ -261,6 +277,12 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
     name = getattr(atomic_attack, "atomic_attack_name", "<unknown>")
     technique = atomic_attack.attack_technique
     attack = technique.attack
+
+    # The compound's nominal target does not send its children's requests.
+    from pyrit.executor.attack.compound import SequentialAttack
+
+    if isinstance(attack, SequentialAttack):
+        return ModalityReport(atomic_attack_name=name, verdict=ModalityVerdict.UNKNOWN)
 
     target = attack.get_objective_target()
     request_converters = attack.get_request_converters() or []
@@ -302,7 +324,9 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
             if reason not in reasons:
                 reasons.append(reason)
 
-    scorer_verdict, scorer_reason = scorer_accepts(scorer=scorer, target=target)
+    scorer_verdict, scorer_reason = scorer_accepts(
+        scorer=scorer, target=target, response_converters=attack.get_response_converters()
+    )
     verdicts.add(scorer_verdict)
     if scorer_reason is not None:
         reasons.append(scorer_reason)
