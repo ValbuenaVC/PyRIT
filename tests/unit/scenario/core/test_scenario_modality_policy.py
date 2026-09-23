@@ -16,18 +16,29 @@ from typing import TYPE_CHECKING, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
-from unit.mocks import get_mock_target
-from unit.modality_profiles import TEXT_ONLY_MODALITIES, VISION_INPUT_MODALITIES
+from unit.mocks import MockPromptTarget, get_mock_target
+from unit.modality_profiles import IMAGE_EDIT_INPUT_MODALITIES, TEXT_ONLY_MODALITIES, VISION_INPUT_MODALITIES
 
 from pyrit.converter import QRCodeConverter
-from pyrit.executor.attack import AttackConverterConfig, AttackScoringConfig, PromptSendingAttack
+from pyrit.executor.attack import (
+    AttackAdversarialConfig,
+    AttackConverterConfig,
+    AttackScoringConfig,
+    PromptSendingAttack,
+    TreeOfAttacksWithPruningAttack,
+)
 from pyrit.models import SCENARIO_RUN_PLAN_METADATA_KEY, AttackSeedGroup, ComponentIdentifier, SeedObjective, SeedPrompt
 from pyrit.prompt_normalizer import ConverterConfiguration
 from pyrit.prompt_target.common.target_requirements import TargetRequirements
 from pyrit.scenario.core import AtomicAttack, BaselineAttackPolicy, Scenario, ScenarioTechnique
 from pyrit.scenario.core.attack_technique import AttackTechnique
 from pyrit.scenario.core.dataset_configuration import DatasetAttackConfiguration, DatasetConfiguration
-from pyrit.scenario.core.modality_validation import ModalityPolicy, ModalityValidationError
+from pyrit.scenario.core.modality_validation import (
+    ModalityPolicy,
+    ModalityValidationError,
+    ModalityVerdict,
+    validate_atomic_attack,
+)
 from pyrit.score import Scorer, SubStringScorer
 from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
 
@@ -149,6 +160,94 @@ def _compatible(*, name="compatible") -> AtomicAttack:
     """An attack whose converter emits an image into a target that accepts images."""
     target = get_mock_target(input_modalities=VISION_INPUT_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
     return _atomic(target=target, converters=[QRCodeConverter()], name=name)
+
+
+def _tap_atomic(*, width: int, target: MockPromptTarget | MagicMock, seed_group: AttackSeedGroup) -> AtomicAttack:
+    attack = TreeOfAttacksWithPruningAttack(
+        objective_target=target,
+        attack_adversarial_config=AttackAdversarialConfig(target=MockPromptTarget()),
+        tree_width=width,
+    )
+    return AtomicAttack(
+        atomic_attack_name="tap_media",
+        attack_technique=AttackTechnique(attack=attack),
+        seed_groups=[seed_group],
+    )
+
+
+@pytest.mark.parametrize(
+    ("width", "modalities", "seed", "expected", "projected"),
+    [
+        (2, TEXT_ONLY_MODALITIES, "image", ModalityVerdict.UNKNOWN, {"image_path", "text"}),
+        (1, TEXT_ONLY_MODALITIES, "image", ModalityVerdict.INCOMPATIBLE, {"image_path"}),
+        (2, IMAGE_EDIT_INPUT_MODALITIES, "image", ModalityVerdict.INCOMPATIBLE, {"image_path"}),
+        (2, IMAGE_EDIT_INPUT_MODALITIES, "text_image", ModalityVerdict.COMPATIBLE, {"text", "image_path"}),
+        (2, VISION_INPUT_MODALITIES, "image", ModalityVerdict.COMPATIBLE, {"text", "image_path"}),
+    ],
+)
+async def test_tap_first_turn_roots_modality_and_skip(
+    patch_central_database, width, modalities, seed, expected, projected
+):
+    """Only text-capable TAP siblings can rescue an incompatible seeded root."""
+    seeds = [SeedObjective(value="objective"), SeedPrompt(value="seed.png", data_type="image_path")]
+    if seed == "text_image":
+        seeds.append(SeedPrompt(value="edit this", data_type="text"))
+    target = get_mock_target(input_modalities=modalities, output_modalities=TEXT_ONLY_MODALITIES)
+    atomic = _tap_atomic(width=width, target=target, seed_group=AttackSeedGroup(seeds=seeds))
+    attack = atomic.attack_technique.attack
+    assert isinstance(attack, TreeOfAttacksWithPruningAttack)
+    assert attack.has_unseeded_first_turn_roots is (width > 1 and frozenset({"text"}) in modalities)
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.verdict is expected
+    assert report.projected_request_types == projected
+    if expected is ModalityVerdict.UNKNOWN:
+        assert any("seeded root" in reason and "text" in reason for reason in report.reasons)
+    scenario = _PolicyScenario(atomic_attacks_to_return=[atomic, _compatible(name="control")])
+    await _initialize(scenario, target=target)
+    assert [attack.atomic_attack_name for attack in scenario._atomic_attacks] == (
+        ["control"] if expected is ModalityVerdict.INCOMPATIBLE else ["tap_media", "control"]
+    )
+
+
+def test_non_tap_media_seed_does_not_gain_generated_text_root(patch_central_database):
+    target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
+    atomic = AtomicAttack(
+        atomic_attack_name="single",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[
+            AttackSeedGroup(
+                seeds=[SeedObjective(value="objective"), SeedPrompt(value="seed.png", data_type="image_path")]
+            )
+        ],
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.verdict is ModalityVerdict.INCOMPATIBLE
+    assert report.projected_request_types == frozenset({"image_path"})
+
+
+def test_tap_generated_roots_are_projected_through_request_converters(patch_central_database):
+    """Text siblings cannot rescue a media root if the converter also makes them incompatible."""
+    target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
+    seed = AttackSeedGroup(
+        seeds=[SeedObjective(value="objective"), SeedPrompt(value="seed.png", data_type="image_path")]
+    )
+    attack = TreeOfAttacksWithPruningAttack(
+        objective_target=target,
+        attack_adversarial_config=AttackAdversarialConfig(target=MockPromptTarget()),
+        attack_converter_config=AttackConverterConfig(
+            request_converters=ConverterConfiguration.from_converters(converters=[QRCodeConverter()])
+        ),
+        tree_width=2,
+    )
+    atomic = AtomicAttack(
+        atomic_attack_name="converted_tap",
+        attack_technique=AttackTechnique(attack=attack),
+        seed_groups=[seed],
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.verdict is ModalityVerdict.INCOMPATIBLE
+    assert report.projected_request_types == frozenset({"image_path"})
+    assert any("QRCodeConverter" in reason for reason in report.reasons)
 
 
 async def _initialize(scenario: Scenario, *, target=None) -> None:

@@ -214,6 +214,10 @@ print_scenario_list(items=response.items)
 # capabilities, an attack that exposes no scoring config, and a scorer that never declared its data
 # types are all treated as unknown rather than incompatible. Only the first turn is checked — media
 # routing across later turns belongs to the multi-turn attacks themselves, at execution time.
+# For Tree of Attacks (TAP) with width greater than one, a text-capable objective gets sibling
+# roots starting from generated text, projected through the same converters. If only the seeded
+# media root is incompatible, the mixed-root attack reports unknown and is retained under `SKIP`.
+# If the objective requires media, TAP seeds every root; incompatible requests are still rejected.
 
 # %% [markdown]
 #

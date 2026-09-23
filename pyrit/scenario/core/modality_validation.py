@@ -10,8 +10,8 @@ the answer instead.
 
 Two chains are checked, both for turn 0 only:
 
-* the **request chain** — the seed's own data types, projected through the request converters,
-  must be exactly one of the objective target's advertised input modality combinations;
+* the **request chain** — each first-turn root's data types, projected through the request
+  converters, must be exactly one of the objective target's advertised input modality combinations;
 * the **response chain** — each advertised response combination is checked against what the
   scorer declares it can read after the response converters run, including whether it can
   ignore unsupported pieces.
@@ -83,7 +83,7 @@ class ModalityVerdict(str, Enum):
     #: At least one chain provably cannot.
     INCOMPATIBLE = "incompatible"
 
-    #: Nothing could be determined — capabilities or declarations were unavailable.
+    #: Compatibility is indeterminate or only some first-turn roots can run.
     UNKNOWN = "unknown"
 
 
@@ -265,8 +265,9 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
     Derive whether a built ``AtomicAttack`` can carry its payload to its target and scorer.
 
     Each seed group is projected independently — two groups are two separate requests, so their
-    data types are never combined into one. The attack is incompatible if any seed group is, and
-    compatible if at least one leg was determinable and none failed.
+    data types are never combined into one. TAP's independently generated text roots are checked
+    separately from its seeded root. A mixed runnable/unrunnable TAP root set is unknown rather
+    than incompatible, since skipping would discard runnable branches.
 
     Args:
         atomic_attack (AtomicAttack): The attack to check, after construction and before queuing.
@@ -280,6 +281,7 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
 
     # The compound's nominal target does not send its children's requests.
     from pyrit.executor.attack.compound import SequentialAttack
+    from pyrit.executor.attack.multi_turn.tree_of_attacks import TreeOfAttacksWithPruningAttack
 
     if isinstance(attack, SequentialAttack):
         return ModalityReport(atomic_attack_name=name, verdict=ModalityVerdict.UNKNOWN)
@@ -291,6 +293,7 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
 
     reads_next_message = _reads_next_message(attack=attack)
     verdicts: set[ModalityVerdict] = set()
+    partially_runnable_roots = False
     reasons: list[str] = []
     projected_all: set[PromptDataType] = set()
 
@@ -304,25 +307,40 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
             verdicts.add(ModalityVerdict.UNKNOWN)
             continue
 
-        projected, failure_reason = project_request_chain(
-            start_types=start_types, request_converters=request_converters
-        )
-        if failure_reason is not None:
-            verdicts.add(ModalityVerdict.INCOMPATIBLE)
-            if failure_reason not in reasons:
-                reasons.append(failure_reason)
-            continue
+        root_types: list[list[PromptDataType]] = [start_types]
+        if isinstance(attack, TreeOfAttacksWithPruningAttack) and attack.has_unseeded_first_turn_roots:
+            root_types.append(["text"])
 
-        projected_all |= projected
-        request_verdict = target_accepts(target=target, request_types=projected)
-        verdicts.add(request_verdict)
-        if request_verdict is ModalityVerdict.INCOMPATIBLE:
-            reason = (
-                f"objective target does not accept {sorted(projected)}; "
-                f"it accepts {_format_modalities(_read_modalities(target=target, direction='input'))}"
+        root_verdicts: list[ModalityVerdict] = []
+        root_reasons: list[str] = []
+        for types in root_types:
+            projected, failure_reason = project_request_chain(start_types=types, request_converters=request_converters)
+            if failure_reason is not None:
+                root_verdicts.append(ModalityVerdict.INCOMPATIBLE)
+                root_reasons.append(failure_reason)
+                continue
+
+            projected_all |= projected
+            request_verdict = target_accepts(target=target, request_types=projected)
+            root_verdicts.append(request_verdict)
+            if request_verdict is ModalityVerdict.INCOMPATIBLE:
+                root_reasons.append(
+                    f"objective target does not accept {sorted(projected)}; "
+                    f"it accepts {_format_modalities(_read_modalities(target=target, direction='input'))}"
+                )
+
+        if ModalityVerdict.COMPATIBLE in root_verdicts and ModalityVerdict.INCOMPATIBLE in root_verdicts:
+            partially_runnable_roots = True
+            verdicts.add(ModalityVerdict.UNKNOWN)
+            reasons.append(
+                "TAP seeded root and generated text roots have mixed compatibility; "
+                "at least one root can run: " + "; ".join(root_reasons)
             )
-            if reason not in reasons:
-                reasons.append(reason)
+        else:
+            verdicts.update(root_verdicts)
+            for reason in root_reasons:
+                if reason not in reasons:
+                    reasons.append(reason)
 
     scorer_verdict, scorer_reason = scorer_accepts(
         scorer=scorer, target=target, response_converters=attack.get_response_converters()
@@ -333,6 +351,8 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
 
     if ModalityVerdict.INCOMPATIBLE in verdicts:
         verdict = ModalityVerdict.INCOMPATIBLE
+    elif partially_runnable_roots:
+        verdict = ModalityVerdict.UNKNOWN
     elif ModalityVerdict.COMPATIBLE in verdicts:
         # A leg we could not determine does not cancel one we could.
         verdict = ModalityVerdict.COMPATIBLE

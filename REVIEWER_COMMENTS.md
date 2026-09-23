@@ -153,3 +153,24 @@ altering child execution. Main-only baseline runtime testing remains blocked
 by denied worktree creation, as noted under R2. Staging and commits were denied temporarily while the user was unavailable;
 staging succeeded after the user resumed. An isolated main worktree remained
 unavailable, so the `main`-only runtime matrix was not executed; see R2.
+
+## Follow-up: TAP's independently generated first roots
+
+The related-problem investigation found a false skip for TAP with `tree_width > 1`:
+when the target accepts text-only requests, root 0 uses the seed's next message
+but sibling roots generate their own text. An image-only seed may fail at root 0
+without preventing text siblings from running. Previously, plan-time validation
+projected only the media seed and `SKIP` dropped the entire atomic attack.
+
+`TreeOfAttacksWithPruningAttack.has_unseeded_first_turn_roots` now exposes when
+those sibling text requests exist. Validation projects both first-root paths
+through the same request-converter chain; if some roots can run and others
+cannot, it reports `UNKNOWN` and retains the attack. Width-one TAP and
+media-required targets still check only their actual seeded first requests.
+Regression tests cover these cases, a compatible media seed, converters that
+make both paths incompatible, and a non-TAP control. This does not change TAP's
+runtime branching or claim that the failing seeded root succeeds.
+
+Focused TAP, modality, and scenario-policy tests passed (224 tests). The
+paired scenario documentation was updated. This follow-up was identified
+after C1-R4 and is not one of the six original review comments.
