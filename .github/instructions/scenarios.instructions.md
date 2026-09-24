@@ -57,8 +57,12 @@ instead of removing an incompatible saved attack and silently changing the run p
 retains it as configured.
 
 - The **request chain** projects each seed group's data types through the attack's request
-  converters; the resulting set of data types must be exactly one of the target's advertised
-  `input_modalities` combinations. Conversion selection (including `indexes_to_apply`) is
+  converters; each possible final message combination is checked against the target's
+  advertised `input_modalities` combinations. A converter's multiple declared output types
+  are alternatives for one piece, not simultaneous message pieces. When only some outcomes
+  can reach the target, validation reports `UNKNOWN` rather than skipping the whole attack.
+  Projection is bounded at 256 piece-type combinations; larger searches are also `UNKNOWN`.
+  Conversion selection (including `indexes_to_apply`) is
   **per message piece**: preserve ordered pieces through each converter configuration, then
   collapse their resulting types to a **message-level set** for target compatibility. A single
   text piece selected at index 0 and converted to an image leaves no text; selecting only
@@ -68,7 +72,8 @@ retains it as configured.
   message before projection; an explicit `None` selects the objective-text fallback. Inputs
   not safely representable at plan time remain `UNKNOWN`.
 - The **response chain** checks each advertised target output combination against the scorer.
-  Project configured response converters before checking the types the scorer receives.
+  Project alternative outputs of configured response converters separately before checking
+  the types the scorer receives.
   When response piece indexes cannot be known, report `UNKNOWN` rather than guessing which
   pieces were converted.
   A scorer allowing unsupported pieces alongside readable ones needs at least one readable type

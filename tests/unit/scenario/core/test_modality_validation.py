@@ -63,6 +63,7 @@ from pyrit.scenario.core.modality_validation import (
     ModalityValidationError,
     ModalityVerdict,
     project_request_chain,
+    project_request_combinations,
     scorer_accepts,
     target_accepts,
     validate_atomic_attack,
@@ -90,6 +91,20 @@ class _OfflineAudioToTextConverter(Converter):
         if not self.input_supported(input_type):
             raise ValueError(f"Unsupported input type: {input_type}")
         return ConverterResult(output_text="matched transcript", output_type="text")
+
+
+class _TextOrImageConverter(Converter):
+    SUPPORTED_INPUT_TYPES = ("text",)
+    SUPPORTED_OUTPUT_TYPES = ("text", "image_path")
+
+    def __init__(self, *, output_type: PromptDataType = "text") -> None:
+        super().__init__()
+        self._output_type = output_type
+
+    async def convert_async(self, *, prompt: str, input_type: PromptDataType = "text") -> ConverterResult:
+        if not self.input_supported(input_type):
+            raise ValueError(f"Unsupported input type: {input_type}")
+        return ConverterResult(output_text=prompt, output_type=self._output_type)
 
 
 def _scorer_declaring(declared) -> SubStringScorer:
@@ -309,6 +324,33 @@ def test_project_request_chain_multi_type_start_projects_each_independently():
     )
     assert projected == {"image_path", "audio_path"}
     assert reason is None
+
+
+def test_project_request_combinations_preserves_alternative_outputs():
+    combinations, reason = project_request_combinations(
+        start_types=["text"], request_converters=_configs(_TextOrImageConverter())
+    )
+    assert combinations == {frozenset({"text"}), frozenset({"image_path"})}
+    assert reason is None
+
+
+def test_project_request_combinations_preserves_piece_positions_and_indexes():
+    configuration = ConverterConfiguration(converters=[_TextOrImageConverter()], indexes_to_apply=[0])
+    combinations, reason = project_request_combinations(
+        start_types=["text", "text"], request_converters=[configuration]
+    )
+    assert combinations == {frozenset({"text"}), frozenset({"text", "image_path"})}
+    assert reason is None
+
+
+def test_project_request_combinations_branches_through_subsequent_converter():
+    combinations, reason = project_request_combinations(
+        start_types=["text"],
+        request_converters=_configs(_TextOrImageConverter(), ImageCompressionConverter()),
+    )
+    assert combinations == {frozenset({"image_path"})}
+    assert reason is not None
+    assert "ImageCompressionConverter" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +595,19 @@ def test_scorer_accepts_indexed_response_conversion_is_unknown(patch_central_dat
     assert validate_atomic_attack(atomic_attack=atomic).verdict is not ModalityVerdict.INCOMPATIBLE
 
 
+def test_scorer_accepts_alternative_response_converter_outputs(patch_central_database):
+    target = get_mock_target(output_modalities=[{"text"}])
+    scorer = SubStringScorer(
+        substring="matched",
+        validator=ScorerPromptValidator(supported_data_types=["text"], enforce_all_pieces_valid=True),
+    )
+    verdict, reason = scorer_accepts(
+        scorer=scorer, target=target, response_converters=_configs(_TextOrImageConverter())
+    )
+    assert verdict is ModalityVerdict.UNKNOWN
+    assert reason is None
+
+
 def test_scorer_accepts_none_scorer_is_unknown():
     """No scorer means nothing to check."""
     target = get_mock_target(output_modalities=[{"image_path"}])
@@ -607,6 +662,50 @@ def test_validate_atomic_attack_image_converter_into_vision_target_is_compatible
     target = get_mock_target(input_modalities=VISION_INPUT_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
     report = validate_atomic_attack(atomic_attack=_atomic(target=target, converters=[QRCodeConverter()]))
     assert report.verdict is ModalityVerdict.COMPATIBLE
+
+
+@pytest.mark.parametrize("output_type", ["text", "image_path"])
+async def test_validate_atomic_attack_alternative_converter_matches_runtime(
+    patch_central_database, output_type: PromptDataType
+):
+    """Each run produces one supported message type, not a synthetic mixed request."""
+    target = get_mock_target(input_modalities=[{"text"}, {"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    converter = _TextOrImageConverter(output_type=output_type)
+    atomic = _atomic(target=target, converters=[converter])
+    response = Message.from_prompt(prompt="request", role="user")
+    await PromptNormalizer().convert_values_async(converter_configurations=_configs(converter), message=response)
+    actual = {piece.converted_value_data_type for piece in response.message_pieces}
+    assert actual == {output_type}
+    assert target_accepts(target=target, request_types=actual) is ModalityVerdict.COMPATIBLE
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.verdict is ModalityVerdict.COMPATIBLE
+    assert report.projected_request_types == frozenset({"text", "image_path"})
+
+
+def test_validate_atomic_attack_some_alternatives_are_incompatible(patch_central_database):
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    report = validate_atomic_attack(atomic_attack=_atomic(target=target, converters=[_TextOrImageConverter()]))
+    assert report.verdict is ModalityVerdict.UNKNOWN
+
+
+def test_validate_atomic_attack_no_alternatives_are_compatible(patch_central_database):
+    target = get_mock_target(input_modalities=[{"audio_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    report = validate_atomic_attack(atomic_attack=_atomic(target=target, converters=[_TextOrImageConverter()]))
+    assert report.verdict is ModalityVerdict.INCOMPATIBLE
+
+
+def test_validate_atomic_attack_alternative_converter_does_not_invent_mixed_message(patch_central_database):
+    target = get_mock_target(input_modalities=[{"text", "image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    report = validate_atomic_attack(atomic_attack=_atomic(target=target, converters=[_TextOrImageConverter()]))
+    assert report.verdict is ModalityVerdict.INCOMPATIBLE
+
+
+def test_validate_atomic_attack_many_alternatives_are_unknown(patch_central_database):
+    """Bounded projection does not turn an explosion of possibilities into a false rejection."""
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    group = AttackSeedGroup(seeds=[SeedObjective(value="objective"), *(SeedPrompt(value=str(i)) for i in range(9))])
+    atomic = _atomic(target=target, converters=[_TextOrImageConverter()], seed_groups=[group])
+    assert validate_atomic_attack(atomic_attack=atomic).verdict is ModalityVerdict.UNKNOWN
 
 
 def test_validate_atomic_attack_fully_selected_index_reaches_image_only_target(patch_central_database):

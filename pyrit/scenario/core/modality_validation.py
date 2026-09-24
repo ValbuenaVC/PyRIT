@@ -30,6 +30,7 @@ import dataclasses
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from itertools import product
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -100,7 +101,7 @@ class ModalityReport:
     #: Human-readable explanations, each naming the converter, target, or scorer that failed.
     reasons: tuple[str, ...] = field(default_factory=tuple)
 
-    #: The union of data types the request chain produces across this attack's seed groups.
+    #: All possible request data types, not necessarily present in the same message.
     projected_request_types: frozenset[PromptDataType] = field(default_factory=frozenset)
 
 
@@ -111,12 +112,11 @@ def project_request_chain(
     piece_indexes_known: bool = True,
 ) -> tuple[set[PromptDataType], str | None]:
     """
-    Project the ordered piece types through a request-converter chain.
+    Return the possible output types for converter append checks.
 
-    Converter selection is per piece; target compatibility is checked against the resulting
-    message-level set of types. Retain piece positions until every configuration has run.
-    When the caller cannot know the message's indexes, an indexed configuration conservatively
-    retains both the converted and original types.
+    This union is conservative when the message shape is unknown. For target compatibility,
+    use ``project_request_combinations`` so alternative types are not mistaken for pieces
+    of one message.
 
     Args:
         start_types (Sequence[PromptDataType]): The ordered types of the request's message pieces.
@@ -126,11 +126,41 @@ def project_request_chain(
             Set to ``False`` when projecting a factory without a concrete message.
 
     Returns:
-        tuple[set[PromptDataType], str | None]: The data types that can reach the target, and
-        ``None``; or an empty set and a message naming the first converter that could not accept
-        the type reaching it.
+        tuple[set[PromptDataType], str | None]: Possible output types, or an empty set
+        and the reason a converter cannot accept a possible type.
+    """
+    combinations, failure_reason = project_request_combinations(
+        start_types=start_types, request_converters=request_converters, piece_indexes_known=piece_indexes_known
+    )
+    if combinations is None or failure_reason is not None:
+        return set(), failure_reason or "Too many possible converter output combinations to check safely"
+    return {data_type for combination in combinations for data_type in combination}, None
+
+
+def project_request_combinations(
+    *,
+    start_types: Sequence[PromptDataType],
+    request_converters: Sequence[ConverterConfiguration],
+    piece_indexes_known: bool = True,
+    max_combinations: int = 256,
+) -> tuple[set[frozenset[PromptDataType]] | None, str | None]:
+    """
+    Project individual message pieces without merging alternative converter outputs.
+
+    Args:
+        start_types (Sequence[PromptDataType]): Ordered input piece types.
+        request_converters (Sequence[ConverterConfiguration]): Configurations in runtime order.
+        piece_indexes_known (bool): Whether the input piece indexes are known.
+        max_combinations (int): Maximum enumerated final piece-type combinations.
+
+    Returns:
+        tuple[set[frozenset[PromptDataType]] | None, str | None]: Possible final message
+        type combinations and the first converter failure on any branch. ``None`` means
+        the possibilities exceed the bound and compatibility cannot be determined. A
+        failure alongside successful combinations makes the overall verdict indeterminate.
     """
     piece_types: list[set[PromptDataType]] = [{data_type} for data_type in start_types]
+    failure_reason: str | None = None
 
     for configuration in request_converters:
         for index, types in enumerate(piece_types):
@@ -150,10 +180,13 @@ def project_request_chain(
                 for converter in configuration.converters:
                     unsupported = sorted(t for t in converted_types if not converter.input_supported(t))
                     if unsupported:
-                        return set(), (
-                            f"{type(converter).__name__} does not accept {unsupported}; "
-                            f"it accepts {sorted(converter.supported_input_types)}"
-                        )
+                        if failure_reason is None:
+                            failure_reason = (
+                                f"{type(converter).__name__} does not accept {unsupported}; "
+                                f"it accepts {sorted(converter.supported_input_types)}"
+                            )
+                        converted_types = set()
+                        break
                     converted_types = set(converter.supported_output_types)
                 next_types.update(converted_types)
 
@@ -161,10 +194,12 @@ def project_request_chain(
                     next_types.add(data_type)
             piece_types[index] = next_types
 
-    output_types: set[PromptDataType] = set()
+    count = 1
     for types in piece_types:
-        output_types.update(types)
-    return output_types, None
+        count *= len(types)
+        if count > max_combinations:
+            return None, failure_reason
+    return {frozenset(types) for types in product(*piece_types)}, failure_reason
 
 
 def target_accepts(*, target: PromptTarget, request_types: set[PromptDataType]) -> ModalityVerdict:
@@ -235,14 +270,14 @@ def scorer_accepts(
     if any(configuration.indexes_to_apply for configuration in response_converters):
         return ModalityVerdict.UNKNOWN, None
 
-    projected_modalities: list[set[PromptDataType]] = []
+    projected_modalities: list[frozenset[PromptDataType]] = []
     for combination in output_modalities:
-        projected, failure = project_request_chain(
+        projected, failure = project_request_combinations(
             start_types=sorted(combination), request_converters=response_converters
         )
-        if failure is not None:
+        if projected is None or failure is not None:
             return ModalityVerdict.UNKNOWN, None
-        projected_modalities.append(projected)
+        projected_modalities.extend(projected)
 
     if scorer.allows_unsupported_pieces:
         scorable = [bool(combination & declared) for combination in projected_modalities]
@@ -317,28 +352,34 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
         root_verdicts: list[ModalityVerdict] = []
         root_reasons: list[str] = []
         for types in root_types:
-            projected, failure_reason = project_request_chain(start_types=types, request_converters=request_converters)
+            combinations, failure_reason = project_request_combinations(
+                start_types=types, request_converters=request_converters
+            )
+            if combinations is None:
+                root_verdicts.append(ModalityVerdict.UNKNOWN)
+                continue
             if failure_reason is not None:
                 root_verdicts.append(ModalityVerdict.INCOMPATIBLE)
                 root_reasons.append(failure_reason)
-                continue
-
-            projected_all |= projected
-            request_verdict = target_accepts(target=target, request_types=projected)
-            root_verdicts.append(request_verdict)
-            if request_verdict is ModalityVerdict.INCOMPATIBLE:
-                root_reasons.append(
-                    f"objective target does not accept {sorted(projected)}; "
-                    f"it accepts {_format_modalities(_read_modalities(target=target, direction='input'))}"
-                )
+            for projected in combinations:
+                projected_all.update(projected)
+                request_verdict = target_accepts(target=target, request_types=set(projected))
+                root_verdicts.append(request_verdict)
+                if request_verdict is ModalityVerdict.INCOMPATIBLE:
+                    root_reasons.append(
+                        f"objective target does not accept {sorted(projected)}; "
+                        f"it accepts {_format_modalities(_read_modalities(target=target, direction='input'))}"
+                    )
 
         if ModalityVerdict.COMPATIBLE in root_verdicts and ModalityVerdict.INCOMPATIBLE in root_verdicts:
             partially_runnable_roots = True
             verdicts.add(ModalityVerdict.UNKNOWN)
-            reasons.append(
-                "TAP seeded root and generated text roots have mixed compatibility; "
-                "at least one root can run: " + "; ".join(root_reasons)
+            mixed_reason = (
+                "TAP seeded root and generated text roots have mixed compatibility"
+                if isinstance(attack, TreeOfAttacksWithPruningAttack) and attack.has_unseeded_first_turn_roots
+                else "Possible first-turn requests have mixed compatibility"
             )
+            reasons.append(f"{mixed_reason}; at least one can run: " + "; ".join(root_reasons))
         else:
             verdicts.update(root_verdicts)
             for reason in root_reasons:
