@@ -71,8 +71,10 @@ retains it as configured.
   Project configured response converters before checking the types the scorer receives.
   When response piece indexes cannot be known, report `UNKNOWN` rather than guessing which
   pieces were converted.
-  A scorer that skips unsupported pieces needs at least one readable type in each combination;
-  a strict scorer needs to read every piece. If only some possible combinations can be scored,
+  A scorer allowing unsupported pieces alongside readable ones needs at least one readable type
+  in each combination; a strict scorer needs to read every piece. This differs from the ability
+  to return no score for a wholly unreadable response, which composites use to assess their
+  children's applicability. If only some possible combinations can be scored,
   the response-chain verdict is `UNKNOWN`, not a reason to skip the attack. This type check
   does not establish that the resulting score is meaningful.
 - Anything indeterminate is `UNKNOWN` and never blocks a run.

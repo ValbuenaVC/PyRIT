@@ -256,6 +256,17 @@ def test_composite_scorer_strict_child_modality_is_unknown(
     assert scorer.supported_data_types is None
 
 
+async def test_composite_scorer_raise_on_empty_child_does_not_claim_safe_skip(mock_request, true_scorer, false_scorer):
+    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"], raise_on_no_valid_pieces=True)
+    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
+    assert scorer.supported_data_types is None
+    assert scorer.skips_unsupported_data_types is False
+    assert scorer.allows_unsupported_pieces is True
+    with pytest.raises(RuntimeError, match="There are no valid pieces to score"):
+        await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
+
+
 async def test_composite_scorer_strict_child_raises_instead_of_skipping(mock_request, true_scorer, false_scorer):
     """The strict child prevents the composite from scoring text despite a text-capable sibling."""
     true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])

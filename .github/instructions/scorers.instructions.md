@@ -17,6 +17,13 @@ undeclared modalities or may raise instead of skipping, the composite declares `
 (`UNKNOWN`) rather than asserting compatibility. Wrappers must forward this skip behavior
 along with `supported_data_types` so nested composites remain accurate.
 
+For mixed responses, `allows_unsupported_pieces` separately reports whether readable
+pieces can be scored alongside unsupported ones. `raise_on_no_valid_pieces=True` still
+allows a mixed response when `enforce_all_pieces_valid=False`, but it prevents a wholly
+unreadable response from yielding `[]`. Keep that case distinct from
+`skips_unsupported_data_types`, which is required before a composite may assume a child
+will be non-applicable rather than raise.
+
 ## Constructor contract
 
 `Scorer` subclasses MUST use the keyword-only constructor shape:

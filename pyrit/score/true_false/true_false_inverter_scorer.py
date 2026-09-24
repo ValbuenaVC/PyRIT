@@ -55,6 +55,11 @@ class TrueFalseInverterScorer(TrueFalseScorer):
         """Whether the wrapped scorer skips unsupported response types."""
         return self._scorer.skips_unsupported_data_types
 
+    @property
+    def allows_unsupported_pieces(self) -> bool:
+        """Whether the wrapped scorer accepts mixed readable and unsupported pieces."""
+        return self._scorer.allows_unsupported_pieces
+
     def _build_identifier(self) -> ComponentIdentifier:
         """
         Build the identifier for this scorer.

@@ -99,6 +99,11 @@ class ScorerPromptValidator:
         return not self._enforce_all_pieces_valid and not self._raise_on_no_valid_pieces
 
     @property
+    def allows_unsupported_pieces(self) -> bool:
+        """Whether a readable response can also contain unsupported pieces."""
+        return not self._enforce_all_pieces_valid
+
+    @property
     def is_objective_required(self) -> bool:
         """Whether the scorer uses the objective as a required criterion."""
         return self._is_objective_required

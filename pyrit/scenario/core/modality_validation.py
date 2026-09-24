@@ -244,7 +244,7 @@ def scorer_accepts(
             return ModalityVerdict.UNKNOWN, None
         projected_modalities.append(projected)
 
-    if scorer.skips_unsupported_data_types:
+    if scorer.allows_unsupported_pieces:
         scorable = [bool(combination & declared) for combination in projected_modalities]
     else:
         scorable = [bool(combination) and combination <= declared for combination in projected_modalities]

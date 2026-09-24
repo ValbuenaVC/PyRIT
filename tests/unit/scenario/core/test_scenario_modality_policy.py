@@ -310,17 +310,19 @@ async def test_skip_excludes_dropped_attack_from_persisted_run_plan(patch_centra
 
 @pytest.mark.parametrize("policy", list(ModalityPolicy))
 @pytest.mark.parametrize(
-    ("outputs", "strict", "incompatible"),
+    ("outputs", "strict", "raise_on_empty", "incompatible"),
     [
-        ([{"text"}], False, False),
-        ([{"text", "audio_path"}], False, False),
-        ([{"text", "audio_path"}], True, True),
-        ([{"audio_path"}], False, True),
-        ([{"text"}, {"audio_path"}], False, False),
+        ([{"text"}], False, False, False),
+        ([{"text", "audio_path"}], False, False, False),
+        ([{"text", "audio_path"}], False, True, False),
+        ([{"text", "audio_path"}], True, False, True),
+        ([{"audio_path"}], False, False, True),
+        ([{"audio_path"}], False, True, True),
+        ([{"text"}, {"audio_path"}], False, False, False),
     ],
 )
 async def test_modality_policy_selective_text_scorer_output_matrix(
-    patch_central_database, policy, outputs, strict, incompatible
+    patch_central_database, policy, outputs, strict, raise_on_empty, incompatible
 ):
     """A working mixed response survives all policies; unscorable responses obey policy."""
 
@@ -328,7 +330,11 @@ async def test_modality_policy_selective_text_scorer_output_matrix(
         MODALITY_POLICY: ClassVar[ModalityPolicy] = policy
 
     target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=outputs)
-    validator = ScorerPromptValidator(supported_data_types=["text"], enforce_all_pieces_valid=strict)
+    validator = ScorerPromptValidator(
+        supported_data_types=["text"],
+        enforce_all_pieces_valid=strict,
+        raise_on_no_valid_pieces=raise_on_empty,
+    )
     scorer = SubStringScorer(substring="match", validator=validator)
     scenario = _ConfiguredPolicyScenario(atomic_attacks_to_return=[_atomic(target=target, scorer=scorer)])
 

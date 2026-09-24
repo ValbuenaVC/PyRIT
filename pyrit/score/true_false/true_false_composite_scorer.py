@@ -99,6 +99,11 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
         """Whether every child can ignore unsupported data types without raising."""
         return all(scorer.skips_unsupported_data_types for scorer in self._scorers)
 
+    @property
+    def allows_unsupported_pieces(self) -> bool:
+        """Whether every child accepts unsupported pieces alongside readable ones."""
+        return all(scorer.allows_unsupported_pieces for scorer in self._scorers)
+
     def _build_identifier(self) -> ComponentIdentifier:
         """
         Build the identifier for this scorer.

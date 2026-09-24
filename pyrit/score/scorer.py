@@ -222,6 +222,11 @@ class Scorer(Identifiable, abc.ABC):
         """Whether unsupported data types are known to produce no score rather than an error."""
         return False
 
+    @property
+    def allows_unsupported_pieces(self) -> bool:
+        """Whether a readable response may contain pieces this scorer does not support."""
+        return False
+
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """
         Return the condition types this scorer can use as its criterion.

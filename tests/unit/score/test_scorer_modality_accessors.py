@@ -81,6 +81,20 @@ def test_validator_skip_contract_reflects_strictness(options, expected):
     assert validator.skips_unsupported_data_types is expected
 
 
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({}, True),
+        ({"raise_on_no_valid_pieces": True}, True),
+        ({"enforce_all_pieces_valid": True}, False),
+        ({"enforce_all_pieces_valid": True, "raise_on_no_valid_pieces": True}, False),
+    ],
+)
+def test_validator_allows_unsupported_pieces_independently_of_raise_on_empty(options, expected):
+    validator = ScorerPromptValidator(supported_data_types=["text"], **options)
+    assert validator.allows_unsupported_pieces is expected
+
+
 def test_validator_supported_data_types_undeclared_returns_all_types():
     """
     Undeclared falls back to every PromptDataType and is marked as *not* declared.
@@ -122,6 +136,7 @@ def test_scorer_base_supported_data_types_is_none_for_non_message_scorer():
     scorer = ManualScorer(value=True, rationale="r", user_identifier="u")
     assert scorer.supported_data_types is None
     assert scorer.skips_unsupported_data_types is False
+    assert scorer.allows_unsupported_pieces is False
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +147,16 @@ def test_message_scorer_declared_types_returns_frozenset():
     scorer = SubStringScorer(substring="x")
     assert scorer.supported_data_types == frozenset({"text"})
     assert scorer.skips_unsupported_data_types is True
+    assert scorer.allows_unsupported_pieces is True
+
+
+def test_message_scorer_can_filter_pieces_but_cannot_skip_empty_score():
+    scorer = SubStringScorer(
+        substring="x",
+        validator=ScorerPromptValidator(supported_data_types=["text"], raise_on_no_valid_pieces=True),
+    )
+    assert scorer.allows_unsupported_pieces is True
+    assert scorer.skips_unsupported_data_types is False
 
 
 def test_message_scorer_multi_type_declaration_round_trips():
@@ -158,8 +183,10 @@ def test_message_scorer_round_trips_every_data_type(data_type: PromptDataType):
 def test_threshold_scorer_delegates_to_wrapped_scorer():
     """FloatScaleThresholdScorer reports whatever its wrapped FloatScaleScorer reports."""
     wrapped = _float_scale_scorer_declaring(frozenset({"text", "image_path"}))
+    type(wrapped).allows_unsupported_pieces = PropertyMock(return_value=True)
     scorer = FloatScaleThresholdScorer(scorer=wrapped, threshold=0.5)
     assert scorer.supported_data_types == frozenset({"text", "image_path"})
+    assert scorer.allows_unsupported_pieces is True
 
 
 def test_threshold_scorer_delegates_none():
@@ -173,6 +200,7 @@ def test_inverter_scorer_delegates_to_wrapped_scorer():
     scorer = TrueFalseInverterScorer(scorer=_substring_scorer(declared=["audio_path"]))
     assert scorer.supported_data_types == frozenset({"audio_path"})
     assert scorer.skips_unsupported_data_types is True
+    assert scorer.allows_unsupported_pieces is True
 
 
 def test_inverter_scorer_delegates_none():

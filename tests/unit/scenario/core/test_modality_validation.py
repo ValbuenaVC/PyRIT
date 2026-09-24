@@ -67,7 +67,13 @@ from pyrit.scenario.core.modality_validation import (
     target_accepts,
     validate_atomic_attack,
 )
-from pyrit.score import MessageScorable, SubStringScorer, TrueFalseCompositeScorer, TrueFalseScoreAggregator
+from pyrit.score import (
+    MessageScorable,
+    SubStringScorer,
+    TrueFalseCompositeScorer,
+    TrueFalseInverterScorer,
+    TrueFalseScoreAggregator,
+)
 from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
 
 
@@ -438,6 +444,57 @@ def test_scorer_accepts_mixed_response_with_strict_text_scorer():
     )
     target = get_mock_target(output_modalities=[{"text", "audio_path"}])
     assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.INCOMPATIBLE
+
+
+@pytest.mark.parametrize("inverted", [False, True])
+async def test_scorer_accepts_mixed_response_when_empty_score_raises(patch_central_database, inverted: bool):
+    """Raising on wholly unreadable evidence does not prevent selective mixed-piece scoring."""
+    text_scorer = SubStringScorer(
+        substring="matched",
+        validator=ScorerPromptValidator(supported_data_types=["text"], raise_on_no_valid_pieces=True),
+    )
+    scorer = TrueFalseInverterScorer(scorer=text_scorer) if inverted else text_scorer
+    response = Message(
+        message_pieces=[
+            MessagePiece(role="assistant", original_value="matched text"),
+            MessagePiece(role="assistant", original_value="audio.wav", original_value_data_type="audio_path"),
+        ]
+    )
+    scores = await scorer.score_async(scorable=MessageScorable.from_message(store_message(response)))
+    assert len(scores) == 1
+    assert scores[0].get_value() is not inverted
+
+    target = get_mock_target(output_modalities=[{"text", "audio_path"}])
+    assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.COMPATIBLE
+
+
+@pytest.mark.parametrize("inverted", [False, True])
+async def test_scorer_accepts_audio_only_when_empty_score_raises(patch_central_database, inverted: bool):
+    """The same scorer cannot read an audio-only response and must still raise."""
+    text_scorer = SubStringScorer(
+        substring="matched",
+        validator=ScorerPromptValidator(supported_data_types=["text"], raise_on_no_valid_pieces=True),
+    )
+    scorer = TrueFalseInverterScorer(scorer=text_scorer) if inverted else text_scorer
+    target = get_mock_target(output_modalities=[{"audio_path"}])
+    assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.INCOMPATIBLE
+    response = Message(
+        message_pieces=[
+            MessagePiece(role="assistant", original_value="audio.wav", original_value_data_type="audio_path")
+        ]
+    )
+    expected_error = RuntimeError if inverted else ValueError
+    with pytest.raises(expected_error, match="There are no valid pieces to score"):
+        await scorer.score_async(scorable=MessageScorable.from_message(store_message(response)))
+
+
+def test_scorer_accepts_alternative_output_when_empty_score_raises(patch_central_database):
+    scorer = SubStringScorer(
+        substring="matched",
+        validator=ScorerPromptValidator(supported_data_types=["text"], raise_on_no_valid_pieces=True),
+    )
+    target = get_mock_target(output_modalities=[{"text", "audio_path"}, {"audio_path"}])
+    assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.UNKNOWN
 
 
 def test_scorer_accepts_audio_only_response_with_text_scorer():

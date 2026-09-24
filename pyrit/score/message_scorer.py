@@ -315,6 +315,11 @@ class MessageScorer(Scorer):
         """Whether the message validator ignores unsupported pieces without raising."""
         return self._validator.skips_unsupported_data_types
 
+    @property
+    def allows_unsupported_pieces(self) -> bool:
+        """Whether the message validator accepts a mix of readable and unsupported pieces."""
+        return self._validator.allows_unsupported_pieces
+
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """
         Return the conditions this message scorer uses as criteria.
