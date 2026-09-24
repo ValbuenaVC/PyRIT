@@ -64,6 +64,9 @@ retains it as configured.
   text piece selected at index 0 and converted to an image leaves no text; selecting only
   index 0 of two text pieces leaves text in the second piece. Declarations are read literally —
   a target that accepts a lone image advertises `{image_path}` as well as `{text, image_path}`.
+  A constructor-supplied `AtomicAttack.next_message` execution override replaces the seed's
+  message before projection; an explicit `None` selects the objective-text fallback. Inputs
+  not safely representable at plan time remain `UNKNOWN`.
 - The **response chain** checks each advertised target output combination against the scorer.
   Project configured response converters before checking the types the scorer receives.
   When response piece indexes cannot be known, report `UNKNOWN` rather than guessing which

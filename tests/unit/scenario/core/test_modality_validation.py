@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import get_args
 
 import pytest
 from unit.mocks import MockPromptTarget, get_image_message_piece, get_mock_target, store_message
@@ -592,6 +593,154 @@ def test_validate_atomic_attack_media_seed_reaches_capable_target(patch_central_
     target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
     atomic = _atomic(target=target, seed_groups=[_media_seed_group()])
     assert validate_atomic_attack(atomic_attack=atomic).verdict is ModalityVerdict.COMPATIBLE
+
+
+@pytest.mark.parametrize("override_type", get_args(PromptDataType))
+def test_validate_atomic_attack_uses_constructor_message_override_for_every_type(
+    patch_central_database, override_type: PromptDataType
+):
+    """The effective message type, not the unused seed's type, reaches the target."""
+    seed_type: PromptDataType = "text" if override_type == "image_path" else "image_path"
+    target = get_mock_target(input_modalities=[{override_type}], output_modalities=TEXT_ONLY_MODALITIES)
+    override = Message(
+        message_pieces=[MessagePiece(role="user", original_value="override", original_value_data_type=override_type)]
+    )
+    atomic = AtomicAttack(
+        atomic_attack_name="override",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[_media_seed_group(data_type=seed_type)],
+        next_message=override,
+    )
+
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({override_type})
+    assert report.verdict is ModalityVerdict.COMPATIBLE
+
+
+@pytest.mark.parametrize("override", [None, Message.from_prompt(prompt="override", role="user")])
+def test_validate_atomic_attack_none_or_text_override_replaces_media_seed(
+    patch_central_database, override: Message | None
+):
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    atomic = AtomicAttack(
+        atomic_attack_name="override",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[_media_seed_group()],
+        next_message=override,
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({"text"})
+    assert report.verdict is ModalityVerdict.COMPATIBLE
+
+
+def test_validate_atomic_attack_without_override_uses_media_seed(patch_central_database):
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    atomic = _atomic(target=target, seed_groups=[_media_seed_group()])
+    assert validate_atomic_attack(atomic_attack=atomic).verdict is ModalityVerdict.INCOMPATIBLE
+
+
+def test_validate_atomic_attack_incompatible_override_does_not_use_compatible_seed(patch_central_database):
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    override = Message(
+        message_pieces=[MessagePiece(role="user", original_value="image.png", original_value_data_type="image_path")]
+    )
+    atomic = AtomicAttack(
+        atomic_attack_name="image_override",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[_text_seed_group()],
+        next_message=override,
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({"image_path"})
+    assert report.verdict is ModalityVerdict.INCOMPATIBLE
+
+
+def test_validate_atomic_attack_unmodelable_override_is_unknown(patch_central_database):
+    """The validator must not reject an unused seed when it cannot model its replacement."""
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    atomic = AtomicAttack(
+        atomic_attack_name="opaque_override",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[_media_seed_group()],
+        next_message=object(),
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset()
+    assert report.verdict is ModalityVerdict.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("override", "expected_sent"),
+    [
+        (Message.from_prompt(prompt="actual text request", role="user"), "actual text request"),
+        (None, "a media objective"),
+    ],
+)
+async def test_validate_atomic_attack_override_matches_actual_text_request(
+    patch_central_database, override: Message | None, expected_sent: str
+):
+    """The target sees only the override; the original image path need not exist."""
+    target = MockPromptTarget()
+    target.apply_capabilities(
+        capabilities=TargetCapabilities(
+            input_modalities=frozenset({frozenset({"text"})}),
+            output_modalities=frozenset({frozenset({"text"})}),
+        )
+    )
+    atomic = AtomicAttack(
+        atomic_attack_name="override",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[_media_seed_group(value="nonexistent-seed.png")],
+        next_message=override,
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({"text"})
+    assert report.verdict is ModalityVerdict.COMPATIBLE
+
+    result = await atomic.run_async()
+    assert len(result.completed_results) == 1
+    assert not result.incomplete_objectives
+    assert target.prompt_sent == [expected_sent]
+
+
+def test_validate_atomic_attack_projects_request_converters_after_override(patch_central_database):
+    """A converter runs on the override pieces, never on the unused media seed."""
+    target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
+    attack = PromptSendingAttack(
+        objective_target=target,
+        attack_converter_config=AttackConverterConfig(request_converters=_configs(QRCodeConverter())),
+    )
+    atomic = AtomicAttack(
+        atomic_attack_name="converted_override",
+        attack_technique=AttackTechnique(attack=attack),
+        seed_groups=[_media_seed_group(data_type="audio_path")],
+        next_message=Message.from_prompt(prompt="text to convert", role="user"),
+    )
+    report = validate_atomic_attack(atomic_attack=atomic)
+    assert report.projected_request_types == frozenset({"image_path"})
+    assert report.verdict is ModalityVerdict.COMPATIBLE
+
+
+def test_validate_atomic_attack_uses_converted_override_piece_type(patch_central_database):
+    target = get_mock_target(input_modalities=[{"text"}], output_modalities=TEXT_ONLY_MODALITIES)
+    override = Message(
+        message_pieces=[
+            MessagePiece(
+                role="user",
+                original_value="original.png",
+                original_value_data_type="image_path",
+                converted_value="converted text",
+                converted_value_data_type="text",
+            )
+        ]
+    )
+    atomic = AtomicAttack(
+        atomic_attack_name="converted_override",
+        attack_technique=AttackTechnique(attack=PromptSendingAttack(objective_target=target)),
+        seed_groups=[_media_seed_group()],
+        next_message=override,
+    )
+    assert validate_atomic_attack(atomic_attack=atomic).projected_request_types == frozenset({"text"})
 
 
 async def test_sequential_media_child_is_not_rejected_by_invented_text_request(patch_central_database):

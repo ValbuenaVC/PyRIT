@@ -292,6 +292,7 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
     scorer = getattr(scoring_config, "objective_scorer", None) if scoring_config is not None else None
 
     reads_next_message = _reads_next_message(attack=attack)
+    has_next_message_override, next_message_override = atomic_attack.get_next_message_override()
     verdicts: set[ModalityVerdict] = set()
     partially_runnable_roots = False
     reasons: list[str] = []
@@ -302,6 +303,8 @@ def validate_atomic_attack(*, atomic_attack: AtomicAttack) -> ModalityReport:
             seed_group=seed_group,
             seed_technique=technique.seed_technique,
             reads_next_message=reads_next_message,
+            has_next_message_override=has_next_message_override,
+            next_message_override=next_message_override,
         )
         if start_types is None:
             verdicts.add(ModalityVerdict.UNKNOWN)
@@ -400,20 +403,32 @@ def _effective_start_types(
     seed_group: AttackSeedGroup,
     seed_technique: AttackTechniqueSeedGroup | None,
     reads_next_message: bool,
+    has_next_message_override: bool,
+    next_message_override: object,
 ) -> list[PromptDataType] | None:
     """
     Determine the data types the first request carries for one seed group.
 
-    The technique seed group is merged in first, because a technique's own prompts travel with
-    the seed. ``with_technique`` raises for a group whose prompt sequences overlap a simulated
-    conversation, so compatibility is checked first and the unmerged group is used otherwise —
-    that pairing is rejected elsewhere and is not a modality problem.
+    A constructor-supplied ``next_message`` replaces the seed-derived message. Otherwise the
+    technique seed group is merged first, because a technique's prompts travel with the seed.
+    ``with_technique`` raises when prompt sequences overlap a simulated conversation, so
+    compatibility is checked first and the unmerged group is used otherwise — that pairing
+    is rejected elsewhere and is not a modality problem.
 
     Returns:
         list[PromptDataType] | None: The ordered starting piece types, or ``None`` when undeterminable.
     """
     if not reads_next_message:
         return ["text"]
+
+    if has_next_message_override:
+        if next_message_override is None:
+            return ["text"]
+        from pyrit.models import Message
+
+        if not isinstance(next_message_override, Message):
+            return None
+        return [piece.converted_value_data_type for piece in next_message_override.message_pieces] or ["text"]
 
     group = seed_group
     if seed_technique is not None:
