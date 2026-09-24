@@ -11,11 +11,12 @@ Scorers evaluate model responses against an objective and live under `pyrit/scor
 ## Composite modality declarations
 
 `TrueFalseCompositeScorer` aggregates only applicable child scores; a child returning `[]`
-does not vote `False`. Therefore both AND and OR composites declare the **union** of their
-children's modalities when every child can skip unsupported data types. If any child has
-undeclared modalities or may raise instead of skipping, the composite declares `None`
-(`UNKNOWN`) rather than asserting compatibility. Wrappers must forward this skip behavior
-along with `supported_data_types` so nested composites remain accurate.
+does not vote `False`. After the expectation-routing refactor, composite modality inference
+remains deferred: the composite declares `None` (`UNKNOWN`) so plan-time validation does not
+skip an attack on an unverified union of child types. This reduces early rejection but does
+not change runtime scoring or each child's condition selection. One-to-one wrappers
+(`TrueFalseInverterScorer` and `FloatScaleThresholdScorer`) still delegate their child's
+modality declaration and skip behavior.
 
 For mixed responses, `allows_unsupported_pieces` separately reports whether readable
 pieces can be scored alongside unsupported ones. `raise_on_no_valid_pieces=True` still
@@ -53,6 +54,24 @@ Requirements:
 - ``super().__init__(validator=..., chat_target=...)`` is required so the
   base class wires the validator and validates ``TARGET_REQUIREMENTS``
   against any provided ``chat_target``.
+
+## Condition contract
+
+- A condition-based leaf declares one `CONDITION_TYPE` subclass. The shared base requires exactly
+  one condition of that type and provides `_get_required_condition` for typed access.
+- A constructor-configured leaf leaves `CONDITION_TYPE = None`. It must not claim to consume a
+  per-execution condition. All leaves reject unsupported conditions, including direct calls.
+- Wrappers implement `_get_child_scorers()` and declare no criterion. The base derives coverage
+  through `get_condition_types()`. Wrappers must cover every input condition and pass each child
+  only its supported subset, preserving objective context. Shared validation checks every child
+  before scoring. Wrappers that transform context expose the same inputs through
+  `_get_child_expectations()` for preflight.
+- Do not override the derived capability API, add plural declarations, or repeat missing/duplicate
+  condition checks in leaves. Use shared selection helpers; leaves cannot read sibling conditions.
+- Objective-only defaults are resolved before routing. Do not infer missing conditions from a
+  filtered child input.
+- Objective scoring owns required coverage. Optional auxiliary selection is an orchestration
+  policy, not a permissive leaf mode. Generic flat helpers validate each root independently.
 
 ## Common pitfalls
 

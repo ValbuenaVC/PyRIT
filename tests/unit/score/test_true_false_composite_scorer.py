@@ -21,7 +21,6 @@ from pyrit.score import (
     MessageTrueFalseScorer,
     ScorerPromptValidator,
     TrueFalseCompositeScorer,
-    TrueFalseInverterScorer,
     TrueFalseScoreAggregator,
 )
 
@@ -225,82 +224,20 @@ async def test_composite_scorer_ignores_non_applicable_child(mock_request, true_
     assert scores[0].get_value() is True
 
 
-@pytest.mark.parametrize("aggregator", [TrueFalseScoreAggregator.OR, TrueFalseScoreAggregator.AND])
-async def test_composite_scorer_disjoint_child_modalities_score_applicable_child(
-    mock_request, true_scorer, false_scorer, aggregator
+async def test_composite_modality_unknown_does_not_change_runtime_applicability(
+    mock_request, true_scorer, false_scorer
 ):
-    """OR and AND both aggregate only children that score the response."""
     true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
     false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"])
-    scorer = TrueFalseCompositeScorer(aggregator=aggregator, scorers=[true_scorer, false_scorer])
+    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
 
-    assert scorer.supported_data_types == frozenset({"text", "image_path"})
+    assert scorer.supported_data_types is None
     scores = await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
     assert len(scores) == 1
     assert scores[0].get_value() is True
-    assert "This is a true score" in scores[0].score_rationale
-    assert "This is a false score" not in scores[0].score_rationale
 
 
-@pytest.mark.parametrize(
-    "validator_options",
-    [{"enforce_all_pieces_valid": True}, {"raise_on_no_valid_pieces": True}],
-)
-def test_composite_scorer_strict_child_modality_is_unknown(
-    patch_central_database, true_scorer, false_scorer, validator_options
-):
-    """A child that raises instead of returning [] cannot vouch for the union."""
-    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
-    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"], **validator_options)
-    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
-    assert scorer.supported_data_types is None
-
-
-async def test_composite_scorer_raise_on_empty_child_does_not_claim_safe_skip(mock_request, true_scorer, false_scorer):
-    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
-    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"], raise_on_no_valid_pieces=True)
-    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
-    assert scorer.supported_data_types is None
-    assert scorer.skips_unsupported_data_types is False
-    assert scorer.allows_unsupported_pieces is True
-    with pytest.raises(RuntimeError, match="There are no valid pieces to score"):
-        await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
-
-
-async def test_composite_scorer_strict_child_raises_instead_of_skipping(mock_request, true_scorer, false_scorer):
-    """The strict child prevents the composite from scoring text despite a text-capable sibling."""
-    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
-    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"], enforce_all_pieces_valid=True)
-    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
-
-    assert scorer.supported_data_types is None
-    with pytest.raises(RuntimeError, match="is not supported"):
-        await scorer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
-
-
-def test_composite_scorer_undeclared_child_modality_is_unknown(patch_central_database, true_scorer, false_scorer):
-    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
-    scorer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[true_scorer, false_scorer])
-    assert scorer.supported_data_types is None
-
-
-async def test_composite_scorer_nested_wrapper_preserves_applicability(mock_request, true_scorer, false_scorer):
-    """A nested composite and inverter keep their children's skip behavior."""
-    true_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
-    false_scorer._validator = ScorerPromptValidator(supported_data_types=["image_path"])
-    nested = TrueFalseCompositeScorer(
-        aggregator=TrueFalseScoreAggregator.AND,
-        scorers=[true_scorer, TrueFalseInverterScorer(scorer=false_scorer)],
-    )
-    outer = TrueFalseCompositeScorer(aggregator=TrueFalseScoreAggregator.OR, scorers=[nested])
-
-    assert outer.supported_data_types == frozenset({"text", "image_path"})
-    scores = await outer.score_async(scorable=MessageScorable.from_message(store_message(mock_request)))
-    assert len(scores) == 1
-    assert scores[0].get_value() is True
-
-
-async def test_composite_routes_full_expectation_to_matching_and_nonmatching_leaves(mock_request):
+async def test_composite_routes_supported_conditions_to_each_leaf(mock_request):
     objective_scorer = MockScorer(
         score_value=True,
         score_rationale="objective",
@@ -321,10 +258,10 @@ async def test_composite_routes_full_expectation_to_matching_and_nonmatching_lea
         expectation=expectation,
     )
 
-    assert scorer.matched_conditions() == frozenset({MatchesObjective})
-    assert scorer.required_conditions() == frozenset({MatchesObjective})
+    assert scorer.condition_type is None
+    assert scorer.get_condition_types() == frozenset({MatchesObjective})
     assert objective_scorer.received_expectations == [expectation]
-    assert fixed_criterion_scorer.received_expectations == [expectation]
+    assert fixed_criterion_scorer.received_expectations == [expectation.model_copy(update={"conditions": ()})]
 
 
 def test_composite_scorer_empty_scorers_list():

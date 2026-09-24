@@ -76,7 +76,10 @@ retains it as configured.
   to return no score for a wholly unreadable response, which composites use to assess their
   children's applicability. If only some possible combinations can be scored,
   the response-chain verdict is `UNKNOWN`, not a reason to skip the attack. This type check
-  does not establish that the resulting score is meaningful.
+  does not establish that the resulting score is meaningful. After the scorer condition-routing
+  refactor, composite scorers declare their response modality compatibility as `UNKNOWN` until
+  their per-child applicability can be reconciled with the new expectation-selection contract;
+  this keeps potentially runnable attacks but defers some early incompatibility detection.
 - Anything indeterminate is `UNKNOWN` and never blocks a run.
 - Only turn 0 is checked. Media routing across later turns belongs to `_ModalityFeedbackRouter`,
   which multi-turn attacks consult at execution time.

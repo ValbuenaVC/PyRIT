@@ -12,8 +12,6 @@ if TYPE_CHECKING:
 
 from pyrit.models import (
     ComponentIdentifier,
-    Condition,
-    PromptDataType,
     Scorable,
     ScorableUnion,
     Score,
@@ -21,6 +19,7 @@ from pyrit.models import (
     ScoringExpectation,
 )
 from pyrit.score.observation.execution import _merge_observation_ids
+from pyrit.score.scorer import Scorer
 from pyrit.score.true_false.true_false_score_aggregator import TrueFalseAggregatorFunc, TrueFalseScoreAggregator
 from pyrit.score.true_false.true_false_scorer import TrueFalseScorer
 
@@ -74,36 +73,6 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
 
         self._scorers = scorers
 
-    @property
-    def supported_data_types(self) -> frozenset[PromptDataType] | None:
-        """
-        The types for which at least one child can provide an applicable score.
-
-        Runtime ignores children that return ``[]``, regardless of aggregator. A child with
-        undeclared types or one that may raise on unsupported data makes this unknown.
-
-        Returns:
-            frozenset[PromptDataType] | None: The union of declared child types, or ``None``
-            when a child cannot safely be skipped.
-        """
-        supported: set[PromptDataType] = set()
-        for scorer in self._scorers:
-            declared = scorer.supported_data_types
-            if declared is None or not scorer.skips_unsupported_data_types:
-                return None
-            supported.update(declared)
-        return frozenset(supported)
-
-    @property
-    def skips_unsupported_data_types(self) -> bool:
-        """Whether every child can ignore unsupported data types without raising."""
-        return all(scorer.skips_unsupported_data_types for scorer in self._scorers)
-
-    @property
-    def allows_unsupported_pieces(self) -> bool:
-        """Whether every child accepts unsupported pieces alongside readable ones."""
-        return all(scorer.allows_unsupported_pieces for scorer in self._scorers)
-
     def _build_identifier(self) -> ComponentIdentifier:
         """
         Build the identifier for this scorer.
@@ -133,35 +102,9 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
                 return target
         return None
 
-    def matched_conditions(self) -> frozenset[type[Condition]]:
-        """
-        Report the union of what the constituent scorers match.
-
-        Returns:
-            frozenset[type[Condition]]: The condition types this composite routes.
-        """
-        conditions: set[type[Condition]] = set()
-        for scorer in self._scorers:
-            conditions.update(scorer.matched_conditions())
-        return frozenset(conditions)
-
-    def required_conditions(self) -> frozenset[type[Condition]]:
-        """
-        Report the union of conditions required by the constituent scorers.
-
-        Returns:
-            frozenset[type[Condition]]: The required condition types.
-        """
-        conditions: set[type[Condition]] = set()
-        for scorer in self._scorers:
-            conditions.update(scorer.required_conditions())
-        return frozenset(conditions)
-
-    def _validate_expectation(self, *, expectation: ScoringExpectation | None) -> None:
-        """Validate every child before any runs, leaving coverage to the root scorer group."""
-        super()._validate_expectation(expectation=expectation)
-        for scorer in self._scorers:
-            scorer._validate_expectation(expectation=expectation)
+    def _get_child_scorers(self) -> tuple[Scorer, ...]:
+        """Return the scorers whose verdicts are combined."""
+        return tuple(self._scorers)
 
     async def _score_scorable_async(
         self,
@@ -170,7 +113,7 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
         expectation: ScoringExpectation | None,
     ) -> list[Score]:
         """
-        Score a scorable by forwarding it, unchanged, to every constituent scorer.
+        Score a scorable with each child's supported conditions.
 
         Each child acquires the named evidence itself, so a child that needs a wider or
         different view of it is free to derive one.
@@ -184,7 +127,12 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
                 containing one completed or undetermined aggregate score.
         """
         score_list_results = await asyncio.gather(
-            *(scorer._score_nested_async(scorable=scorable, expectation=expectation) for scorer in self._scorers)
+            *(
+                scorer._score_nested_async(
+                    scorable=scorable, expectation=scorer._select_expectation(expectation=expectation)
+                )
+                for scorer in self._scorers
+            )
         )
         applicable_results = [scores for scores in score_list_results if scores]
         skipped_count = len(score_list_results) - len(applicable_results)

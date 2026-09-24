@@ -9,12 +9,12 @@ if TYPE_CHECKING:
 
 from pyrit.models import (
     ComponentIdentifier,
-    Condition,
     PromptDataType,
     Scorable,
     Score,
     ScoringExpectation,
 )
+from pyrit.score.scorer import Scorer
 from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
 from pyrit.score.true_false.true_false_scorer import TrueFalseScorer
 
@@ -42,22 +42,17 @@ class TrueFalseInverterScorer(TrueFalseScorer):
 
     @property
     def supported_data_types(self) -> frozenset[PromptDataType] | None:
-        """
-        The wrapped scorer's declared data types — inverting a verdict does not change them.
-
-        Returns:
-            frozenset[PromptDataType] | None: The wrapped scorer's declaration, or ``None``.
-        """
+        """The wrapped scorer's declared readable data types."""
         return self._scorer.supported_data_types
 
     @property
     def skips_unsupported_data_types(self) -> bool:
-        """Whether the wrapped scorer skips unsupported response types."""
+        """Whether the wrapped scorer skips wholly unsupported evidence."""
         return self._scorer.skips_unsupported_data_types
 
     @property
     def allows_unsupported_pieces(self) -> bool:
-        """Whether the wrapped scorer accepts mixed readable and unsupported pieces."""
+        """Whether the wrapped scorer accepts unsupported pieces alongside readable ones."""
         return self._scorer.allows_unsupported_pieces
 
     def _build_identifier(self) -> ComponentIdentifier:
@@ -81,28 +76,9 @@ class TrueFalseInverterScorer(TrueFalseScorer):
         """
         return self._scorer.get_chat_target()
 
-    def matched_conditions(self) -> frozenset[type[Condition]]:
-        """
-        Report what the wrapped scorer matches.
-
-        Returns:
-            frozenset[type[Condition]]: The condition types the wrapped scorer routes.
-        """
-        return self._scorer.matched_conditions()
-
-    def required_conditions(self) -> frozenset[type[Condition]]:
-        """
-        Report what the wrapped scorer requires.
-
-        Returns:
-            frozenset[type[Condition]]: The required condition types.
-        """
-        return self._scorer.required_conditions()
-
-    def _validate_expectation(self, *, expectation: ScoringExpectation | None) -> None:
-        """Validate wrapper and child criteria without checking sibling condition coverage."""
-        super()._validate_expectation(expectation=expectation)
-        self._scorer._validate_expectation(expectation=expectation)
+    def _get_child_scorers(self) -> tuple[Scorer, ...]:
+        """Return the scorer whose verdict is inverted."""
+        return (self._scorer,)
 
     async def _score_scorable_async(
         self,
@@ -121,7 +97,9 @@ class TrueFalseInverterScorer(TrueFalseScorer):
             list[Score]: ``[]`` when the wrapped scorer is non-applicable; otherwise, a list
                 containing its completed inverted score or unchanged undetermined score.
         """
-        scores = await self._scorer._score_nested_async(scorable=scorable, expectation=expectation)
+        scores = await self._scorer._score_nested_async(
+            scorable=scorable, expectation=self._scorer._select_expectation(expectation=expectation)
+        )
         if not scores:
             return []
         return self._invert(scores)
