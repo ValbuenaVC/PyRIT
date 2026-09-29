@@ -11,12 +11,13 @@ Scorers evaluate model responses against an objective and live under `pyrit/scor
 ## Composite modality declarations
 
 `TrueFalseCompositeScorer` aggregates only applicable child scores; a child returning `[]`
-does not vote `False`. After the expectation-routing refactor, composite modality inference
-remains deferred: the composite declares `None` (`UNKNOWN`) so plan-time validation does not
-skip an attack on an unverified union of child types. This reduces early rejection but does
-not change runtime scoring or each child's condition selection. One-to-one wrappers
-(`TrueFalseInverterScorer` and `FloatScaleThresholdScorer`) still delegate their child's
-modality declaration and skip behavior.
+does not vote `False`. Both AND and OR composites declare the union of child modalities only
+when every child declares its types **and** can skip wholly unsupported evidence. Otherwise
+they declare `None` (`UNKNOWN`), not an unverified intersection or union. The composite uses
+`_get_child_scorers()` for the same tree traversal as upstream condition routing; modality
+inference must not alter the evidence or selected expectation each child receives.
+One-to-one wrappers (`TrueFalseInverterScorer` and `FloatScaleThresholdScorer`) delegate
+their child's modality declaration and skip behavior.
 
 For mixed responses, `allows_unsupported_pieces` separately reports whether readable
 pieces can be scored alongside unsupported ones. `raise_on_no_valid_pieces=True` still

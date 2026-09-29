@@ -449,16 +449,40 @@ def test_scorer_accepts_missing_emitted_type_is_incompatible():
     assert "image_path" in reason
 
 
-def test_scorer_accepts_composite_with_disjoint_child_modalities_is_unknown(patch_central_database):
-    """Do not promise compatibility for a compound scorer pending post-refactor review."""
+def test_scorer_accepts_composite_with_disjoint_child_modalities(patch_central_database):
+    """The text child scores text while the image-only child safely returns no score."""
     target = get_mock_target(output_modalities=[{"text"}])
     scorer = TrueFalseCompositeScorer(
         aggregator=TrueFalseScoreAggregator.OR,
         scorers=[_scorer_declaring(["text"]), _scorer_declaring(["image_path"])],
     )
     verdict, reason = scorer_accepts(scorer=scorer, target=target)
-    assert verdict is ModalityVerdict.UNKNOWN
+    assert verdict is ModalityVerdict.COMPATIBLE
     assert reason is None
+
+
+def test_scorer_accepts_composite_with_strict_child_is_unknown(patch_central_database):
+    strict_image = SubStringScorer(
+        substring="x",
+        validator=ScorerPromptValidator(supported_data_types=["image_path"], raise_on_no_valid_pieces=True),
+    )
+    scorer = TrueFalseCompositeScorer(
+        aggregator=TrueFalseScoreAggregator.OR,
+        scorers=[_scorer_declaring(["text"]), strict_image],
+    )
+    target = get_mock_target(output_modalities=[{"text"}])
+    assert scorer_accepts(scorer=scorer, target=target)[0] is ModalityVerdict.UNKNOWN
+
+
+def test_scorer_accepts_composite_selectively_scores_mixed_output(patch_central_database):
+    scorer = TrueFalseCompositeScorer(
+        aggregator=TrueFalseScoreAggregator.AND,
+        scorers=[_scorer_declaring(["text"]), _scorer_declaring(["image_path"])],
+    )
+    mixed = get_mock_target(output_modalities=[{"text", "audio_path"}])
+    audio_only = get_mock_target(output_modalities=[{"audio_path"}])
+    assert scorer_accepts(scorer=scorer, target=mixed)[0] is ModalityVerdict.COMPATIBLE
+    assert scorer_accepts(scorer=scorer, target=audio_only)[0] is ModalityVerdict.INCOMPATIBLE
 
 
 async def test_scorer_accepts_mixed_response_with_selective_text_scorer(patch_central_database):

@@ -209,8 +209,8 @@ def test_inverter_scorer_delegates_none():
     assert scorer.supported_data_types is None
 
 
-def test_composite_scorer_modality_is_unknown_pending_condition_routing_review():
-    """Do not assert that unioned child types guarantee scorer compatibility."""
+def test_composite_scorer_unions_skippable_child_modalities():
+    """Both AND and OR aggregate applicable child scores, not necessarily every child."""
     scorer = TrueFalseCompositeScorer(
         aggregator=TrueFalseScoreAggregator.AND,
         scorers=[
@@ -218,17 +218,17 @@ def test_composite_scorer_modality_is_unknown_pending_condition_routing_review()
             _substring_scorer(declared=["text", "audio_path"]),
         ],
     )
-    assert scorer.supported_data_types is None
-    assert scorer.skips_unsupported_data_types is False
+    assert scorer.supported_data_types == frozenset({"text", "image_path", "audio_path"})
+    assert scorer.skips_unsupported_data_types is True
+    assert scorer.allows_unsupported_pieces is True
 
 
-def test_composite_scorer_identical_children_are_still_unknown():
-    """Even identical declarations do not establish the compound's routing contract."""
+def test_composite_scorer_identical_children_preserve_types():
     scorer = TrueFalseCompositeScorer(
         aggregator=TrueFalseScoreAggregator.OR,
         scorers=[_substring_scorer(declared=["text"]), _substring_scorer(declared=["text"])],
     )
-    assert scorer.supported_data_types is None
+    assert scorer.supported_data_types == frozenset({"text"})
 
 
 def test_composite_scorer_returns_none_when_any_child_undeclared():
@@ -240,13 +240,13 @@ def test_composite_scorer_returns_none_when_any_child_undeclared():
     assert scorer.supported_data_types is None
 
 
-def test_nested_wrappers_keep_composite_modality_unknown():
-    """One-to-one wrappers preserve an unknown compound declaration."""
+def test_nested_wrappers_propagate_composite_modalities():
+    """A one-to-one inverter delegates the computed composite declaration."""
     composite = TrueFalseCompositeScorer(
         aggregator=TrueFalseScoreAggregator.AND,
         scorers=[_substring_scorer(declared=["text", "image_path"]), _substring_scorer(declared=["image_path"])],
     )
-    assert TrueFalseInverterScorer(scorer=composite).supported_data_types is None
+    assert TrueFalseInverterScorer(scorer=composite).supported_data_types == frozenset({"text", "image_path"})
 
 
 # ---------------------------------------------------------------------------
