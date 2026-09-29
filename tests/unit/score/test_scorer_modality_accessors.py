@@ -150,6 +150,20 @@ def test_message_scorer_declared_types_returns_frozenset():
     assert scorer.allows_unsupported_pieces is True
 
 
+def test_message_scorer_block_policy_copy_preserves_modality_declarations(patch_central_database):
+    scorer = SubStringScorer(substring="x")
+
+    scoped = scorer.with_scorer_block_policy(raise_if_scorer_blocks=False)
+
+    assert scoped is not scorer
+    assert scorer.raise_if_scorer_blocks is True
+    assert scoped.raise_if_scorer_blocks is False
+    assert scoped.supported_data_types == frozenset({"text"})
+    assert scoped.skips_unsupported_data_types is True
+    assert scoped.allows_unsupported_pieces is True
+    assert scoped.with_scorer_block_policy(raise_if_scorer_blocks=False) is scoped
+
+
 def test_message_scorer_can_filter_pieces_but_cannot_skip_empty_score():
     scorer = SubStringScorer(
         substring="x",
