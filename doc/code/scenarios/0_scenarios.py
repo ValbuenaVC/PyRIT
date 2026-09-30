@@ -205,9 +205,10 @@ print_scenario_list(items=response.items)
 #
 # `MODALITY_POLICY` decides what happens to an incompatible attack:
 #
-# - **`SKIP`** (default) — the attack is dropped with a warning and the rest of the run proceeds. If
-#   every attack is dropped the scenario raises rather than reporting an empty success.
-# - **`WARN`** — the attack is kept and the problem is logged.
+# - **`WARN`** (default) — the attack is kept and the problem is logged. Declared target
+#   capabilities can be stale, so the default preserves coverage rather than dropping attacks.
+# - **`SKIP`** — the attack is dropped with a warning and the rest of the run proceeds. If every
+#   attack is dropped the scenario raises rather than reporting an empty success.
 # - **`RAISE`** — `initialize_async` aborts with `ModalityValidationError`, a `ValueError` subclass.
 #
 # Compatibility that cannot be determined never blocks a run: a target that does not declare its

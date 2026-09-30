@@ -50,7 +50,7 @@ the constructor — no classmethod indirection required.
 
 `Scenario.initialize_async` validates every `AtomicAttack` returned by
 `_build_atomic_attacks_async` before any of them is queued, and applies `MODALITY_POLICY`
-(`ModalityPolicy.SKIP` by default, also `WARN` and `RAISE`). Scenario authors get this for free
+(`ModalityPolicy.WARN` by default, also `SKIP` and `RAISE`). Scenario authors get this for free
 and normally do not override it. On resume, it first reconstructs the persisted seed groups
 from the full dataset without resampling, then checks only those groups. `SKIP` fails loudly
 instead of removing an incompatible saved attack and silently changing the run plan; `WARN`
@@ -91,8 +91,9 @@ retains it as configured.
   its children, so the wrapper itself reports `UNKNOWN` rather than treating the absence of
   `next_message` as a text request to its nominal target.
 
-Override `MODALITY_POLICY` to `RAISE` when an incompatible pairing means the run is
-misconfigured rather than merely narrower than intended.
+The default keeps incompatible attacks because declared target capabilities can be stale.
+Override `MODALITY_POLICY` to `SKIP` when dropping provably incompatible attacks is preferable to
+running them, or to `RAISE` when an incompatible pairing means the run is misconfigured.
 
 ## Constructor Pattern
 

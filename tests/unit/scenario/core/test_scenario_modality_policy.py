@@ -99,6 +99,18 @@ class _SampledPolicyScenario(_PolicyScenario):
         ]
 
 
+class _SkipPolicyScenario(_PolicyScenario):
+    """Drop provably incompatible attacks instead of warning."""
+
+    MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.SKIP
+
+
+class _SkipSampledPolicyScenario(_SampledPolicyScenario):
+    """Drop provably incompatible sampled attacks instead of warning."""
+
+    MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.SKIP
+
+
 def _sampled_config() -> DatasetAttackConfiguration:
     return DatasetAttackConfiguration(
         seed_groups=[
@@ -202,7 +214,7 @@ async def test_tap_first_turn_roots_modality_and_skip(
     assert report.projected_request_types == projected
     if expected is ModalityVerdict.UNKNOWN:
         assert any("seeded root" in reason and "text" in reason for reason in report.reasons)
-    scenario = _PolicyScenario(atomic_attacks_to_return=[atomic, _compatible(name="control")])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[atomic, _compatible(name="control")])
     await _initialize(scenario, target=target)
     assert [attack.atomic_attack_name for attack in scenario._atomic_attacks] == (
         ["control"] if expected is ModalityVerdict.INCOMPATIBLE else ["tap_media", "control"]
@@ -259,9 +271,9 @@ async def _initialize(scenario: Scenario, *, target=None) -> None:
 # ---------------------------------------------------------------------------
 # Policy declaration
 # ---------------------------------------------------------------------------
-def test_modality_policy_defaults_to_skip():
-    """Dropping unrunnable attacks is the default, matching BASELINE_ATTACK_POLICY's shape."""
-    assert Scenario.MODALITY_POLICY is ModalityPolicy.SKIP
+def test_modality_policy_defaults_to_warn():
+    """Incompatible attacks run with a warning by default, since declared capabilities can be stale."""
+    assert Scenario.MODALITY_POLICY is ModalityPolicy.WARN
 
 
 def test_modality_policy_is_overridable_per_scenario_class():
@@ -271,7 +283,7 @@ def test_modality_policy_is_overridable_per_scenario_class():
         MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.RAISE
 
     assert _Strict.MODALITY_POLICY is ModalityPolicy.RAISE
-    assert _PolicyScenario.MODALITY_POLICY is ModalityPolicy.SKIP
+    assert _PolicyScenario.MODALITY_POLICY is ModalityPolicy.WARN
 
 
 # ---------------------------------------------------------------------------
@@ -279,21 +291,21 @@ def test_modality_policy_is_overridable_per_scenario_class():
 # ---------------------------------------------------------------------------
 async def test_skip_drops_incompatible_and_keeps_compatible(patch_central_database):
     """The incompatible attack is removed; the compatible one survives."""
-    scenario = _PolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
     await _initialize(scenario)
     assert [attack.atomic_attack_name for attack in scenario._atomic_attacks] == ["compatible"]
 
 
 async def test_skip_keeps_attacks_whose_compatibility_is_unknown(patch_central_database):
     """An attack against a target with unreadable capabilities is kept, never dropped."""
-    scenario = _PolicyScenario(atomic_attacks_to_return=[_atomic(target=get_mock_target(), name="unknown")])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[_atomic(target=get_mock_target(), name="unknown")])
     await _initialize(scenario)
     assert [attack.atomic_attack_name for attack in scenario._atomic_attacks] == ["unknown"]
 
 
 async def test_skip_excludes_dropped_attack_from_display_group_map(patch_central_database):
     """Filtering happens before the display-group map is built from the surviving attacks."""
-    scenario = _PolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
     await _initialize(scenario)
     assert "incompatible" not in scenario._display_group_map
     assert "compatible" in scenario._display_group_map
@@ -301,7 +313,7 @@ async def test_skip_excludes_dropped_attack_from_display_group_map(patch_central
 
 async def test_skip_excludes_dropped_attack_from_persisted_run_plan(patch_central_database):
     """The persisted plan records only the attacks that will actually run."""
-    scenario = _PolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
     await _initialize(scenario)
     [stored] = scenario._memory.get_scenario_results(scenario_result_ids=[scenario._scenario_result_id])
     planned = {group["atomic_attack_name"] for group in stored.metadata["run_plan"]["atomic_groups"]}
@@ -346,11 +358,16 @@ async def test_modality_policy_selective_text_scorer_output_matrix(
         assert len(scenario._atomic_attacks) == 1
 
 
+@pytest.mark.parametrize("policy", list(ModalityPolicy))
 @pytest.mark.parametrize("legacy_plan", [False, True])
-async def test_resume_validates_only_persisted_seed_groups(patch_central_database, legacy_plan):
-    """An unsampled image group cannot invalidate the saved text-only attack."""
+async def test_resume_validates_only_persisted_seed_groups(patch_central_database, caplog, legacy_plan, policy):
+    """An unsampled image group cannot invalidate, drop, or warn about the saved text-only attack."""
+
+    class _ConfiguredSampledPolicyScenario(_SampledPolicyScenario):
+        MODALITY_POLICY: ClassVar[ModalityPolicy] = policy
+
     target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
-    original = await _start_sampled_scenario(target=target)
+    original = await _start_sampled_scenario(target=target, scenario_class=_ConfiguredSampledPolicyScenario)
     scenario_result_id = original._scenario_result_id
     [stored] = original._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
     original_metadata = dict(stored.metadata)
@@ -358,8 +375,12 @@ async def test_resume_validates_only_persisted_seed_groups(patch_central_databas
         original_metadata.pop(SCENARIO_RUN_PLAN_METADATA_KEY)
         original._memory.update_scenario_metadata(scenario_result_id=scenario_result_id, metadata=original_metadata)
 
-    resumed = await _resume_sampled_scenario(scenario_result_id=scenario_result_id, target=target)
+    with caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.scenario"):
+        resumed = await _resume_sampled_scenario(
+            scenario_result_id=scenario_result_id, target=target, scenario_class=_ConfiguredSampledPolicyScenario
+        )
 
+    assert "modality incompatibility" not in caplog.text.lower()
     assert resumed._scenario_result_id == scenario_result_id
     assert len(resumed._atomic_attacks) == 1
     assert [group.logical_id for group in resumed._atomic_attacks[0].seed_groups] == [
@@ -376,7 +397,7 @@ async def test_resume_validates_only_persisted_seed_groups(patch_central_databas
 async def test_resume_rejects_incompatible_persisted_seed_group(patch_central_database, legacy_plan):
     """SKIP must not silently alter a stored plan when a saved group becomes incompatible."""
     target = get_mock_target(input_modalities=TEXT_ONLY_MODALITIES, output_modalities=TEXT_ONLY_MODALITIES)
-    original = await _start_sampled_scenario(target=target)
+    original = await _start_sampled_scenario(target=target, scenario_class=_SkipSampledPolicyScenario)
     scenario_result_id = original._scenario_result_id
     [stored] = original._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
     metadata = dict(stored.metadata)
@@ -386,7 +407,9 @@ async def test_resume_rejects_incompatible_persisted_seed_group(patch_central_da
 
     changed_target = get_mock_target(input_modalities=[{"image_path"}], output_modalities=TEXT_ONLY_MODALITIES)
     with pytest.raises(ModalityValidationError, match="cannot resume.*saved.*incompatible"):
-        await _resume_sampled_scenario(scenario_result_id=scenario_result_id, target=changed_target)
+        await _resume_sampled_scenario(
+            scenario_result_id=scenario_result_id, target=changed_target, scenario_class=_SkipSampledPolicyScenario
+        )
 
     [after] = original._memory.get_scenario_results(scenario_result_ids=[scenario_result_id])
     assert after.metadata == metadata
@@ -417,7 +440,7 @@ async def test_resume_warn_retains_incompatible_persisted_seed_group(patch_centr
 
 async def test_skip_logs_a_warning_naming_the_attack_and_reason(patch_central_database, caplog):
     """Dropping a whole atomic attack is loud even though the policy allows it."""
-    scenario = _PolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[_incompatible(), _compatible()])
     with caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.scenario"):
         await _initialize(scenario)
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
@@ -427,7 +450,7 @@ async def test_skip_logs_a_warning_naming_the_attack_and_reason(patch_central_da
 
 async def test_skip_raises_when_every_attack_is_dropped(patch_central_database):
     """A run that would proceed with zero attacks is a failure, not a success."""
-    scenario = _PolicyScenario(atomic_attacks_to_return=[_incompatible(name="a"), _incompatible(name="b")])
+    scenario = _SkipPolicyScenario(atomic_attacks_to_return=[_incompatible(name="a"), _incompatible(name="b")])
     with pytest.raises(ModalityValidationError, match="all"):
         await _initialize(scenario)
 

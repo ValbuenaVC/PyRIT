@@ -22,7 +22,6 @@ from pyrit.scenario.core.dataset_configuration import (
     DatasetSourceKind,
 )
 from pyrit.scenario.core.matrix_atomic_attack_builder import build_baseline_atomic_attack
-from pyrit.scenario.core.modality_validation import ModalityPolicy
 from pyrit.scenario.core.scenario import Scenario
 from pyrit.scenario.core.scenario_technique import ScenarioTechnique
 
@@ -69,13 +68,13 @@ class FigStep(Scenario):
 
     VERSION: int = 1
 
-    #: FigStep seeds are a single text-plus-image message, and caller-supplied technique
-    #: converters are appended unscoped, so they run against *both* pieces. No converter in the
-    #: library accepts ``text`` and ``image_path`` together, which makes every such converter
-    #: report as incompatible. That is accurate -- the run would raise ``Input type not
-    #: supported`` -- but the limitation predates plan-time validation, so warn rather than drop
-    #: the attack until FigStep scopes those converters (e.g. ``prompt_data_types_to_apply``).
-    MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.WARN
+    # FigStep seeds are a single text-plus-image message, and caller-supplied technique
+    # converters are appended unscoped, so they run against *both* pieces. No converter in the
+    # library accepts ``text`` and ``image_path`` together, which makes every such converter
+    # report as incompatible. That is accurate -- the run would raise ``Input type not
+    # supported`` -- but the limitation predates plan-time validation, so FigStep relies on the
+    # default ``WARN`` modality policy rather than dropping the attack until it scopes those
+    # converters (e.g. ``prompt_data_types_to_apply``).
 
     TARGET_REQUIREMENTS: ClassVar[TargetRequirements] = TargetRequirements(
         native_required=frozenset({CapabilityName.MULTI_MESSAGE_PIECES}),

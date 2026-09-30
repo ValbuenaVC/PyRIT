@@ -139,9 +139,10 @@ class Scenario(ABC):
 
     #: How this scenario type treats an atomic attack whose payload provably cannot reach its
     #: objective target or scorer. Derived per run in ``initialize_async`` once the attacks are
-    #: built, and before any of them is queued. ``SKIP`` drops the attack with a warning,
-    #: ``WARN`` keeps it, and ``RAISE`` aborts initialization. Skipping every attack raises.
-    MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.SKIP
+    #: built, and before any of them is queued. ``WARN`` (the default) keeps the attack and logs
+    #: the problem, since declared target capabilities can be stale; ``SKIP`` drops the attack
+    #: with a warning, and ``RAISE`` aborts initialization. Skipping every attack raises.
+    MODALITY_POLICY: ClassVar[ModalityPolicy] = ModalityPolicy.WARN
 
     #: Whether the default estimator must mirror matrix-builder seed compatibility.
     RUN_SIZE_USES_FACTORY_COMPATIBILITY: ClassVar[bool] = False
